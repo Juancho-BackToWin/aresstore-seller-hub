@@ -1,0 +1,281 @@
+      <!-- ===================== CALCULADORA ===================== -->
+      <section class="view active" id="view-calculadora">
+        <div class="storage-banner" id="storageBanner">
+          <strong>Aviso:</strong> el navegador está bloqueando el almacenamiento local. Puedes seguir usando la calculadora, pero lo que guardes se perderá al cerrar la pestaña. Usa <em>Exportar</em> para conservar tus productos. Abre el archivo desde tu disco (no dentro de un visor incrustado) para que la persistencia funcione.
+        </div>
+        <div class="calc-grid">
+
+          <!-- ===== INPUTS ===== -->
+          <div>
+            <div class="panel">
+              <h2>Validar un producto antes de comprarlo</h2>
+              <p class="desc">Todos los costes que Amazon te cobra realmente por unidad, no solo la comisión y el FBA. El veredicto exige cinco criterios a la vez y te dice cuál falla.</p>
+
+              <fieldset class="fieldset">
+                <legend>Mercado y precio</legend>
+                <div class="row-2">
+                  <div class="field">
+                    <label>Marketplace <span class="hint">(IVA estándar)</span></label>
+                    <select id="country" onchange="onCountryChange()"></select>
+                  </div>
+                  <div class="field">
+                    <label>IVA aplicado <span class="hint">edita si es reducido</span></label>
+                    <div class="input-wrap"><input type="number" id="vat" step="0.1" oninput="calc()"><span class="unit">%</span></div>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Precio de venta <span class="hint">(PVP con IVA incluido)</span></label>
+                  <div class="input-wrap"><input type="number" id="price" step="0.01" value="24.99" oninput="calc()"><span class="unit">€</span></div>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Coste de producto puesto en almacén</legend>
+                <div class="row-2">
+                  <div class="field">
+                    <label>Coste de fábrica <span class="hint">/ud</span></label>
+                    <div class="input-wrap"><input type="number" id="cogs" step="0.01" value="4.50" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Transporte + aranceles <span class="hint">/ud</span></label>
+                    <div class="input-wrap"><input type="number" id="freight" step="0.01" value="1.20" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Canal logístico <span class="note">quién envía el pedido</span></legend>
+                <div class="seg" id="calcCh" style="margin-bottom:12px">
+                  <button type="button" class="on" onclick="setCalcChannel('FBA')">FBA · lo envía Amazon</button>
+                  <button type="button" onclick="setCalcChannel('FBM')">FBM · lo envías tú</button>
+                </div>
+                <div class="note-box info" style="margin:0;font-size:12.5px" id="calcChNote">
+                  En FBA pagas tarifa de gestión, almacenaje y los recargos por sobrestock, pero ganas la Buy Box con más facilidad y Prime. Es el canal por defecto para marca propia.
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Comisiones de Amazon <span class="note">rate card 1-jul-2026</span></legend>
+                <div class="row-2">
+                  <div class="field">
+                    <label>Comisión referral <span class="hint">%</span></label>
+                    <div class="input-wrap"><input type="number" id="referral" step="0.1" value="15" oninput="calc()"><span class="unit">%</span></div>
+                  </div>
+                  <div class="field">
+                    <label id="fbaLabel">Tarifa FBA base <span class="hint">/ud</span></label>
+                    <div class="input-wrap"><input type="number" id="fba" step="0.01" value="3.20" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                </div>
+                <label class="toggle" id="fuelRow">
+                  <input type="checkbox" id="fuel" checked onchange="calc()">
+                  <span>Recargo de combustible <strong>+1,5%</strong> sobre la tarifa FBA (vigente 17-abr-2026, solo sobre logística — no sobre referral ni almacenaje)</span>
+                </label>
+              </fieldset>
+
+              <fieldset class="fieldset" id="storageSet">
+                <legend>Almacenamiento y rotación</legend>
+                <div class="row-3">
+                  <div class="field">
+                    <label>Volumen <span class="hint">/ud</span></label>
+                    <div class="input-wrap"><input type="number" id="litres" step="0.1" value="1.5" oninput="calc()"><span class="unit">L</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Meses en almacén</label>
+                    <div class="input-wrap"><input type="number" id="stockMonths" step="0.1" value="1.5" oninput="calc()"><span class="unit">m</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Tarifa <span class="hint">€/m³/mes</span></label>
+                    <div class="input-wrap"><input type="number" id="storageRate" step="0.01" value="27.54" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                </div>
+                <div class="seg" style="margin-bottom:10px">
+                  <button type="button" class="on" onclick="setSeason('low')">Ene–Sep · 27,54 €/m³</button>
+                  <button type="button" onclick="setSeason('high')">Oct–Dic · 52,20 €/m³</button>
+                </div>
+                <div class="field">
+                  <label>Tarifa por bajo inventario <span class="hint">solo DE/FR/IT/ES si bajas de 28 días de cobertura</span></label>
+                  <select id="lowInv" onchange="calc()">
+                    <option value="0">No aplica — mantengo &gt;28 días de cobertura</option>
+                    <option value="0.18">21–28 días · 0,18 € (sobre estándar ≤460 g)</option>
+                    <option value="0.25">14–21 días · 0,25 €</option>
+                    <option value="0.41">0–14 días · 0,41 €</option>
+                    <option value="0.67">0–14 días · 0,67 € (paquete estándar ≤11,9 kg)</option>
+                  </select>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Devoluciones <span class="note">modelo real, no un % del PVP</span></legend>
+                <div class="row-3">
+                  <div class="field">
+                    <label>Tasa devolución</label>
+                    <div class="input-wrap"><input type="number" id="returnRate" step="0.1" value="5" oninput="calc()"><span class="unit">%</span></div>
+                  </div>
+                  <div class="field">
+                    <label>No revendible <span class="hint">del devuelto</span></label>
+                    <div class="input-wrap"><input type="number" id="unsellable" step="1" value="30" oninput="calc()"><span class="unit">%</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Return proc. fee</label>
+                    <select id="retProcMode" onchange="onRetProc()" style="font-size:12px;padding:9px 8px">
+                      <option value="none">No aplica</option>
+                      <option value="apparel">Moda: 50% FBA</option>
+                      <option value="manual">Manual €</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field" id="retProcField" style="display:none">
+                  <label>Return processing fee manual <span class="hint">categorías de alta tasa de devolución</span></label>
+                  <div class="input-wrap"><input type="number" id="retProcEur" step="0.01" value="3.44" oninput="calc()"><span class="unit">€</span></div>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Publicidad</legend>
+                <div class="field">
+                  <div class="seg" style="margin-bottom:10px" id="ppcMode">
+                    <button class="on" type="button" onclick="setPpcMode('tacos')">Como % del PVP (TACOS)</button>
+                    <button type="button" onclick="setPpcMode('eur')">€ fijos por unidad</button>
+                  </div>
+                  <div class="input-wrap"><input type="number" id="ppc" step="0.1" value="15" oninput="calc()"><span class="unit" id="ppcUnit">%</span></div>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset">
+                <legend>Cumplimiento normativo <span class="note">el coste que nadie mete</span></legend>
+                <div class="row-2">
+                  <div class="field">
+                    <label>EPR + envase <span class="hint">/ud</span></label>
+                    <div class="input-wrap"><input type="number" id="epr" step="0.01" value="0.02" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Gestoría IVA <span class="hint">€/año de este país</span></label>
+                    <div class="input-wrap"><input type="number" id="vatAnnual" step="10" value="1500" oninput="calc()"><span class="unit">€</span></div>
+                  </div>
+                </div>
+              </fieldset>
+
+              <fieldset class="fieldset" style="margin-bottom:8px">
+                <legend>Volumen y pedido</legend>
+                <div class="row-2">
+                  <div class="field">
+                    <label>Unidades a pedir</label>
+                    <div class="input-wrap"><input type="number" id="units" step="1" value="500" oninput="calc()"><span class="unit">ud</span></div>
+                  </div>
+                  <div class="field">
+                    <label>Ventas estimadas / mes</label>
+                    <div class="input-wrap"><input type="number" id="monthly" step="1" value="200" oninput="calc()"><span class="unit">ud</span></div>
+                  </div>
+                </div>
+              </fieldset>
+            </div>
+
+            <div class="panel" style="margin-top:16px">
+              <h2>A dónde se va cada euro</h2>
+              <p class="desc">Descomposición del PVP con IVA incluido. Si la barra de beneficio es la más fina del gráfico, tienes un problema estructural, no de optimización.</p>
+              <div class="waterfall" id="waterfall"></div>
+            </div>
+          </div>
+
+          <!-- ===== RESULTS ===== -->
+          <div class="results">
+            <div class="verdict idle" id="verdict">
+              <div class="vlabel" id="vLabel">Veredicto</div>
+              <div class="vhead" id="vHead">Introduce los datos</div>
+              <div class="vnote" id="vNote">El semáforo se actualiza al instante con cada cambio.</div>
+              <div class="criteria" id="criteria"></div>
+            </div>
+
+            <div class="metrics">
+              <div class="metric">
+                <div class="m-name">Beneficio neto <small>por unidad vendida, tras devoluciones</small></div>
+                <div class="m-val" id="mProfit">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">Margen neto <small>sobre ingreso retenido sin IVA · objetivo ≥15%</small></div>
+                <div class="m-val" id="mMargin">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">Margen de contribución <small>antes de PPC · objetivo ≥30%</small></div>
+                <div class="m-val" id="mContrib">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">ROI sobre coste de producto <small>objetivo ≥60%</small></div>
+                <div class="m-val" id="mRoi">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">PPC máximo antes de perder <small id="mBeNote">TACOS de equilibrio</small></div>
+                <div class="m-val" id="mBreakeven">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">Precio mínimo viable <small>por debajo, pierdes dinero</small></div>
+                <div class="m-val" id="mBePrice">—</div>
+              </div>
+              <div class="metric">
+                <div class="m-name">Coste de compra máximo <small>puesto en almacén, por unidad</small></div>
+                <div class="m-val" id="mBeLanded">—</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3 class="sec-head">Caja: lo que este pedido te inmoviliza</h3>
+              <p class="sec-desc">Tu propio diagnóstico dice que la caja es la restricción principal de crecimiento. Aquí está cuantificada.</p>
+              <div class="metrics" style="border:0;padding:0">
+                <div class="metric" style="padding-top:0">
+                  <div class="m-name">Inversión del pedido <small id="mInvNote"></small></div>
+                  <div class="m-val" id="mInv">—</div>
+                </div>
+                <div class="metric">
+                  <div class="m-name">Cobertura del pedido <small>meses de stock que compras</small></div>
+                  <div class="m-val" id="mCover">—</div>
+                </div>
+                <div class="metric">
+                  <div class="m-name">Recuperación de la inversión <small>meses hasta recuperar la caja</small></div>
+                  <div class="m-val" id="mPayback">—</div>
+                </div>
+                <div class="metric">
+                  <div class="m-name">Beneficio del pedido completo <small id="mOrderNote"></small></div>
+                  <div class="m-val" id="mOrder">—</div>
+                </div>
+                <div class="metric" style="padding-bottom:0">
+                  <div class="m-name">Beneficio mensual estimado <small id="mMonthlyNote"></small></div>
+                  <div class="m-val" id="mMonthly">—</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3 class="sec-head">Test de estrés</h3>
+              <p class="sec-desc">Un producto solo es escalable si aguanta que las cosas salgan peor de lo previsto. El escenario combinado es el que decide.</p>
+              <table class="grid" id="stressTable"></table>
+            </div>
+
+            <div class="panel">
+              <h3 class="sec-head">Guardar esta evaluación</h3>
+              <div class="save-row">
+                <input type="text" id="saveName" placeholder="Nombre del producto (p. ej. Rodillo de masaje)">
+                <button class="btn primary" onclick="saveProduct()">Guardar</button>
+              </div>
+              <div class="saved-list" id="savedList"></div>
+            </div>
+
+            <div class="assumptions">
+              <strong>Cómo está calculado.</strong> El PVP se toma con IVA incluido: el ingreso que retienes es PVP÷(1+IVA). La comisión referral se calcula sobre el importe <strong>con IVA</strong>, que es la base contractual europea ("Fee Base Amount … including any taxes and customs duties"). Las devoluciones no se descuentan como un porcentaje del precio: por cada unidad devuelta pierdes la tarifa FBA (Amazon no la reembolsa), pagas una tarifa de administración de reembolso del menor entre 5 € o el 20% del referral, más la return processing fee si tu categoría la tiene, y solo recuperas el coste del producto en la fracción que vuelve revendible. La gestoría de IVA se reparte entre las unidades anuales de ese país, así que un país de bajo volumen puede ser deficitario aunque su margen unitario parezca bueno. <strong>No modelado:</strong> Storage Utilization Surcharge, Aged Inventory Surcharge, retiradas, prep, coste financiero del capital y devoluciones fraudulentas. Ajusta referral, FBA y volumen a tu rate card real en Seller Central antes de decidir nada.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===================== COMPARADOR PANEU ===================== -->
+      <section class="view" id="view-paises">
+        <div class="panel">
+          <h2>Comparador PanEU con coste de cumplimiento</h2>
+          <p class="desc">La versión anterior de esta tabla solo variaba el IVA, así que siempre ganaba Alemania: era aritmética disfrazada de análisis. Aquí decides país a país con lo que realmente inclina la balanza — el precio que puedes sostener en ese mercado, el volumen que harás y lo que cuesta cumplir allí. El resto de costes se hereda de la calculadora.</p>
+          <div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table class="grid" id="countryTable" style="min-width:720px"></table></div>
+          <div class="assumptions" style="margin-top:18px" id="countryVerdict"></div>
+          <div class="assumptions" style="margin-top:12px">
+            <strong>Sobre los países.</strong> DE, FR, IT, ES y PL son los que Amazon documenta oficialmente como países de almacenamiento activables por NIF-IVA en Pan-Europeo. <strong>Chequia se ha retirado de la lista</strong>: no aparece en el rate card europeo vigente de 1-jul-2026 y las fuentes secundarias se contradicen sobre si sigue siendo país de almacenamiento — antes de registrarte allí, confírmalo en tu Seller Central. <strong>Países Bajos es obligatorio desde el 25-jun-2025 pero solo como marketplace de listado</strong>, no de almacenamiento: no necesitas NIF-IVA neerlandés si la mercancía no se mueve físicamente allí, por eso su coste de gestoría por defecto es 0. La tarifa por bajo inventario solo existe en DE, FR, IT y ES.
+          </div>
+        </div>
+      </section>
+

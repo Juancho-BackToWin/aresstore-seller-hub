@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Aresstore Seller Hub">
+  <defs>
+    <linearGradient id="ghub" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFB020"/><stop offset="0.45" stop-color="#FF8A00"/><stop offset="1" stop-color="#FF5A00"/>
+    </linearGradient>
+    <linearGradient id="ihub" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#241B16"/><stop offset="1" stop-color="#171210"/>
+    </linearGradient>
+    <linearGradient id="rhub" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FF8A00" stop-opacity=".9"/><stop offset="1" stop-color="#FF5A00" stop-opacity=".25"/>
+    </linearGradient>
+    <linearGradient id="shub" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z" fill="url(#ihub)"/><path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z" fill="none" stroke="url(#rhub)" stroke-width="6"/>
+  <clipPath id="chub"><path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z"/></clipPath>
+  <g clip-path="url(#chub)"><ellipse cx="512" cy="196" rx="620" ry="420" fill="url(#shub)"/></g>
+  
+  <g fill="#FF8A00">
+    <rect x="252" y="252" width="188" height="188" rx="52" opacity=".55"/>
+    <rect x="584" y="252" width="188" height="188" rx="52" opacity=".8"/>
+    <rect x="252" y="584" width="188" height="188" rx="52" opacity=".8"/>
+  </g>
+  <g transform="translate(584,584)">
+    <rect x="0" y="0" width="188" height="188" rx="52" fill="url(#gA)"/>
+    <path d="M94,32 L150,156 L116,156 L106,132 L82,132 L72,156 L38,156 Z M94,74 L84,102 L104,102 Z" fill="#fff"/>
+  </g>
+  <defs><linearGradient id="gA" x1="0" y1="0" x2="0.4" y2="1">
+    <stop offset="0" stop-color="#FFB020"/><stop offset="1" stop-color="#FF5A00"/></linearGradient></defs>
+</svg>

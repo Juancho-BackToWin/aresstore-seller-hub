@@ -1,0 +1,871 @@
+
+/* =========================================================================
+   1 · ESTADO Y PERSISTENCIA
+   ========================================================================= */
+const STORE_KEY = 'aresstore_hub_v3';
+let storageOK = true, memDB = null;
+
+function blankDB(){
+  const comp = {};
+  COUNTRIES.forEach(c=>comp[c.code]={active:c.storage&&['DE','FR','IT','ES'].indexOf(c.code)>=0,
+    vatReg:false, vatCost:c.vatCost, oss:false, epr:false, eprDate:'', notes:''});
+  return {
+    v:'0.3',
+    settings:{ targets:Object.assign({},TARGET),
+               cash:{start:5000, cycle:14, reserve:15, vat:21, ppcDaily:0} },
+    products:[], suppliers:[], pos:[], expenses:[],
+    compliance:comp, saved:[], imports:{}
+  };
+}
+let DB = blankDB();
+
+(function testStorage(){
+  try{ localStorage.setItem('__t','1'); localStorage.removeItem('__t'); }
+  catch(e){ storageOK=false; const b=document.getElementById('storageBanner'); if(b) b.style.display='block'; }
+})();
+function loadDB(){
+  if(!storageOK) return memDB || blankDB();
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(!raw) return blankDB();
+    const d = JSON.parse(raw);
+    const base = blankDB();
+    return Object.assign(base, d, {settings:Object.assign(base.settings, d.settings||{})});
+  }catch(e){ return blankDB(); }
+}
+function saveDB(){
+  DB.settings.targets = TARGET;
+  if(!storageOK){ memDB = DB; return false; }
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); return true; }
+  catch(e){
+    storageOK=false; memDB=DB;
+    const b=document.getElementById('storageBanner'); if(b) b.style.display='block';
+    toast('El navegador ya no acepta guardar. Descarga una copia antes de cerrar.');
+    return false;
+  }
+}
+const uid = ()=> Math.random().toString(36).slice(2,9);
+
+/* =========================================================================
+   2 · UTILIDADES
+   ========================================================================= */
+function fmt(x,d){ if(!isFinite(x)||x===null) return '—';
+  return (x<0?'-':'')+'€'+Math.abs(x).toLocaleString('es-ES',{minimumFractionDigits:d==null?2:d,maximumFractionDigits:d==null?2:d}); }
+function num(x,d){ if(!isFinite(x)||x===null) return '—';
+  return x.toLocaleString('es-ES',{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
+function today(){ return new Date(); }
+function iso(d){ return d.toISOString().slice(0,10); }
+function addDays(d,k){ const x=new Date(d.getTime()); x.setDate(x.getDate()+k); return x; }
+function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+function parseDate(s){
+  if(!s) return null;
+  s = String(s).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  m = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/);          // dd/mm/yyyy europeo
+  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+function toNum(v){
+  if(v==null||v==='') return 0;
+  let s = String(v).replace(/[^\d,.\-]/g,'');
+  // 1.234,56 (europeo) vs 1,234.56 (anglosajón)
+  if(/,\d{1,2}$/.test(s) && s.indexOf('.')<s.lastIndexOf(',')) s = s.replace(/\./g,'').replace(',','.');
+  else s = s.replace(/,/g,'');
+  const n2 = parseFloat(s);
+  return isNaN(n2) ? 0 : n2;
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* Plegado de acentos ANTES de limpiar: si no, "término" queda en "trmino" y
+   ningún alias en español puede casar nunca. Este detalle rompía la mitad
+   del reconocimiento en español. */
+function fold(s){
+  return String(s||'').toLowerCase()
+    .replace(/[áàâäã]/g,'a').replace(/[éèêë]/g,'e').replace(/[íìîï]/g,'i')
+    .replace(/[óòôöõ]/g,'o').replace(/[úùûü]/g,'u')
+    .replace(/ñ/g,'n').replace(/ç/g,'c');
+}
+function normHdr(h){ return fold(h).replace(/^﻿/,'').replace(/[^a-z0-9]/g,''); }
+function countryOf(v){
+  if(!v) return null;
+  const s = String(v).toLowerCase().trim();
+  if(MKT_MAP[s]) return MKT_MAP[s];
+  for(const k in MKT_MAP){ if(s.indexOf(k)>=0) return MKT_MAP[k]; }
+  return null;
+}
+
+/* =========================================================================
+   3 · CATÁLOGO DE INFORMES DE SELLER CENTRAL
+   Firmas tomadas de los esquemas del conector abierto de Airbyte para la
+   Selling Partner API. La detección compara cabeceras normalizadas, así que
+   da igual el nombre del fichero y aguanta guiones, guiones bajos y espacios.
+   ========================================================================= *//* =========================================================================
+   3 · INFORMES DE SELLER CENTRAL — reconocimiento independiente del idioma
+
+   Amazon traduce las cabeceras de sus informes según el idioma que tengas
+   configurado, y no publica la lista de nombres traducidos. Depender de ellas
+   es frágil. Así que el reconocimiento va en tres pasadas:
+
+     1. Cabeceras conocidas (inglés) — camino rápido y sin ambigüedad.
+     2. Alias por palabra clave en español e inglés — "fecha", "cantidad",
+        "importe", "pedido"… funcionan igual escritas de cualquier forma.
+     3. Perfil del CONTENIDO de cada columna — un identificador de pedido
+        siempre tiene la forma 171-1234567-1234567 y un ASIN siempre empieza
+        por B0, digan lo que digan las cabeceras. Esta pasada es la que hace
+        que funcione en cualquier idioma.
+
+   Y si las tres fallan, se le pregunta al usuario una vez y se recuerda.
+   ========================================================================= */
+
+/* ---------- Qué contiene una columna ---------- */
+const KIND = {
+  orderId : v => /^\d{2,4}-\d{5,9}-\d{5,9}$/.test(v),
+  asin    : v => /^B[0-9A-Z]{9}$/i.test(v),
+  fnsku   : v => /^X[0-9A-Z]{9}$/i.test(v),
+  date    : v => /^\d{4}-\d{2}-\d{2}/.test(v) || /^\d{1,2}[\/.]\d{1,2}[\/.]\d{4}/.test(v),
+  channel : v => /amazon\.[a-z.]{2,7}/i.test(v),
+  country : v => /^(DE|FR|IT|ES|PL|NL|BE|IE|SE|GB|UK|AT|PT)$/.test(v),
+  currency: v => /^(EUR|GBP|PLN|SEK|USD|CHF)$/i.test(v),
+  money   : v => /^-?\d{1,9}[.,]\d{1,2}$/.test(v),
+  int     : v => /^-?\d{1,7}$/.test(v),
+  code    : v => /^[A-Za-z0-9][A-Za-z0-9._\-\/]{2,39}$/.test(v) && !/^\d+([.,]\d+)?$/.test(v),
+  text    : v => /[a-záéíóúñü]{3}/i.test(v) && v.indexOf(' ') > 0
+};
+function colProfile(rows, key){
+  const vals = [];
+  for(let i=0; i<rows.length && vals.length<200; i++){
+    const v = rows[i][key];
+    if(v!=null && String(v).trim()!=='') vals.push(String(v).trim());
+  }
+  const p = {n:vals.length, uniq:0, dom:null};
+  if(!vals.length) return p;
+  Object.keys(KIND).forEach(k=>{
+    let hit=0; vals.forEach(v=>{ if(KIND[k](v)) hit++; });
+    p[k] = hit/vals.length;
+  });
+  p.uniq = new Set(vals).size / vals.length;
+  p.sample = vals.slice(0,3);
+  // el tipo dominante: el más específico que cubra al menos el 80%
+  const order = ['orderId','asin','fnsku','date','channel','currency','country','money','int','code','text'];
+  for(const k of order){ if(p[k] >= 0.8){ p.dom = k; break; } }
+  return p;
+}
+function sheetProfile(headers, rows){
+  const P = {cols:headers.length, byKey:{}, count:{}};
+  headers.forEach(h=>{
+    const k = normHdr(h);
+    const pr = colProfile(rows, k);
+    P.byKey[k] = pr;
+    if(pr.dom) P.count[pr.dom] = (P.count[pr.dom]||0) + 1;
+  });
+  const c = t => P.count[t]||0;
+  P.has = {orderId:c('orderId')>0, asin:c('asin')>0, fnsku:c('fnsku')>0, date:c('date')>0,
+           channel:c('channel')>0, country:c('country')>0, currency:c('currency')>0};
+  P.n = {money:c('money'), int:c('int'), code:c('code'), text:c('text')};
+  return P;
+}
+
+/* ---------- Definición de los informes ----------
+   hdr   : cabeceras inglesas exactas (camino rápido)
+   fields: campo interno → alias de cabecera (ES/EN) + tipo esperado
+   sig   : huella por contenido, para cuando las cabeceras vienen traducidas */
+const REPORTS = [
+  {id:'orders', label:'Todos los pedidos', en:'All Orders',
+   path:'Informes › Logística de Amazon › «Todos los pedidos»', feeds:'Ventas, unidades y país',
+   hdr:['amazonorderid','purchasedate','sku'],
+   forbid:['fnsku'],
+   fields:{
+     _oid    :{req:1, type:'orderId', alias:[/amazonorderid/,/pedido/,/order/]},
+     _date   :{req:1, type:'date',    alias:[/purchasedate/,/fecha.*(compra|pedido)/,/^fecha/]},
+     _sku    :{req:1, type:'code',    alias:[/^sku$/,/sellersku/,/skudelvendedor/,/referencia/]},
+     _qty    :{req:1, type:'int',     alias:[/quantity(purchased|shipped)?$/,/cantidad/,/unidades/]},
+     _amount :{req:1, type:'money',   alias:[/itemprice/,/preciodelart/,/^importe/,/^precio/]},
+     _tax    :{req:0, type:'money',   alias:[/itemtax/,/impuestodelart/,/^impuesto/,/^iva/]},
+     _asin   :{req:0, type:'asin',    alias:[/asin/]},
+     _channel:{req:0, type:'channel', alias:[/saleschannel/,/canaldeventa/,/marketplace/]},
+     _country:{req:0, type:'country', alias:[/shipcountry/,/paisdeenvio/,/pais/]},
+     _status :{req:0, type:null,      alias:[/itemstatus/,/orderstatus/,/estadodel/,/estado/]},
+     _fulfil :{req:0, type:null,      alias:[/fulfil?ment?channel/,/canaldegestion/,/logistica/]}
+   },
+   sig:P => P.has.orderId && P.has.date && P.n.money>=1 && P.n.int>=1 && P.cols>=15},
+
+  {id:'inventory', forbidOid:1, label:'Gestión de inventario de Logística de Amazon', en:'Manage FBA Inventory',
+   path:'Informes › Logística de Amazon › Inventario', feeds:'Stock disponible',
+   hdr:['afnfulfillablequantity','sku'],
+   fields:{
+     _sku:{req:1, type:'code', alias:[/^sku$/,/sellersku/,/skudelvendedor/,/referencia/]},
+     _qty:{req:1, type:'int',  alias:[/afnfulfillablequantity/,/cantidad.*disponible/,/disponible/,/cantidadgestionada/]},
+     _asin:{req:0,type:'asin', alias:[/asin/]},
+     _name:{req:0,type:null,   alias:[/productname/,/nombredelproducto/,/titulo/]}
+   },
+   forbid:['orderId'],
+   sig:P => !P.has.orderId && !P.has.date && P.has.asin && P.n.int>=5 && P.cols>=15 && P.cols<=30},
+
+  {id:'multicountry', forbidOid:1, label:'Inventario multipaís', en:'Multi-Country Inventory',
+   path:'Informes › Logística de Amazon › Inventario › Ver más informes', feeds:'Unidades en cada país',
+   hdr:['quantityforlocalfulfillment'],
+   fields:{
+     _sku    :{req:1, type:'code',    alias:[/sellersku/,/^sku$/,/referencia/]},
+     _country:{req:1, type:'country', alias:[/country/,/pais/,/país/]},
+     _qty    :{req:1, type:'int',     alias:[/quantityforlocalfulfillment/,/cantidad/,/unidades/]}
+   },
+   forbid:['orderId'],
+   sig:P => P.has.country && P.cols<=9 && P.n.int>=1 && !P.has.orderId && !P.has.date},
+
+  {id:'fees', forbidOid:1, label:'Vista previa de tarifas de Logística de Amazon', en:'FBA Fee Preview',
+   path:'Informes › Logística de Amazon › Pagos', feeds:'Comisión y tarifa FBA reales por SKU',
+   hdr:['estimatedreferralfeeperunit'],
+   fields:{
+     _sku     :{req:1, type:'code',  alias:[/^sku$/,/sellersku/,/referencia/]},
+     _referral:{req:1, type:'money', alias:[/referralfeeperunit/,/comision.*porunidad/,/comisionporrecomendacion/,/comision/]},
+     _fba     :{req:0, type:'money', alias:[/expectedfulfillmentfeeperunit/,/tarifadegestionlogistica/,/tarifadelogistica/,/gestionlogistica/]},
+     _price   :{req:0, type:'money', alias:[/yourprice/,/salesprice/,/tuprecio/,/preciodeventa/]}
+   },
+   forbid:['orderId'],
+   sig:P => P.has.asin && P.has.currency && P.n.money>=5 && !P.has.orderId && P.cols>=25},
+
+  {id:'returns', label:'Devoluciones de Logística de Amazon', en:'FBA Customer Returns',
+   path:'Informes › Logística de Amazon › Concesiones al cliente', feeds:'Tasa real de devolución',
+   hdr:['detaileddisposition','returndate'],
+   fields:{
+     _oid :{req:1, type:'orderId', alias:[/orderid/,/pedido/]},
+     _date:{req:1, type:'date', alias:[/returndate/,/fecha.*devoluci/,/^fecha/]},
+     _sku :{req:1, type:'code', alias:[/^sku$/,/sellersku/,/referencia/]},
+     _qty :{req:0, type:'int',  alias:[/quantity/,/cantidad/,/unidades/]},
+     _disp:{req:0, type:null,   alias:[/detaileddisposition/,/disposicion/,/estado/]}
+   },
+   sig:P => P.has.orderId && P.has.date && P.cols<=18 && P.n.int>=1},
+
+  {id:'searchterm', label:'Términos de búsqueda (Publicidad)', en:'Search Term Report',
+   path:'Publicidad › Gestor de campañas › Informes', feeds:'Gasto y desperdicio de PPC',
+   hdr:['customersearchterm'],
+   fields:{
+     _term    :{req:1, type:null,  alias:[/customersearchterm/,/searchterm/,/termino.*busqueda/,/terminodebusqueda/]},
+     _spend   :{req:1, type:'money',alias:[/^spend/,/^cost$/,/gasto/,/inversion/]},
+     _sales   :{req:0, type:'money',alias:[/totalsales/,/attributedsales/,/ventastotales/,/^ventas/]},
+     _orders  :{req:0, type:'int',  alias:[/totalorders/,/attributedconversions/,/pedidostotales/,/^pedidos/,/conversiones/]},
+     _clicks  :{req:0, type:'int',  alias:[/^clicks$/,/^clics/,/pulsaciones/]},
+     _impr    :{req:0, type:'int',  alias:[/impressions/,/impresiones/]},
+     _campaign:{req:0, type:null,   alias:[/campaignname/,/nombredecampa/,/campa/]}
+   },
+   sig:P => !P.has.orderId && !P.has.asin && P.n.int>=2 && P.n.money>=2 && P.n.text>=1},
+
+  {id:'ledger', label:'Libro mayor de inventario', en:'Inventory Ledger',
+   path:'Informes › Logística de Amazon › Inventario', feeds:'Movimientos de stock por país',
+   hdr:['eventtype','referenceid','fnsku'],
+   fields:{
+     _date   :{req:1, type:'date',   alias:[/^date/,/^fecha/]},
+     _sku    :{req:0, type:'code',   alias:[/msku/,/^sku$/,/referencia/]},
+     _country:{req:0, type:'country',alias:[/country/,/pais/]},
+     _qty    :{req:0, type:'int',    alias:[/quantity/,/cantidad/]},
+     _event  :{req:0, type:null,     alias:[/eventtype/,/tipodeevento/,/evento/]}
+   },
+   sig:P => P.has.fnsku && P.has.date && P.cols<=20},
+
+  {id:'settlement', label:'Liquidación (fichero plano)', en:'Settlement flat file',
+   path:'Pagos › Todos los extractos › Descargar fichero plano', feeds:'Comisiones y dinero real',
+   warn:'Solo en inglés · Amazon lo retira el 11-nov-2026',
+   hdr:['settlementid','transactiontype'], onlyEn:true, fields:{}, sig:()=>false},
+
+  {id:'storage', label:'Tarifas mensuales de almacenamiento', en:'FBA Monthly Storage Fees',
+   path:'Informes › Logística de Amazon › Pagos', feeds:'Coste real de almacenaje',
+   hdr:['estimatedmonthlystoragefee'], onlyEn:true, fields:{}, sig:()=>false},
+
+  {id:'planning', label:'Salud del inventario', en:'FBA Inventory Planning',
+   path:'Inventario › Gestionar salud del inventario', feeds:'Exceso y antigüedad',
+   hdr:['sellthrough','daysofsupply'], onlyEn:true, fields:{}, sig:()=>false},
+
+  {id:'reimb', label:'Reembolsos de Logística de Amazon', en:'FBA Reimbursements',
+   path:'Informes › Logística de Amazon › Pagos', feeds:'Dinero recuperado',
+   hdr:['reimbursementid'], onlyEn:true, fields:{}, sig:()=>false},
+
+  {id:'vat', label:'Transacciones sujetas a IVA', en:'VAT Transactions',
+   path:'Informes › Biblioteca de documentos fiscales', feeds:'IVA por país',
+   hdr:['transactiontype','salearrivalcountry'], onlyEn:true, fields:{}, sig:()=>false}
+];
+
+/* ---------- Lectura de fichero con detección de codificación ---------- */
+function readSmart(file){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onerror = ()=>rej(new Error('No se pudo leer el archivo'));
+    r.onload = ()=>{
+      const buf = r.result;
+      let txt = new TextDecoder('utf-8',{fatal:false}).decode(buf);
+      // Amazon sirve muchos informes en Latin-1. Si aparece el carácter de
+      // sustitución, reintentamos con windows-1252.
+      if(txt.indexOf(String.fromCharCode(65533)) >= 0){
+        try{ txt = new TextDecoder('windows-1252').decode(buf); }catch(e){}
+      }
+      res(txt.replace(/^﻿/,''));
+    };
+    r.readAsArrayBuffer(file);
+  });
+}
+/* ---------- Parser TSV/CSV con comillas ---------- */
+function parseDelimited(text){
+  const nl = text.indexOf('\n');
+  const firstLine = text.slice(0, nl>0 ? nl : 400);
+  const tabs=(firstLine.match(/\t/g)||[]).length,
+        commas=(firstLine.match(/,/g)||[]).length,
+        semis=(firstLine.match(/;/g)||[]).length;
+  const D = tabs >= Math.max(commas,semis) && tabs>0 ? '\t' : (semis>commas ? ';' : ',');
+  const rows=[]; let row=[], cur='', q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(q){
+      if(ch==='"'){ if(text[i+1]==='"'){cur+='"';i++;} else q=false; }
+      else cur+=ch;
+    } else if(ch==='"'){ q=true; }
+    else if(ch===D){ row.push(cur); cur=''; }
+    else if(ch==='\n'){ row.push(cur); rows.push(row); row=[]; cur=''; }
+    else if(ch!=='\r'){ cur+=ch; }
+  }
+  if(cur!==''||row.length){ row.push(cur); rows.push(row); }
+  if(!rows.length) return {headers:[],rows:[],delim:D};
+  // Los informes de Publicidad llevan líneas de título antes de la cabecera:
+  // se toma como cabecera la primera fila con 3+ celdas no vacías.
+  let hi=0;
+  for(let i=0;i<Math.min(6,rows.length);i++){
+    if(rows[i].filter(x=>String(x).trim()!=='').length>=3){ hi=i; break; }
+  }
+  const headers = rows[hi].map(h=>String(h).trim());
+  const out=[]; let bad=0;
+  for(let i=hi+1;i<rows.length;i++){
+    if(rows[i].length===1 && String(rows[i][0]).trim()==='') continue;
+    if(rows[i].length !== headers.length) bad++;
+    const o={};
+    headers.forEach((h,j)=>{ o[normHdr(h)] = rows[i][j]!==undefined ? String(rows[i][j]).trim() : ''; });
+    out.push(o);
+  }
+  /* Si muchas filas no tienen tantas celdas como la cabecera, el archivo está
+     desalineado — típicamente un CSV con coma decimal y coma como separador,
+     sin comillas. Leerlo así daría cifras desplazadas de columna: números
+     creíbles y falsos. Mejor negarse que dar un dato equivocado. */
+  const misaligned = out.length>4 && bad/out.length > 0.1;
+  return {headers, rows:out, delim:D, misaligned:misaligned, badRows:bad};
+}
+
+/* ---------- Firma de la hoja, para recordar asignaciones manuales ---------- */
+function sheetSig(headers){
+  const s = headers.map(normHdr).sort().join('|');
+  let h=0; for(let i=0;i<s.length;i++){ h=((h<<5)-h+s.charCodeAt(i))|0; }
+  return 'h'+Math.abs(h).toString(36)+'-'+headers.length;
+}
+
+/* ---------- Identificar de qué informe se trata ----------
+   No se usa la huella de contenido como filtro que descarta, sino como una
+   evidencia más que suma. Cada informe candidato se PUNTÚA: un alias de
+   cabecera acertado vale mucho, una columna resuelta por su tipo vale poco,
+   y que falte un campo obligatorio penaliza fuerte. Gana el de más puntos.
+   Así un informe en español no se descarta por no encajar en una huella. */
+function scoreReport(rep, headers, P){
+  if(!rep.fields || !Object.keys(rep.fields).length) return {score:-999};
+  const r = resolveFields(rep, headers, P);
+  let sc = r.aliasHits*3 + r.typeHits*1 - r.missing.length*20;
+  try{ if(rep.sig && rep.sig(P)) sc += 2; }catch(e){}
+  // prueba en contra: si el informe no puede llevar cierto tipo de columna y
+  // la hoja la tiene, es que no es este informe
+  (rep.forbid||[]).forEach(t=>{ if(P.has[t]) sc -= 12; });
+  return {score:sc, map:r.map, missing:r.missing, aliasHits:r.aliasHits};
+}
+function detectReport(headers, rows){
+  const H = headers.map(normHdr);
+  // 1 · cabeceras inglesas exactas — camino rápido, sin ambigüedad
+  let best=null, bn=0;
+  REPORTS.forEach(r=>{
+    if(r.hdr && r.hdr.every(s=>H.indexOf(s)>=0) && r.hdr.length>bn){ best=r; bn=r.hdr.length; }
+  });
+  if(best) return {rep:best, how:'cabeceras en inglés'};
+  // 2 · asignación que el usuario ya guardó para estas mismas columnas
+  const sig = sheetSig(headers);
+  const learned = (DB.mappings||{})[sig];
+  if(learned){
+    const r = REPORTS.filter(x=>x.id===learned.reportId)[0];
+    if(r) return {rep:r, how:'asignación que guardaste', map:learned.map};
+  }
+  // 3 · puntuación combinando alias en español y contenido de las columnas
+  const P = sheetProfile(headers, rows);
+  let win=null, ws=-999, wr=null;
+  REPORTS.forEach(r=>{
+    if(r.onlyEn) return;
+    const s = scoreReport(r, headers, P);
+    if(s.score>ws){ ws=s.score; win=r; wr=s; }
+  });
+  if(win && ws>=3){
+    const how = wr.aliasHits>=2 ? 'nombres de columna en español' : 'contenido de las columnas';
+    return {rep:win, how:how, profile:P, map:wr.map, score:ws};
+  }
+  return {rep:null, profile:P, sig:sig};
+}
+
+/* ---------- Asignar columnas a campos internos ---------- */
+function resolveFields(rep, headers, P){
+  const H = headers.map(normHdr);
+  const map={}, used={}, missing=[];
+  let aliasHits=0, typeHits=0;
+  const fields = rep.fields||{};
+  // primera pasada: alias de cabecera
+  Object.keys(fields).forEach(f=>{
+    const d = fields[f];
+    for(const rx of d.alias){
+      for(let i=0;i<H.length;i++){
+        if(used[H[i]]) continue;
+        if(rx.test(H[i])){
+          const pr = P.byKey[H[i]];
+          if(pr && pr.n===0) continue;          // columna vacía: no vale como prueba
+          if(!d.type || !pr || !pr.dom || pr.dom===d.type ||
+             (d.type==='money' && pr.dom==='int') || (d.type==='int' && pr.dom==='money') ||
+             (d.type==='code' && (pr.dom==='text'||pr.dom==='code'))){
+            map[f]=H[i]; used[H[i]]=1; aliasHits++; return;
+          }
+        }
+      }
+    }
+  });
+  // segunda pasada: por tipo de contenido, para lo que quede sin asignar
+  Object.keys(fields).forEach(f=>{
+    if(map[f]) return;
+    const d = fields[f];
+    if(!d.type) return;
+    let bestK=null, bestU=-1;
+    H.forEach(k=>{
+      if(used[k]) return;
+      const pr=P.byKey[k]; if(!pr||!pr.dom||pr.n===0) return;
+      const ok = pr.dom===d.type ||
+                 (d.type==='money' && pr.dom==='int') ||
+                 (d.type==='code'  && pr.dom==='text');
+      if(!ok) return;
+      // para códigos preferimos alta cardinalidad; para importes, la primera
+      const u = d.type==='code' ? pr.uniq : 1/(H.indexOf(k)+1);
+      if(u>bestU){ bestU=u; bestK=k; }
+    });
+    if(bestK){ map[f]=bestK; used[bestK]=1; typeHits++; }
+  });
+  Object.keys(fields).forEach(f=>{ if(fields[f].req && !map[f]) missing.push(f); });
+  return {map, missing, aliasHits, typeHits};
+}
+
+/* ---------- Normalizar filas a los nombres internos ---------- */
+const FIELD_LABEL = {
+  _date:'Fecha', _sku:'SKU / referencia', _qty:'Unidades', _amount:'Importe de la venta',
+  _tax:'Impuesto (IVA)', _asin:'ASIN', _channel:'Canal de venta', _country:'País',
+  _status:'Estado del pedido', _fulfil:'Canal logístico', _name:'Nombre del producto',
+  _referral:'Comisión por unidad', _fba:'Tarifa de logística', _price:'Precio de venta',
+  _disp:'Estado de la devolución', _term:'Término de búsqueda', _spend:'Gasto',
+  _sales:'Ventas atribuidas', _orders:'Pedidos', _clicks:'Clics', _impr:'Impresiones',
+  _campaign:'Campaña', _event:'Tipo de movimiento'
+};
+function normalizeRows(rows, map){
+  const keys = Object.keys(map);
+  return rows.map(r=>{
+    const o = r;
+    keys.forEach(f=>{ o[f] = r[map[f]]; });
+    return o;
+  });
+}
+
+/* ---------- Ingesta ---------- */
+async function handleFiles(files){
+  const list = document.getElementById('fileList');
+  const pendientes = [];
+  for(const f of Array.from(files)){
+    const el = document.createElement('div');
+    el.className='fileitem';
+    el.innerHTML = '<span class="f-dot wait"></span><span class="f-name">'+esc(f.name)+'</span><span class="f-meta">leyendo…</span>';
+    list.appendChild(el);
+    try{
+      if(/\.xlsx?$/i.test(f.name)){
+        el.innerHTML='<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span>'+
+          '<span class="f-meta">Excel no soportado. Descarga el informe en .txt o .csv desde Amazon.</span>';
+        continue;
+      }
+      const txt = await readSmart(f);
+      const {headers, rows, misaligned, badRows, delim} = parseDelimited(txt);
+      if(misaligned){
+        el.innerHTML='<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span>'+
+          '<span class="f-meta"><strong>Archivo desalineado</strong>: '+num(badRows)+' de '+num(rows.length)+
+          ' filas no tienen las mismas celdas que la cabecera. Suele pasar en CSV en español, '+
+          'donde los decimales van con coma y el separador también es coma. '+
+          'Vuelve a descargarlo en <strong>.txt</strong> y funcionará. No lo importo porque los '+
+          'números saldrían desplazados de columna.</span>';
+        continue;
+      }
+      if(!rows.length){
+        el.innerHTML='<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span><span class="f-meta">El archivo no tiene filas de datos.</span>';
+        continue;
+      }
+      const det = detectReport(headers, rows);
+      if(!det.rep){
+        el.innerHTML='<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span>'+
+          '<span class="f-meta">No lo reconozco. '+headers.length+' columnas, '+num(rows.length)+' filas.</span>'+
+          '<span class="f-right"><button class="btn sm primary">Asignar columnas</button></span>';
+        const btn = el.querySelector('button');
+        btn.onclick = ()=>openMapper(f.name, headers, rows, det.sig, el);
+        continue;
+      }
+      const P = det.profile || sheetProfile(headers, rows);
+      let map = det.map, missing = [];
+      if(!map){ const r = resolveFields(det.rep, headers, P); map = r.map; missing = r.missing; }
+      if(missing.length){
+        el.innerHTML='<span class="f-dot wait"></span><span class="f-name">'+esc(f.name)+'</span>'+
+          '<span class="f-meta">'+esc(det.rep.label)+' — me faltan '+missing.length+' columna'+(missing.length===1?'':'s')+'</span>'+
+          '<span class="f-right"><button class="btn sm primary">Completar</button></span>';
+        el.querySelector('button').onclick = ()=>openMapper(f.name, headers, rows, sheetSig(headers), el, det.rep, map);
+        continue;
+      }
+      saveImport(det.rep, headers, rows, map, f.name, el, det.how);
+    }catch(err){
+      el.innerHTML='<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span><span class="f-meta">'+esc(err.message)+'</span>';
+    }
+  }
+  refreshAll();
+}
+function saveImport(rep, headers, rows, map, fileName, el, how){
+  const norm = normalizeRows(rows, map);
+  DB.imports[rep.id] = {rows:norm, count:norm.length, file:fileName, map:map,
+                        loadedAt:new Date().toISOString(), cols:headers.length, how:how||'asignación manual'};
+  if(!DB.mappings) DB.mappings={};
+  DB.mappings[sheetSig(headers)] = {reportId:rep.id, map:map};
+  saveDB();
+  if(el) el.innerHTML='<span class="f-dot ok"></span><span class="f-name">'+esc(fileName)+'</span>'+
+    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+'</span>'+
+    '<span class="f-right"><strong>'+num(norm.length)+'</strong> filas · '+headers.length+' col.</span>';
+  refreshAll();
+}
+
+/* ---------- Asistente manual: se hace una vez y queda guardado ---------- */
+function openMapper(fileName, headers, rows, sig, el, repPre, mapPre){
+  const P = sheetProfile(headers, rows);
+  const opts = h => '<option value="">— ninguna —</option>' + headers.map(x=>{
+    const k=normHdr(x), pr=P.byKey[k];
+    const ej = pr && pr.sample && pr.sample.length ? '  ·  ej: '+pr.sample.slice(0,2).join(' / ') : '';
+    return '<option value="'+esc(k)+'"'+(h===k?' selected':'')+'>'+esc(x)+esc(ej.slice(0,52))+'</option>';
+  }).join('');
+
+  function body(repId){
+    const rep = REPORTS.filter(r=>r.id===repId)[0];
+    if(!rep) return '';
+    const P2 = P;
+    const auto = mapPre && repPre && repPre.id===repId ? mapPre : resolveFields(rep, headers, P2).map;
+    const fs = Object.keys(rep.fields||{});
+    if(!fs.length) return '<div class="note-box warn" style="margin:0">Este informe solo se admite con las cabeceras en inglés.</div>';
+    return '<div class="tbl-wrap"><table class="grid"><tr><th>Dato que necesito</th><th></th><th>Columna de tu archivo</th></tr>'+
+      fs.map(f=>'<tr><td class="name">'+esc(FIELD_LABEL[f]||f)+
+        (rep.fields[f].req?' <span class="pill stop">obligatorio</span>':' <span class="pill">opcional</span>')+'</td>'+
+        '<td class="mut">→</td>'+
+        '<td><select id="mapf_'+f+'">'+opts(auto[f])+'</select></td></tr>').join('')+
+      '</table></div>';
+  }
+
+  openModal('Asignar columnas · '+fileName,
+    'Dime qué columna de tu archivo contiene cada dato. Se guarda para siempre: la próxima vez que sueltes un informe con estas mismas columnas, lo reconoceré solo.',
+    '<div class="field"><label>¿Qué informe es?</label><select id="mapRep" onchange="mapperSwitch()">'+
+      REPORTS.filter(r=>!r.onlyEn).map(r=>'<option value="'+r.id+'"'+(repPre&&repPre.id===r.id?' selected':'')+'>'+
+        esc(r.label)+'  ('+esc(r.en)+')</option>').join('')+
+    '</select></div><div id="mapBody">'+body(repPre?repPre.id:REPORTS[0].id)+'</div>',
+    ()=>{
+      const repId = val('mapRep');
+      const rep = REPORTS.filter(r=>r.id===repId)[0];
+      const map={}, falta=[];
+      Object.keys(rep.fields||{}).forEach(f=>{
+        const v = val('mapf_'+f);
+        if(v) map[f]=v; else if(rep.fields[f].req) falta.push(FIELD_LABEL[f]||f);
+      });
+      if(falta.length){ toast('Falta asignar: '+falta.join(', ')); return; }
+      saveImport(rep, headers, rows, map, fileName, el, 'asignación manual');
+      toast('Guardado. La próxima vez lo reconoceré solo.');
+    });
+  window.mapperSwitch = ()=>{ document.getElementById('mapBody').innerHTML = body(val('mapRep')); };
+}
+
+function wipeImports(){
+  if(!confirm('Se borran los informes importados. Tus productos, proveedores y pedidos se conservan.')) return;
+  DB.imports={}; saveDB(); refreshAll(); toast('Datos importados vaciados');
+}
+function forgetMappings(){
+  if(!confirm('Se olvidan las asignaciones de columnas que guardaste. Los datos importados se conservan.')) return;
+  DB.mappings={}; saveDB(); renderDatos(); toast('Asignaciones olvidadas');
+}
+/* =========================================================================
+   4 · DERIVADOS  ·  todo lo que el hub calcula a partir de lo importado
+   ========================================================================= */
+function imp(id){ return (DB.imports[id]&&DB.imports[id].rows) || []; }
+/* Lee un campo por su nombre interno y, si no está, por el nombre inglés
+   original: así los datos importados antes de este cambio siguen valiendo. */
+function gv(r){ for(let i=1;i<arguments.length;i++){ const k=arguments[i];
+  if(r[k]!==undefined && r[k]!=='') return r[k]; } return undefined; }
+function hasImp(id){ return imp(id).length>0; }
+function prodBySku(){ const m={}; DB.products.forEach(p=>m[String(p.sku).toLowerCase()]=p); return m; }
+function findProd(sku){ return prodBySku()[String(sku||'').toLowerCase()] || null; }
+function landed(p){ return p ? (toNum(p.cogs)+toNum(p.freight)) : 0; }
+function periodStart(){ return periodDays ? addDays(today(), -periodDays) : new Date(2000,0,1); }
+
+/* Ventas normalizadas desde el informe de pedidos */
+function salesRows(){
+  const from = periodStart();
+  return imp('orders').map(r=>{
+    const d = parseDate(gv(r,'_date','purchasedate'));
+    const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
+    const ful = gv(r,'_fulfil','fulfillmentchannel');
+    return {
+      date:d, sku:gv(r,'_sku','sku')||'', asin:gv(r,'_asin','asin')||'',
+      qty: toNum(gv(r,'_qty','quantity')),
+      revenue: toNum(gv(r,'_amount','itemprice')),
+      tax: toNum(gv(r,'_tax','itemtax')),
+      country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
+      fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
+      cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0
+    };
+  }).filter(r=>r.date && !r.cancelled && r.date>=from &&
+               (countryFilter==='ALL' || r.country===countryFilter));
+}
+/* Comisiones reales desde la liquidación */
+function settlementFees(){
+  const from = periodStart();
+  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0;
+  imp('settlement').forEach(r=>{
+    const d = parseDate(r.posteddate)||parseDate(r.settlementstartdate);
+    if(!d || d<from) return;
+    if(countryFilter!=='ALL' && countryOf(r.marketplacename)!==countryFilter) return;
+    rows++;
+    const t=(r.itemrelatedfeetype||'')+' '+(r.orderfeetype||'')+' '+(r.shipmentfeetype||'');
+    const amt = toNum(r.itemrelatedfeeamount)+toNum(r.orderfeeamount)+toNum(r.shipmentfeeamount);
+    const tl = t.toLowerCase();
+    if(tl.indexOf('commission')>=0||tl.indexOf('referral')>=0) referral += amt;
+    else if(tl.indexOf('fba')>=0||tl.indexOf('fulfil')>=0) fba += amt;
+    else if(tl.indexOf('storage')>=0) storage += amt;
+    else other += amt;
+    promo += toNum(r.promotionamount);
+  });
+  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo, rows};
+}
+/* Gasto y desperdicio publicitario */
+function adStats(){
+  const rows = imp('searchterm');
+  let spend=0, sales=0, clicks=0, impr=0, waste=0, wasteTerms=0;
+  const terms=[];
+  rows.forEach(r=>{
+    const sp = toNum(gv(r,'_spend','spend','cost','totalspend'));
+    const sa = toNum(gv(r,'_sales','sales','attributedsales7d','sales7d','totalsales'));
+    const or_ = toNum(gv(r,'_orders','orders','attributedconversions7d','totalorders','purchases'));
+    const cl = toNum(gv(r,'_clicks','clicks')), im = toNum(gv(r,'_impr','impressions'));
+    spend+=sp; sales+=sa; clicks+=cl; impr+=im;
+    const term = gv(r,'_term','customersearchterm','searchterm')||'';
+    if(sp>0 && or_===0){ waste+=sp; wasteTerms++; }
+    if(term) terms.push({term, campaign:gv(r,'_campaign','campaignname')||'', spend:sp, sales:sa, orders:or_, clicks:cl, impr:im});
+  });
+  terms.sort((a,b)=> (a.orders===0?1:0)-(b.orders===0?1:0) || b.spend-a.spend);
+  return {spend, sales, clicks, impr, waste, wasteTerms, terms, acos: sales>0?spend/sales*100:0};
+}
+/* Cuenta de resultados del periodo. Cada línea sabe si está medida o estimada. */
+function pnl(){
+  const S = salesRows();
+  const grossInc = S.reduce((a,r)=>a+r.revenue,0);
+  const units    = S.reduce((a,r)=>a+r.qty,0);
+  const tax      = S.reduce((a,r)=>a+r.tax,0);
+  const net      = grossInc - tax;
+  const pm       = prodBySku();
+  let cogs=0, cogsKnown=0;
+  S.forEach(r=>{ const p=pm[String(r.sku).toLowerCase()]; if(p){ cogs += landed(p)*r.qty; cogsKnown += r.qty; } });
+  const sf = settlementFees();
+  const measured = sf.rows>0;
+  let referral, fba, storage, otherFee;
+  let ship=0, fbmUnits=0, fbaUnits=0;
+  S.forEach(r=>{
+    const p=pm[String(r.sku).toLowerCase()];
+    const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
+    if(isFbm){ fbmUnits+=r.qty; ship += (p?toNum(p.fbmShip):4.5)*r.qty; }
+    else fbaUnits+=r.qty;
+  });
+  if(measured){ referral=sf.referral; fba=sf.fba; storage=sf.storage; otherFee=sf.other; }
+  else {
+    referral = grossInc*0.15;
+    let f=0; S.forEach(r=>{
+      const p=pm[String(r.sku).toLowerCase()];
+      const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
+      if(!isFbm) f += (p?toNum(p.fba):3.2)*FUEL*r.qty;
+    });
+    fba = f; storage = 0; otherFee = 0;
+  }
+  const ads = adStats();
+  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*(periodDays||30);
+  const retRows = imp('returns').filter(r=>{ const d=parseDate(gv(r,'_date','returndate')); return d && d>=periodStart(); });
+  const retUnits = retRows.reduce((a,r)=>a+(toNum(gv(r,'_qty','quantity'))||1),0);
+  const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
+                            .reduce((a,r)=>a+toNum(r.amounttotal),0);
+  const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * ((periodDays||30)/30);
+  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
+  return {
+    grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+    measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
+    margin: net>0 ? profit/net*100 : 0,
+    tacos: grossInc>0 ? ppc/grossInc*100 : 0,
+    roi: cogs>0 ? profit/cogs*100 : 0,
+    avgPrice: units>0 ? grossInc/units : 0,
+    adSales: ads.sales, adWaste: ads.waste, adWasteTerms: ads.wasteTerms
+  };
+}
+/* Rentabilidad por SKU + clasificación ABC */
+function skuStats(){
+  const S = salesRows(), pm = prodBySku(), P = pnl();
+  const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
+  const ppcRate = P.grossInc>0 ? P.ppc/P.grossInc : 0;
+  const m={};
+  S.forEach(r=>{
+    const k=String(r.sku);
+    if(!m[k]) m[k]={sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k, units:0, revenue:0, countries:{}};
+    m[k].units+=r.qty; m[k].revenue+=r.revenue;
+    if(r.country) m[k].countries[r.country]=(m[k].countries[r.country]||0)+r.qty;
+  });
+  const rows = Object.keys(m).map(k=>{
+    const x=m[k], p=pm[k.toLowerCase()];
+    const netRev = x.revenue/1.21;
+    const cogs = p ? landed(p)*x.units : 0;
+    const profit = netRev - x.revenue*feeRate - x.revenue*ppcRate - cogs;
+    return Object.assign(x,{netRev, cogs, profit, hasCost:!!p,
+      margin: netRev>0?profit/netRev*100:0, share:0, cum:0, abc:'C'});
+  }).sort((a,b)=>b.profit-a.profit);
+  const totPos = rows.filter(r=>r.profit>0).reduce((a,r)=>a+r.profit,0) || 1;
+  let cum=0;
+  rows.forEach(r=>{
+    r.share = r.profit>0 ? r.profit/totPos*100 : 0;
+    if(r.profit>0){ cum+=r.share; r.cum=cum; r.abc = cum<=80?'A':(cum<=95?'B':'C'); }
+    else { r.cum=100; r.abc='D'; }
+  });
+  return rows;
+}
+/* Inventario consolidado: stock, cobertura y riesgo de tarifa */
+function invStats(){
+  const S = salesRows(), pm = prodBySku();
+  const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
+  const days = periodDays||30;
+  const stock={}, byCountry={};
+  imp('inventory').forEach(r=>{
+    const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
+    stock[k]=(stock[k]||0)+toNum(gv(r,'_qty','afnfulfillablequantity'));
+  });
+  imp('multicountry').forEach(r=>{
+    const k=gv(r,'_sku','sellersku','sku'), c=countryOf(gv(r,'_country','country')); if(!k) return;
+    if(!byCountry[k]) byCountry[k]={};
+    if(c) byCountry[k][c]=(byCountry[k][c]||0)+toNum(gv(r,'_qty','quantityforlocalfulfillment'));
+    if(!stock[k]) stock[k]=0;
+  });
+  if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku) stock[r.sku]=toNum(r.available); });
+  const plan={}; imp('planning').forEach(r=>{ if(r.sku) plan[r.sku]=r; });
+  const keys = Array.from(new Set(Object.keys(stock).concat(Object.keys(sold)).concat(DB.products.map(p=>String(p.sku)))));
+  return keys.map(k=>{
+    const p=pm[k.toLowerCase()];
+    const fbm = !!(p && p.channel==='FBM');
+    const velocity = (sold[k]||0)/days;
+    const qty = fbm ? toNum(p.fbmStock) : (stock[k]||0);
+    const cover = velocity>0 ? qty/velocity : (qty>0?999:0);
+    const lead = p&&p.supplierId ? (DB.suppliers.find(s=>s.id===p.supplierId)||{}).lead||45 : 45;
+    const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
+    const pl = plan[k]||{};
+    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead),
+      reorderPoint, need: Math.max(0, reorderPoint-qty),
+      byCountry: fbm ? {} : (byCountry[k]||{}),
+      excess: toNum(pl.estimatedexcessquantity),
+      aged: toNum(pl.invage271to365days)+toNum(pl.invage365plusdays),
+      sellThrough: toNum(pl.sellthrough),
+      value: qty*landed(p),
+      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok'))
+    };
+  }).filter(r=>r.qty>0||r.velocity>0).sort((a,b)=>a.cover-b.cover);
+}
+/* Beneficio por mercado, con la gestoría amortizada entre las unidades reales */
+function countryStats(){
+  const S = imp('orders').map(r=>({d:parseDate(gv(r,'_date','purchasedate')),
+                                   c:countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')),
+                                   q:toNum(gv(r,'_qty','quantity')), rev:toNum(gv(r,'_amount','itemprice')),
+                                   st:String(gv(r,'_status','itemstatus')||'').toLowerCase()}))
+                         .filter(r=>r.d && r.st.indexOf('cancel')<0 && r.st.indexOf('anulad')<0 && r.d>=periodStart());
+  const P = pnl();
+  const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee+P.ppc)/P.grossInc : 0.32;
+  const cogsPerUnit = P.units>0 ? P.cogs/P.units : 0;
+  const m={};
+  S.forEach(r=>{ const c=r.c||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.q; m[c].rev+=r.rev; });
+  const scale = 365/(periodDays||30);
+  return COUNTRIES.map(c=>{
+    const x = m[c.code]||{units:0,rev:0};
+    const conf = DB.compliance[c.code]||{};
+    const vatCost = conf.active ? toNum(conf.vatCost) : 0;
+    const netRev = x.rev/(1+c.vat/100);
+    const annualUnits = x.units*scale;
+    const gross = netRev - x.rev*feeRate - cogsPerUnit*x.units;
+    const vatShare = vatCost*((periodDays||30)/365);
+    const profit = gross - vatShare;
+    return {c, units:x.units, rev:x.rev, netRev, profit, annual:profit*scale,
+            margin: netRev>0?profit/netRev*100:0, active:!!conf.active,
+            perUnit: x.units>0?profit/x.units:0, vatCost};
+  });
+}
+/* Proyección de caja a 90 días */
+function cashProjection(){
+  const cs = DB.settings.cash, P = pnl();
+  const days = 90;
+  const start = today();
+  const dayRev  = (periodDays? P.grossInc/(periodDays||30) : 0);
+  const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
+  const dayPpc  = (P.ppc/(periodDays||30)) || cs.ppcDaily || 0;
+  const dayCogsFlow = 0;                       // el coste sale por los pedidos, no a diario
+  const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
+  // Vencimientos de pedidos de compra pendientes
+  const poFlows = {};
+  DB.pos.forEach(po=>{
+    if(po.status==='closed') return;
+    (po.payments||[]).forEach(pay=>{
+      if(pay.paid) return;
+      const d = parseDate(pay.dueDate); if(!d) return;
+      const k = daysBetween(start,d);
+      if(k>=0 && k<days) poFlows[k] = (poFlows[k]||0) + poAmount(po)*(toNum(pay.pct)/100);
+    });
+  });
+  let bal = toNum(cs.start), pending = 0;
+  const out=[];
+  for(let k=0;k<days;k++){
+    const d = addDays(start,k);
+    let inflow=0, outflow=0;
+    pending += dayRev*(1-feeRate);
+    if(k>0 && k % Math.max(1,Math.round(toNum(cs.cycle)||14)) === 0){
+      inflow = pending*(1 - toNum(cs.reserve)/100);
+      pending -= inflow;
+    }
+    outflow += dayPpc + dayCogsFlow;
+    if(d.getDate()===1) outflow += monthlyFixed;
+    if(d.getDate()===20) outflow += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
+    if(poFlows[k]) outflow += poFlows[k];
+    bal += inflow - outflow;
+    out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0});
+  }
+  return out;
+}
+function poAmount(po){
+  const items = po.items||[];
+  return items.reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0) + toNum(po.freight);
+}
+function poUnits(po){ return (po.items||[]).reduce((a,i)=>a+toNum(i.qty),0); }
+/* Reparto del flete al coste unitario, que es lo que cierra el círculo
+   compra → coste → margen. Sin esto el margen es una estimación. */
+function poUnitCost(po, sku){
+  const it = (po.items||[]).find(i=>String(i.sku)===String(sku));
+  if(!it) return 0;
+  const totUnits = poUnits(po), totVal = (po.items||[]).reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0);
+  const f = toNum(po.freight);
+  let share = 0;
+  if(po.alloc==='value' && totVal>0) share = f*(toNum(it.qty)*toNum(it.unitCost))/totVal/Math.max(1,toNum(it.qty));
+  else if(totUnits>0) share = f/totUnits;
+  return toNum(it.unitCost) + share;
+}
+function applyPOCosts(po){
+  let n2=0;
+  (po.items||[]).forEach(i=>{
+    const p = findProd(i.sku);
+    if(p){ p.cogs = +toNum(i.unitCost).toFixed(4);
+           p.freight = +(poUnitCost(po,i.sku)-toNum(i.unitCost)).toFixed(4); n2++; }
+  });
+  saveDB(); refreshAll();
+  toast(n2 ? ('Coste actualizado en '+n2+' producto'+(n2===1?'':'s')+' con el flete repartido') : 'Ningún SKU del pedido está en el catálogo');
+}

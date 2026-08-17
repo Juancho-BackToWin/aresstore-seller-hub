@@ -1,0 +1,106 @@
+      <!-- ===================== AUDITORÍA ===================== -->
+      <section class="view" id="view-auditoria">
+        <div class="doc-layout">
+          <div class="doc-toc" id="auditToc">
+            <a href="#a-intro" class="on">Qué se ha cambiado</a>
+            <a href="#a-1">1· Margen bruto mal definido</a>
+            <a href="#a-2">2· Devoluciones mal modeladas</a>
+            <a href="#a-3">3· Costes omitidos</a>
+            <a href="#a-4">4· Comparador trivial</a>
+            <a href="#a-5">5· Sin caja ni riesgo</a>
+            <a href="#a-6">6· Persistencia silenciosa</a>
+            <a href="#a-datos">Datos corregidos</a>
+            <a href="#a-queda">Lo que sigue mal</a>
+          </div>
+          <article class="doc">
+            <span class="eyebrow">Auditoría del modelo · v0.1 → v0.2</span>
+            <h2 id="a-intro">Qué se ha cambiado y por qué</h2>
+            <p>La v0.1 tenía buena arquitectura y un modelo financiero optimista. El problema no era que se equivocara en la aritmética — era correcta — sino que <strong>omitía costes reales y definía dos métricas de forma que casi siempre salían verdes</strong>. Un validador que casi siempre aprueba no es un validador.</p>
+            <p>Con tus propios valores por defecto, el cambio de modelo mueve el resultado de <strong>3,46 €/ud y 16,7% de margen</strong> (semáforo verde, "válido para escalar") a <strong>2,82 €/ud y 14,4%</strong> (ámbar, "no escalar aún"). Son 64 céntimos por unidad — sobre un pedido de 500 unidades, 320 €, y sobre 2.400 unidades al año, 1.537 €. Más relevante que la cifra: cruza el umbral de decisión.</p>
+
+            <div class="fix">
+              <h3 id="a-1">1 · El margen bruto no medía lo que decías que medía</h3>
+              <p>Tu documento define el criterio como "espacio para ≥30% bruto <strong>tras todos los fees</strong>". El código calculaba <code>(ingreso − coste de producto) / ingreso</code>, es decir, tras el coste del producto y nada más. Con los valores por defecto daba <strong>72,4%</strong> — verde permanente, imposible de suspender. El criterio del 30% era decorativo.</p>
+              <div class="before-after">
+                <div class="ba bad"><div class="balabel">Antes</div>Margen bruto 72,4% ✅<br><span style="color:#7c8a8f">Solo restaba COGS + transporte. Cualquier producto con margen comercial normal lo pasaba.</span></div>
+                <div class="ba good"><div class="balabel">Ahora</div>Margen de contribución 33,5% ✅<br><span style="color:#7c8a8f">Resta referral, FBA, almacenaje, devoluciones, EPR e IVA. Deja fuera solo el PPC, que es la variable que controlas.</span></div>
+              </div>
+            </div>
+
+            <div class="fix">
+              <h3 id="a-2">2 · Las devoluciones estaban modeladas al revés</h3>
+              <p>La v0.1 restaba un 3% del PVP como "reserva de devoluciones". Eso asume que una devolución te cuesta el 3% del precio, cuando en realidad el coste de una devolución no tiene casi nada que ver con el precio de venta y sí con la estructura de tarifas:</p>
+              <ul>
+                <li><strong>La tarifa FBA no se reembolsa.</strong> Enviaste el paquete: lo pagas igual. Con FBA de 3,25 €, cada devolución arranca ahí.</li>
+                <li><strong>La referral sí se devuelve, menos una administración</strong> del menor entre 5 € o el 20% de la referral. En el caso base son 0,75 €.</li>
+                <li><strong>El producto solo se recupera si vuelve revendible.</strong> Con un 30% de no revendible, cada devolución quema 1,71 € de coste de producto.</li>
+                <li><strong>Return processing fee:</strong> en moda, calzado y accesorios se cobra <em>siempre</em> el 50% de la tarifa FBA, no solo en devoluciones. En el resto de categorías se cobra por encima del umbral de devolución de la categoría (2,22–10,48 € por unidad según formato).</li>
+              </ul>
+              <p>Con un 5% de devoluciones, el modelo correcto da un coste esperado de <strong>0,30 €/ud</strong>; el modelo antiguo daba 0,75 €. En este caso el error jugaba a tu favor — pero se invierte violentamente en cuanto vendes moda o un producto con 15% de devoluciones, donde el modelo antiguo subestima el daño en más del doble.</p>
+              <div class="callout"><strong>Por qué importa la dirección del error:</strong> un modelo que se equivoca a favor en productos buenos y en contra en productos malos es inofensivo. Este se equivocaba al revés — era más optimista precisamente en las categorías más peligrosas.</div>
+            </div>
+
+            <div class="fix">
+              <h3 id="a-3">3 · Faltaban costes que tu propio documento menciona</h3>
+              <p>La guía advertía de la tarifa por bajo inventario y del coste de registro de IVA por país, y la calculadora ignoraba ambos. Añadidos con cifras del rate card europeo vigente:</p>
+              <table>
+                <tr><th>Coste</th><th>Importe</th><th>Impacto caso base</th></tr>
+                <tr><td>Almacenamiento standard</td><td>27,54 €/m³/mes (ene–sep) · 52,20 € (oct–dic)</td><td>0,06 €/ud</td></tr>
+                <tr><td>Low-Inventory Cost Coverage (Pan-EU)</td><td>0,16–0,67 €/ud, solo DE/FR/IT/ES</td><td>0 € si mantienes cobertura</td></tr>
+                <tr><td>Gestoría IVA amortizada</td><td>~1.500 €/año/país</td><td>0,63 €/ud</td></tr>
+                <tr><td>EPR / envases</td><td>variable por categoría</td><td>0,02 €/ud</td></tr>
+              </table>
+              <p>El coste de gestoría amortizado es el más infravalorado: <strong>0,63 €/ud es más de tres puntos de margen</strong> en este ejemplo. Y es exactamente el coste que hace que abrir un país de bajo volumen destruya valor en lugar de crearlo.</p>
+              <div class="warn-box"><strong>Sigue sin modelarse</strong> (por complejidad, no por irrelevancia): Storage Utilization Surcharge — hasta 76,87 €/m³/mes adicionales si tu ratio inventario/ventas supera 52 semanas — y Aged Inventory Surcharge a partir de 241 días. Ambos castigan justo lo que hace un vendedor que sobrecompra para "no romper stock".</div>
+            </div>
+
+            <div class="fix">
+              <h3 id="a-4">4 · El comparador de países no comparaba nada</h3>
+              <p>La tabla mantenía PVP y costes constantes y solo variaba el IVA. Al ser el IVA el único término que cambiaba, el resultado era matemáticamente forzoso: <strong>siempre gana el país con el IVA más bajo</strong>, es decir Alemania, sin importar los datos que introdujeras. Un panel que solo puede dar una respuesta no aporta información.</p>
+              <p>Peor: sugería que la decisión de PanEU depende del IVA, cuando depende de tres cosas que no aparecían — el precio sostenible en cada mercado, el volumen que harás allí, y el coste fijo de cumplir. El nuevo comparador hace esas tres editables y muestra el beneficio anual por país <em>después</em> de amortizar la gestoría. Con volúmenes bajos verás países con margen unitario positivo y aportación anual negativa, que es la situación real que arruina la rentabilidad de PanEU mal ejecutado.</p>
+            </div>
+
+            <div class="fix">
+              <h3 id="a-5">5 · No había ni caja ni análisis de riesgo</h3>
+              <p>Tu diagnóstico dice que el cash flow es "la principal restricción de crecimiento" y la calculadora no lo tocaba: multiplicaba beneficio por unidades y ya. Añadidos: inversión inmovilizada, meses de cobertura que compras, y <strong>meses hasta recuperar la caja</strong> — la métrica que de verdad limita cuántos SKU puedes tener a la vez.</p>
+              <p>Y un test de estrés. El caso base pasa con 14,4%, pero con PPC un 50% más alto, precio un 10% más bajo, coste un 15% más alto y devoluciones al doble, el mismo producto da <strong>−1,49 €/ud</strong>. Ninguna de esas cuatro desviaciones es improbable en un lanzamiento. Un producto que no aguanta el escenario combinado no es un producto que puedas escalar con deuda o con stock comprometido.</p>
+            </div>
+
+            <div class="fix">
+              <h3 id="a-6">6 · Los datos podían perderse sin avisar</h3>
+              <p>La función de guardado envolvía <code>localStorage</code> en un <code>try/catch</code> vacío. Si el navegador bloquea el almacenamiento — visor incrustado, modo privado, política corporativa — el guardado <strong>fallaba en silencio y el toast decía "Guardado"</strong>. Ahora hay respaldo en memoria y un aviso visible cuando la persistencia no está disponible.</p>
+            </div>
+
+            <hr class="hr">
+            <h2 id="a-datos">Datos de la guía que estaban mal</h2>
+            <p>Contrastados con el rate card europeo oficial vigente desde el 1 de julio de 2026 y con fuentes normativas. El indicador señala la solidez de cada dato.</p>
+
+            <h3>Coste de IVA por país <span class="conf mid">secundaria</span></h3>
+            <p>Decías 400–1.000 €/país/año. La referencia de agencias especializadas es <strong>960–2.400 €/país/año</strong> (registro 100–300 € más declaraciones recurrentes de 80–200 €/mes). Estabas presupuestando entre la mitad y un tercio de lo que cuesta. Sobre cinco países la diferencia son varios miles de euros al año que no estaban en el plan.</p>
+
+            <h3>VAT Services on Amazon <span class="conf ok">oficial</span></h3>
+            <p>La guía decía "se discontinúa", en futuro. <strong>Está discontinuado desde el 31 de octubre de 2024.</strong> Si esperabas migrar, el plazo pasó hace casi dos años.</p>
+
+            <h3>Los siete países de PanEU <span class="conf no">no confirmado</span></h3>
+            <p>La lista de siete con Chequia y Países Bajos como países de almacenamiento no se sostiene. Amazon documenta oficialmente <strong>DE, FR, IT, ES y PL</strong>; Chequia no aparece en el rate card europeo vigente; y Países Bajos es obligatorio como <em>marketplace de listado</em> desde el 25-jun-2025, no como país de almacenamiento — no requiere NIF-IVA neerlandés si no mueves mercancía allí. Las fuentes secundarias dan cinco, seis, siete u ocho países según a quién leas. Confírmalo en tu Seller Central antes de contratar registros de IVA que quizá no necesites.</p>
+
+            <h3>Amazon Vine pre-lanzamiento <span class="conf no">no confirmado</span></h3>
+            <p>La guía presentaba la inscripción antes del lanzamiento como disponible desde julio de 2025. Toda la documentación que lo respalda <strong>se refiere exclusivamente al marketplace de Estados Unidos</strong>. No hay anuncio oficial que lo extienda a Europa. Los importes 70 €/170 € por ASIN padre proceden de un anuncio de octubre de 2023 y no hay confirmación de que sigan vigentes — en EEUU los tramos equivalentes ya subieron de 60/200 $ a 75/200 $. Si tu plan de lanzamiento del próximo producto depende de tener 30 reseñas el día uno, verifícalo antes de construir el calendario sobre esa base.</p>
+
+            <h3>Recargo de combustible <span class="conf ok">oficial</span></h3>
+            <p>Correcto: 1,5% desde el 17 de abril de 2026 en UK, FR, DE, IT, ES, PL, SE, NL, IE y BE. Matiz que faltaba: <strong>aplica solo sobre las tarifas de gestión logística</strong>, no sobre referral ni almacenaje, e impacto medio anunciado de unos 0,05 €/ud. Y no lo confundas con el recargo estadounidense, que es del 3,5%.</p>
+
+            <h3>PPWR — 12 de agosto de 2026 <span class="conf ok">normativa UE</span></h3>
+            <div class="stop-box"><strong>Quedan menos de dos semanas.</strong> La fecha es correcta y es la aplicación general del Reglamento (UE) 2025/40. Lo que la guía no decía y es lo más importante: a partir de esa fecha los marketplaces están obligados a <strong>verificar que cada vendedor tiene registro EPR válido en cada país donde vende</strong>, lo que significa que el programa "Pay on Behalf" de Amazon <strong>deja de servir como solución de cumplimiento</strong>. Sigue existiendo como mecanismo de pago, pero no te exime de tener tu propio número de registro. Además entran en vigor la Declaración UE de Conformidad por tipo de envase, el identificador trazable por unidad, y los límites de PFAS en envase alimentario y de metales pesados. <strong>No hay periodo de gracia para stock no conforme.</strong> Si solo actúas sobre un punto de esta auditoría, que sea este.</div>
+
+            <hr class="hr">
+            <h2 id="a-queda">Lo que sigue sin resolverse</h2>
+            <p><strong>La base de la comisión referral.</strong> El modelo calcula la referral sobre el precio con IVA, apoyándose en la definición contractual europea de "Fee Base Amount", que incluye expresamente "any taxes and customs duties". Pero hay fuentes secundarias reputadas que sostienen que con el Servicio de Cálculo de IVA activado la base pasa a ser el importe sin IVA, y la documentación oficial del servicio no lo menciona en ningún sentido. La diferencia no es menor: sobre un PVP de 24,99 € con 15% de comisión, son <strong>0,65 €/ud, más de tres puntos de margen</strong>. Merece una consulta escrita a Seller Support antes de tomar decisiones de precio al límite.</p>
+            <p><strong>El beneficio mensual sigue siendo lineal.</strong> Multiplicar beneficio unitario por unidades asume que el coste de PPC por unidad no cambia al escalar, y no es cierto: las unidades marginales se compran cada vez más caras. El número es una cota superior, no una previsión. Modelarlo bien exige una curva de respuesta de PPC que solo puedes construir con tus datos históricos.</p>
+            <p><strong>Faltan los recargos por sobrestock.</strong> Storage Utilization y Aged Inventory Surcharge no están en el modelo, y son precisamente los que castigan la estrategia de comprar de más para no romper stock que la guía recomienda. Hay una tensión real ahí que ninguna de las dos versiones resuelve.</p>
+            <p><strong>Cero validación de entrada.</strong> Puedes escribir un IVA de −200% o un coste negativo y la calculadora dará un número con toda la confianza del mundo. Se han acotado los casos que rompen la aritmética, pero no hay control de rangos plausibles.</p>
+            <div class="warn-box"><strong>Este documento no es asesoramiento fiscal ni jurídico.</strong> Las tarifas proceden del rate card europeo de Amazon vigente el 1 de julio de 2026 y pueden cambiar sin previo aviso. Los umbrales de decisión (15%, 30%, 60%) son convenciones del sector, no verdades: ajústalos a tu categoría y a tu coste de capital.</div>
+          </article>
+        </div>
+      </section>
+

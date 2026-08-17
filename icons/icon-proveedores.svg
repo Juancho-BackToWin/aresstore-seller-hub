@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Proveedores">
+  <defs>
+    <linearGradient id="gpro" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFB020"/><stop offset="0.45" stop-color="#FF8A00"/><stop offset="1" stop-color="#FF5A00"/>
+    </linearGradient>
+    <linearGradient id="ipro" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#241B16"/><stop offset="1" stop-color="#171210"/>
+    </linearGradient>
+    <linearGradient id="rpro" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FF8A00" stop-opacity=".9"/><stop offset="1" stop-color="#FF5A00" stop-opacity=".25"/>
+    </linearGradient>
+    <linearGradient id="spro" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z" fill="url(#gpro)"/>
+  <clipPath id="cpro"><path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z"/></clipPath>
+  <g clip-path="url(#cpro)"><ellipse cx="512" cy="196" rx="620" ry="420" fill="url(#spro)"/></g>
+  
+  <g fill="#fff">
+    <path d="M258,506 L430,410 L430,506 L602,410 L602,506 L774,410 L774,772 a26,26 0 0 1 -26,26 h-464 a26,26 0 0 1 -26,-26 z"/>
+    <rect x="290" y="264" width="86" height="200" rx="18"/>
+  </g>
+  <g fill="#171210">
+    <rect x="336" y="620" width="88" height="112" rx="16"/>
+    <rect x="468" y="620" width="88" height="112" rx="16"/>
+    <rect x="600" y="620" width="88" height="112" rx="16"/>
+  </g>
+</svg>

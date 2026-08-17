@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Gestión Seller">
+  <defs>
+    <linearGradient id="gges" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#FFB020"/><stop offset="0.45" stop-color="#FF8A00"/><stop offset="1" stop-color="#FF5A00"/>
+    </linearGradient>
+    <linearGradient id="iges" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#241B16"/><stop offset="1" stop-color="#171210"/>
+    </linearGradient>
+    <linearGradient id="rges" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#FF8A00" stop-opacity=".9"/><stop offset="1" stop-color="#FF5A00" stop-opacity=".25"/>
+    </linearGradient>
+    <linearGradient id="sges" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z" fill="url(#gges)"/>
+  <clipPath id="cges"><path d="M280,64 h464 a216,216 0 0 1 216,216 v464 a216,216 0 0 1 -216,216 h-464 a216,216 0 0 1 -216,-216 v-464 a216,216 0 0 1 216,-216 z"/></clipPath>
+  <g clip-path="url(#cges)"><ellipse cx="512" cy="196" rx="620" ry="420" fill="url(#sges)"/></g>
+  
+  <g fill="#fff">
+    <path d="M512,214 L790,352 L512,490 L234,352 Z" opacity=".95"/>
+    <path d="M234,404 L234,634 L486,760 L486,530 Z" opacity=".78"/>
+    <path d="M790,404 L790,634 L538,760 L538,530 Z" opacity=".55"/>
+  </g>
+  <g fill="#171210">
+    <rect x="586" y="600" width="52" height="112" rx="16"/>
+    <rect x="658" y="546" width="52" height="166" rx="16"/>
+    <rect x="730" y="474" width="52" height="238" rx="16"/>
+  </g>
+</svg>

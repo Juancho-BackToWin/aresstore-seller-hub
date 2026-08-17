@@ -1,0 +1,5 @@
+sku	fnsku	asin	nombre-del-producto	estado	tu-precio	existe-oferta-gestionada-por-el-vendedor	cantidad-gestionada-por-el-vendedor	existe-oferta-gestionada-por-amazon	cantidad-en-almacen-de-amazon	cantidad-disponible-gestionada-por-amazon	cantidad-no-vendible	cantidad-reservada	cantidad-total-gestionada-por-amazon	volumen-por-unidad	cantidad-entrante-en-preparacion	cantidad-entrante-enviada	cantidad-entrante-en-recepcion	cantidad-en-investigacion	cantidad-reservada-suministro-futuro	suministro-futuro-comprable
+ARS-ROD-01	X000	B0TEST0	Rodillo de masaje muscular	Nuevo	24.99	No	0	Sí	420	420	3	12	435	1.5	0	0	0	0	0	0
+ARS-BAN-02	X001	B0TEST1	Set de bandas elásticas	Nuevo	17.99	No	0	Sí	180	180	3	12	195	1.5	0	0	0	0	0	0
+ARS-EST-03	X002	B0TEST2	Esterilla plegable	Nuevo	39.99	No	0	Sí	95	95	3	12	110	1.5	0	0	0	0	0	0
+ARS-PEL-04	X003	B0TEST3	Pelota miofascial	Nuevo	11.99	No	0	Sí	1400	1400	3	12	1415	1.5	0	0	0	0	0	0

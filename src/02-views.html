@@ -1,0 +1,367 @@
+      <!-- ==================== PANEL ==================== -->
+      <section class="view active" id="view-panel">
+        <div id="panelFresh"></div>
+        <div class="kpis" id="panelKpis"></div>
+        <div class="grid-2-1">
+          <div>
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <h2>Qué requiere tu atención</h2>
+                  <p class="desc" style="margin:0">Ordenado por coste de no actuar, no por antigüedad. Si esta lista está vacía, el negocio va solo.</p>
+                </div>
+              </div>
+              <div id="panelAlerts"></div>
+            </div>
+            <div class="panel">
+              <h2>Beneficio por mercado</h2>
+              <p class="desc">País como dimensión de primer nivel, no como filtro. Un mercado puede tener margen unitario sano y aportación anual negativa.</p>
+              <div class="tbl-wrap"><table class="grid" id="panelCountries"></table></div>
+            </div>
+          </div>
+          <div>
+            <div class="panel">
+              <h2>Ritmo de trabajo</h2>
+              <p class="desc" style="margin-bottom:14px">El calendario que asumen las herramientas serias del mercado.</p>
+              <div class="agenda" style="grid-template-columns:1fr">
+                <div class="ag">
+                  <h4>Cada día · 10 min</h4>
+                  <ul>
+                    <li>Beneficio de ayer contra el mismo día de la semana pasada</li>
+                    <li>Alertas: hijacking, Buy Box, reseñas negativas</li>
+                    <li>Pujas de PPC solo si algo se ha ido de madre</li>
+                  </ul>
+                </div>
+                <div class="ag">
+                  <h4>Cada semana · 1 h</h4>
+                  <ul>
+                    <li>Search Term Report: negativizar lo que gasta sin convertir</li>
+                    <li>Reposición: qué pedir y a quién</li>
+                    <li>Reclamar reembolsos de inventario perdido o dañado</li>
+                  </ul>
+                </div>
+                <div class="ag">
+                  <h4>Cada mes · 3 h</h4>
+                  <ul>
+                    <li>Cerrar P&amp;L, cargar gastos indirectos y lotes de coste</li>
+                    <li>Análisis ABC: qué SKU sostiene el negocio y cuál lo lastra</li>
+                    <li>Proyección de caja a 90 días y decisión de reinversión</li>
+                    <li>IVA por país y comprobación de registros EPR</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <div class="panel">
+              <h2>Objetivos</h2>
+              <p class="desc" style="margin-bottom:14px">Los umbrales con los que el hub pinta verde, ámbar o rojo. Ajústalos a tu categoría.</p>
+              <div class="row-2">
+                <div class="field"><label>Margen neto mínimo <span class="hint">%</span></label><div class="input-wrap"><input type="number" id="tgNet" step="0.5" oninput="saveTargets()"><span class="unit">%</span></div></div>
+                <div class="field"><label>Contribución mínima <span class="hint">%</span></label><div class="input-wrap"><input type="number" id="tgContrib" step="0.5" oninput="saveTargets()"><span class="unit">%</span></div></div>
+                <div class="field"><label>ROI mínimo <span class="hint">%</span></label><div class="input-wrap"><input type="number" id="tgRoi" step="5" oninput="saveTargets()"><span class="unit">%</span></div></div>
+                <div class="field"><label>TACOS máximo <span class="hint">%</span></label><div class="input-wrap"><input type="number" id="tgTacos" step="0.5" oninput="saveTargets()"><span class="unit">%</span></div></div>
+                <div class="field"><label>Cobertura mínima <span class="hint">días</span></label><div class="input-wrap"><input type="number" id="tgCover" step="1" oninput="saveTargets()"><span class="unit">d</span></div></div>
+                <div class="field"><label>Caja mínima de seguridad <span class="hint">€</span></label><div class="input-wrap"><input type="number" id="tgCash" step="500" oninput="saveTargets()"><span class="unit">€</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== DATOS ==================== -->
+      <section class="view" id="view-datos">
+        <div class="panel">
+          <h2>Traer los datos reales de tu cuenta</h2>
+          <p class="desc">Suelta aquí los informes que descargas de Seller Central. El hub reconoce cada uno por sus cabeceras y lo coloca donde corresponde — no tienes que decirle qué es. Nada sale de tu equipo.</p>
+          <div class="drop" id="drop" onclick="document.getElementById('csvFile').click()">
+            <div class="d-ic">⇩</div>
+            <h3>Arrastra tus informes aquí</h3>
+            <p>Acepta varios a la vez. Formatos TSV, CSV y TXT tal cual los descarga Amazon, incluidos los que vienen en Latin-1 en lugar de UTF-8.</p>
+          </div>
+          <input type="file" id="csvFile" accept=".csv,.txt,.tsv,.xls,.xlsx" multiple style="display:none" onchange="handleFiles(this.files)">
+          <div class="filelist" id="fileList"></div>
+          <div class="note-box info" style="margin-top:20px">
+            <strong>Descárgalos en español, no hace falta cambiar nada en Amazon.</strong> El reconocimiento no depende de cómo se llamen las columnas: va en tres pasadas. Primero prueba las cabeceras en inglés, luego busca palabras clave en español —«fecha», «cantidad», «importe», «pedido»—, y si eso no basta <strong>mira el contenido de cada columna</strong>. Un identificador de pedido siempre tiene la forma <code>171-1234567-1234567</code> y un ASIN siempre empieza por <code>B0</code>, se llame la columna como se llame. Si aun así no lo saca, te lo pregunta una vez y lo recuerda para siempre.
+          </div>
+          <div class="note-box warn">
+            <strong>Dos excepciones que siguen necesitando inglés:</strong> la liquidación en fichero plano y el informe de transacciones de IVA. Son demasiado posicionales para adivinarlos sin riesgo de cuadrar mal la contabilidad, y prefiero decírtelo antes que darte un número equivocado. Si los necesitas, cambia el idioma solo para esos dos en <em>Ajustes › Información de la cuenta › Idioma de los informes de procesamiento</em>.
+          </div>
+          <div class="note-box info">
+            <strong>Y descárgalos en .txt mejor que en .csv.</strong> Lo avisa Amazon en su propia página: el CSV elimina los ceros a la izquierda de los SKU, ASIN y FNSKU, así que si alguna de tus referencias empieza por cero dejaría de cruzar con tus productos.
+          </div>
+          <div class="note-box info">
+            <strong>Sobre las cuentas PanEU unificadas.</strong> Tienes un solo identificador de vendedor y varios mercados, y Amazon no siempre respeta el mercado que le pides: puede devolverte los mismos datos para varios países. Por eso el hub nunca deduce el país del nombre del archivo — lo lee de la columna de contenido correspondiente, que cambia de un informe a otro (<code>sales-channel</code> en pedidos, <code>marketplace-name</code> en liquidaciones, <code>Country</code> en el libro de inventario).
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Qué informes reconoce y dónde encontrarlos</h2>
+              <p class="desc" style="margin:0">Los marcados en verde ya los tienes cargados. Los detecta por la firma de sus cabeceras, así que da igual cómo se llame el archivo.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm" onclick="loadDemo()">Cargar datos de ejemplo</button></div>
+          </div>
+          <div class="catalog" id="reportCatalog"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Datos cargados</h2>
+          <p class="desc">Resumen de lo que hay en memoria ahora mismo y desde cuándo. Un dato viejo es peor que ningún dato porque te da confianza injustificada.</p>
+          <div class="tbl-wrap"><table class="grid" id="dataState"></table></div>
+          <div class="assumptions" style="margin-top:16px" id="mapInfo"></div>
+          <div style="display:flex;gap:9px;margin-top:16px">
+            <button class="btn danger sm" onclick="wipeImports()">Vaciar datos importados</button>
+            <button class="btn sm" onclick="exportData()">Descargar copia de seguridad</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>Cuando quieras dejar de descargar a mano</h2>
+          <p class="desc">Tres niveles, de menos a más fricción. El salto grande no es técnico: es decidir si quieres mantener software.</p>
+          <div class="tbl-wrap"><table class="grid">
+            <tr><th>Vía</th><th>Coste</th><th>Fricción</th><th>Qué te da</th></tr>
+            <tr><td class="name"><strong>Descarga manual + este hub</strong></td><td>0 €</td><td class="pos">Ninguna</td><td class="name">Lo que estás haciendo. Suficiente para revisión semanal.</td></tr>
+            <tr><td class="name"><strong>Programador de informes de Amazon</strong></td><td>0 €</td><td class="pos">Baja</td><td class="name">Los informes FBA se generan solos a diario. Sigues descargándolos, pero no tienes que acordarte de pedirlos.</td></tr>
+            <tr><td class="name"><strong>Conector no-code a Sheets</strong></td><td>33–99 $/mes</td><td class="warn">Media</td><td class="name">Hopted o Gorilla ROI sincronizan Seller Central y Amazon Ads sin que te registres como desarrollador. Funcionan en Europa. <em>Zapier no: su integración de Amazon solo cubre Norteamérica.</em></td></tr>
+            <tr><td class="name"><strong>SP-API como aplicación privada</strong></td><td>0 €</td><td class="warn">1–2 días</td><td class="name">Menos difícil de lo que parece: se registra dentro de Seller Central y, si no pides roles restringidos, el acceso es inmediato. Amazon anunció tarifas en nov-2025 y <strong>las canceló el 12-may-2026</strong>. Necesita que alguien mantenga un script.</td></tr>
+          </table></div>
+          <div class="note-box warn">
+            <strong>Dos deprecaciones que te afectan si automatizas.</strong> El informe de liquidación en formato plano (<code>GET_V2_SETTLEMENT_REPORT_DATA_FLAT_FILE</code>) está deprecado desde marzo de 2025 y Amazon planea retirarlo el <strong>11 de noviembre de 2026</strong> — no construyas tu contabilidad solo sobre él, el sustituto es la Finances API v2024-06-19. Y el dataset de ventas y tráfico de Data Kiosk <code>2023_11_15</code> se retiró en marzo de 2026.
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== RENTABILIDAD ==================== -->
+      <section class="view" id="view-rentabilidad">
+        <div class="panel tight">
+          <div class="panel-head" style="margin:0;align-items:center">
+            <div style="flex:1">
+              <div class="seg" id="periodSeg" style="max-width:420px">
+                <button class="on" type="button" onclick="setPeriod(30)">30 días</button>
+                <button type="button" onclick="setPeriod(90)">90 días</button>
+                <button type="button" onclick="setPeriod(365)">12 meses</button>
+                <button type="button" onclick="setPeriod(0)">Todo</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="kpis" id="pnlKpis"></div>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Cuenta de resultados del periodo</h2>
+            <p class="desc">Devengo, no caja. Lo que has ganado, no lo que has cobrado — esa distinción está en Tesorería y casi ninguna herramienta la separa.</p>
+            <div class="tbl-wrap"><table class="grid" id="pnlTable"></table></div>
+          </div>
+          <div class="panel">
+            <h2>A dónde se va cada euro facturado</h2>
+            <p class="desc">Si la barra de beneficio no es de las gruesas, el problema es estructural y no lo arregla optimizar campañas.</p>
+            <div class="waterfall" id="pnlWaterfall"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Rentabilidad por SKU con clasificación ABC</h2>
+              <p class="desc" style="margin:0">A = el 80% de tu beneficio. C = el que consume atención y no la devuelve. La columna que importa es la última: cuánto beneficio deja, no cuánto factura.</p>
+            </div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="skuTable"></table></div>
+          <div id="abcVerdict" class="assumptions" style="margin-top:16px"></div>
+        </div>
+      </section>
+
+      <!-- ==================== TESORERÍA ==================== -->
+      <section class="view" id="view-tesoreria">
+        <div class="note-box info" style="margin-top:0">
+          <strong>Por qué este módulo existe.</strong> De las dieciséis herramientas del mercado que he revisado, <strong>solo una tiene previsión de tesorería</strong>, y se limita a extrapolar el gasto histórico. Ninguna cruza los pagos escalonados a proveedor con el calendario real de desembolsos de Amazon. Y sin embargo es el problema que define a un vendedor de marca propia: la cuenta de resultados dice que ganas y el banco dice que no. Aquí está modelado.
+        </div>
+        <div class="kpis" id="cashKpis"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Proyección de caja a 90 días</h2>
+              <p class="desc" style="margin:0">Cobros de Amazon con su ciclo de liquidación, pagos a proveedor según los vencimientos de tus pedidos, IVA, publicidad y gastos fijos. Las barras rojas son días en que te quedas por debajo de tu caja de seguridad.</p>
+            </div>
+          </div>
+          <div class="cashchart" id="cashChart"></div>
+          <div class="cashaxis" id="cashAxis"></div>
+          <div id="cashVerdict" class="assumptions" style="margin-top:18px"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Supuestos de caja</h2>
+            <p class="desc">Ajústalos a tu realidad. El ciclo de liquidación y la reserva de Amazon son los que más mueven la aguja.</p>
+            <div class="row-2">
+              <div class="field"><label>Caja inicial <span class="hint">saldo hoy</span></label><div class="input-wrap"><input type="number" id="cashStart" step="100" oninput="saveCash()"><span class="unit">€</span></div></div>
+              <div class="field"><label>Ciclo de liquidación <span class="hint">días</span></label><div class="input-wrap"><input type="number" id="cashCycle" step="1" oninput="saveCash()"><span class="unit">d</span></div></div>
+              <div class="field"><label>Reserva de Amazon <span class="hint">% retenido</span></label><div class="input-wrap"><input type="number" id="cashReserve" step="1" oninput="saveCash()"><span class="unit">%</span></div></div>
+              <div class="field"><label>IVA a liquidar <span class="hint">% de ventas</span></label><div class="input-wrap"><input type="number" id="cashVat" step="0.5" oninput="saveCash()"><span class="unit">%</span></div></div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <div><h2>Gastos fijos mensuales</h2><p class="desc" style="margin:0">Todo lo que sale de la cuenta llueva o no.</p></div>
+              <div class="ph-actions"><button class="btn sm primary" onclick="addExpense()">+ Añadir</button></div>
+            </div>
+            <div class="tbl-wrap"><table class="grid" id="expenseTable"></table></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== CATÁLOGO ==================== -->
+      <section class="view" id="view-catalogo">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Tus productos</h2>
+              <p class="desc" style="margin:0">Un único objeto Producto que atraviesa todo el hub: arrastra su coste, su proveedor, su stock en cada país, su margen y sus campañas. Ninguna de las herramientas del mercado tiene esto — cada módulo suyo mantiene su propia versión del SKU, y por eso los números no cuadran entre pantallas.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm primary" onclick="addProduct()">+ Producto</button></div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="productTable"></table></div>
+        </div>
+        <div class="panel" id="productDetail" style="display:none"></div>
+      </section>
+
+      <!-- ==================== INVENTARIO ==================== -->
+      <section class="view" id="view-inventario">
+        <div class="kpis" id="invKpis"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Cobertura y reposición</h2>
+              <p class="desc" style="margin:0">Los días de cobertura salen de tu venta media real. Por debajo de 28 días saltan las tarifas por bajo inventario en Alemania, Francia, Italia y España; muy por encima empiezas a pagar recargos por sobrestock. Hay una banda estrecha en la que conviene estar.</p>
+            </div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="invTable"></table></div>
+          <div id="invVerdict" class="assumptions" style="margin-top:16px"></div>
+        </div>
+        <div class="panel">
+          <h2>Stock por país</h2>
+          <p class="desc">En PanEU el mismo SKU vive repartido en varios centros logísticos con velocidades de venta distintas. Romper stock en Alemania mientras te sobra en Polonia es el fallo más caro y más invisible.</p>
+          <div class="tbl-wrap"><table class="grid" id="invCountryTable"></table></div>
+        </div>
+        <div class="panel">
+          <h2>Los recargos que casi nadie modela</h2>
+          <p class="desc">Además del almacenaje base, Amazon cobra dos recargos por tener stock parado. Son los que castigan la estrategia de comprar de más para no romper.</p>
+          <div class="tbl-wrap"><table class="grid">
+            <tr><th>Recargo</th><th>Cuándo salta</th><th class="num">Importe</th><th>Dónde</th></tr>
+            <tr><td class="name">Tarifa por bajo inventario</td><td class="name">Cobertura a 30 y a 90 días, ambas bajo 28 días</td><td class="num">0,16 – 0,67 €/ud</td><td>DE FR IT ES</td></tr>
+            <tr><td class="name">Recargo por utilización de almacén</td><td class="name">Ratio inventario/ventas sobre 22 semanas</td><td class="num">14,85 – 76,87 €/m³/mes</td><td>DE FR IT ES</td></tr>
+            <tr><td class="name">Recargo por inventario antiguo</td><td class="name">A partir de 241 días en almacén</td><td class="num">47,99 – 261,97 €/m³/mes</td><td>DE FR IT ES IE</td></tr>
+            <tr><td class="name">Almacenaje base</td><td class="name">Siempre</td><td class="num">27,54 €/m³ · 52,20 € en oct–dic</td><td>Todos</td></tr>
+          </table></div>
+          <div class="note-box warn">
+            <strong>La tensión que ninguna guía resuelve.</strong> «Compra 30–60 días de stock más un colchón» y «no dejes que el inventario envejezca» son consejos que se contradicen en cuanto tu lead time desde Asia son 8–10 semanas. La salida no es elegir uno: es acortar el ciclo de reposición pidiendo más veces y menos cantidad, aunque el precio unitario suba. Compara el sobrecoste de comprar en lotes pequeños contra estos recargos antes de asumir que el lote grande sale más barato.
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== COMPRAS ==================== -->
+      <section class="view" id="view-compras">
+        <div class="kpis" id="poKpis"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Pedidos de compra</h2>
+              <p class="desc" style="margin:0">Cada pedido arrastra su flete hasta el coste unitario y sus vencimientos hasta la proyección de caja. Ese enlace es lo que convierte una lista de pedidos en un sistema: el clásico 30% de anticipo y 70% contra documentos deja de ser un post-it y pasa a estar en la curva de tesorería.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm primary" onclick="addPO()">+ Pedido</button></div>
+          </div>
+          <div id="poList"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Proveedores</h2>
+              <p class="desc" style="margin:0">Condiciones, plazos y pedido mínimo. Solo una herramienta del mercado tiene un módulo de proveedores propio, y es básico: ninguna guarda el histórico de precios negociados ni las incidencias de calidad.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm primary" onclick="addSupplier()">+ Proveedor</button></div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="supplierTable"></table></div>
+        </div>
+      </section>
+
+      <!-- ==================== PUBLICIDAD ==================== -->
+      <section class="view" id="view-publicidad">
+        <div class="kpis" id="adKpis"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Términos de búsqueda que queman dinero</h2>
+              <p class="desc" style="margin:0">Ordenados por gasto sin conversión. La regla operativa: negativiza todo término que haya gastado más que tu ticket medio sin una sola venta. Es la palanca de mayor retorno por minuto invertido de todo el PPC.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm" onclick="go('datos')">Importar informe</button></div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="stTable"></table></div>
+          <div id="stVerdict" class="assumptions" style="margin-top:16px"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Reglas que aplica este módulo</h2>
+            <ul style="font-size:13px;color:#2c3a3e;padding-left:18px;line-height:1.6">
+              <li><strong>Regla de las 72 horas.</strong> Entre cambios de puja, espera tres días: Amazon necesita 48–72 h para estabilizar. La única excepción es pausar algo que gasta mucho sin vender nada.</li>
+              <li><strong>Ventana de atribución.</strong> Un dato de publicidad puede seguir moviéndose 42 días después del clic — las conversiones se reatribuyen a 1, 7 y 28 días y los clics inválidos se depuran durante 72 h. No tomes decisiones sobre los últimos tres días.</li>
+              <li><strong>Granularidad.</strong> Una campaña por palabra clave solo si supera 30 conversiones al mes. Por debajo, consolida: los datos no dan para decidir nada.</li>
+              <li><strong>TACOS antes que ACOS.</strong> El ACOS mide la eficiencia de una campaña; el TACOS mide si la publicidad está construyendo negocio o sosteniéndolo artificialmente.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h2>Cómo sacar el informe</h2>
+            <p class="desc">Está en la consola de publicidad, no en Seller Central.</p>
+            <ol style="font-size:13px;color:#2c3a3e;padding-left:18px;line-height:1.7">
+              <li>Publicidad › Gestor de campañas</li>
+              <li>Informes › Sponsored Products › <strong>Search Term Report</strong></li>
+              <li>Rango de 60 días, formato CSV o XLSX</li>
+              <li>Suéltalo en la pestaña Datos</li>
+            </ol>
+            <div class="note-box info" style="margin-bottom:0">
+              <strong>Atajo que casi nadie usa.</strong> En <em>Operaciones masivas</em> descargas un único fichero con toda la estructura de campañas, grupos, palabras clave, pujas y métricas juntas. Es el mejor fichero de PPC que se puede obtener sin tocar la API, y te evita cruzar cinco informes a mano.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== CUMPLIMIENTO ==================== -->
+      <section class="view" id="view-cumplimiento">
+        <div id="ppwrBanner"></div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Registros por país</h2>
+              <p class="desc" style="margin:0">Ninguna de las dieciséis herramientas de gestión que he revisado cubre EPR. El sector lo ha dejado en manos de proveedores separados que no se hablan con ningún panel, así que el vendedor acaba pagando tres suscripciones que no se comunican entre sí. Esto es lo mínimo para no perder el control: qué tienes registrado, dónde y desde cuándo.</p>
+            </div>
+          </div>
+          <div class="tbl-wrap"><table class="grid" id="compTable"></table></div>
+          <div id="compVerdict" class="assumptions" style="margin-top:16px"></div>
+        </div>
+        <div class="grid-2">
+          <div class="panel">
+            <h2>Qué vence el 12 de agosto de 2026</h2>
+            <p class="desc">Es la fecha de aplicación general del Reglamento de Envases y Residuos de Envases. No es un plazo nacional aislado.</p>
+            <ul style="font-size:13px;color:#2c3a3e;padding-left:18px;line-height:1.6">
+              <li><strong>Registro EPR propio en cada país</strong> donde pongas producto en el mercado. Los marketplaces quedan obligados a verificarlo.</li>
+              <li><strong>Declaración UE de Conformidad</strong> por cada tipo de envase.</li>
+              <li><strong>Identificador trazable</strong> por unidad — tipo, lote o número de serie — y datos de contacto del fabricante en el envase o vía código QR.</li>
+              <li><strong>Límites de sustancias:</strong> PFAS en envase de contacto alimentario y metales pesados por debajo de 100 mg/kg.</li>
+            </ul>
+            <div class="note-box stop" style="margin-bottom:0">
+              <strong>El punto que casi nadie ha entendido:</strong> el programa «Pay on Behalf» de Amazon deja de servir como solución de cumplimiento. Sigue existiendo como mecanismo de pago, pero no te exime de tener tu propio número de registro. Y no hay periodo de gracia para el stock que ya está en almacén.
+            </div>
+          </div>
+          <div class="panel">
+            <h2>Lo que NO vence ese día</h2>
+            <p class="desc">Para que no gastes esfuerzo donde todavía no hace falta.</p>
+            <div class="tbl-wrap"><table class="grid">
+              <tr><th>Obligación</th><th class="num">Fecha</th></tr>
+              <tr><td class="name">Recarga en hostelería</td><td class="num">12-feb-2027</td></tr>
+              <tr><td class="name">Etiquetado armonizado de composición</td><td class="num">12-ago-2028</td></tr>
+              <tr><td class="name">Etiquetado digital de reutilizables</td><td class="num">12-feb-2029</td></tr>
+              <tr><td class="name">Grados de reciclabilidad y contenido reciclado</td><td class="num">1-ene-2030</td></tr>
+            </table></div>
+            <div class="note-box warn" style="margin-bottom:0">
+              <strong>Sobre el IVA.</strong> Este módulo lleva el registro de qué tienes contratado y cuánto cuesta, para que el coste amortizado entre en el margen por unidad. <strong>No presenta declaraciones ni sustituye a una gestoría.</strong> Ninguna herramienta de gestión del mercado lo hace tampoco; eso son A2X, Link My Books, hellotax o Taxdoo, y siguen siendo una suscripción aparte.
+            </div>
+          </div>
+        </div>
+      </section>

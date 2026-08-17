@@ -1,0 +1,88 @@
+      <!-- ==================== ACERCA ==================== -->
+      <section class="view" id="view-acerca">
+        <div class="doc-layout">
+          <div class="doc-toc" id="acercaToc">
+            <a href="#x-idea" class="on">La idea</a>
+            <a href="#x-arq">Arquitectura</a>
+            <a href="#x-mercado">Qué copié y de dónde</a>
+            <a href="#x-huecos">Los cuatro huecos</a>
+            <a href="#x-datos">Cómo entran los datos</a>
+            <a href="#x-limites">Límites honestos</a>
+            <a href="#x-siguiente">Qué haría después</a>
+          </div>
+          <article class="doc">
+            <span class="eyebrow">Cómo está montado este hub y por qué</span>
+            <h2 id="x-idea">La idea</h2>
+            <p>Revisé dieciséis herramientas del sector — Sellerboard, Helium 10, Jungle Scout, Sellerise, Data Dive, SellerAmp, Shopkeeper, Perpetua, Threecolts, ZonGuru, AMZScout, Keepa, SoStocked, Teikametrics, M2E Pro y Channable — leyendo sus estructuras de menú reales, sus pantallas de inicio y varios cientos de reseñas verificadas en G2, Capterra y los foros de Seller Central.</p>
+            <p>La conclusión que más condiciona este diseño es incómoda: <strong>el problema del sector no es que falten funciones, es que faltan conexiones.</strong> Threecolts vende literalmente «pasa de cuatro accesos a uno» y sus usuarios siguen quejándose de que no está integrado. Helium 10 tiene tantos módulos que duplica «Keyword Tracker» en dos sitios del menú — una taxonomía se rompe así cuando el catálogo crece sin un modelo de datos debajo. Y ninguna, ninguna de las dieciséis, tiene un objeto Producto único que arrastre a la vez su coste real, su proveedor, su pedido en curso, su stock en cada país y su margen. Cada módulo mantiene su propia versión del SKU. Por eso los números no cuadran entre pantallas.</p>
+            <div class="callout">Añadir un módulo más no arregla eso. Lo que lo arregla es que <strong>Producto</strong> y <strong>Pedido de compra</strong> sean objetos únicos que atraviesen todas las pantallas. Es la decisión de diseño central de este hub y la única que no se puede añadir después.</div>
+
+            <hr class="hr">
+            <h2 id="x-arq">Arquitectura: de lo general a lo concreto</h2>
+            <p>Cuatro niveles. Cada uno responde a una pregunta distinta y ninguno repite el trabajo del anterior.</p>
+            <h3>Nivel 1 — ¿Cómo va el negocio?</h3>
+            <p><strong>Panel.</strong> Seis indicadores y una lista de lo que requiere atención, ordenada por coste de no actuar. Si la lista está vacía, cierra el portátil.</p>
+            <h3>Nivel 2 — ¿Gano dinero y lo tengo?</h3>
+            <p><strong>Rentabilidad</strong> responde lo primero; <strong>Tesorería</strong> lo segundo. Son preguntas distintas y el sector las mezcla constantemente. Solo una herramienta del mercado separa el devengo de la caja, y solo otra tiene previsión de tesorería. Aquí están las dos cosas y conectadas entre sí.</p>
+            <h3>Nivel 3 — ¿Qué producto, con qué stock, comprado a quién?</h3>
+            <p><strong>Catálogo → Inventario → Compras.</strong> El mismo producto visto desde tres ángulos, con un solo dato debajo. Cambias el coste en Catálogo y se mueve el margen en Rentabilidad, el punto de reposición en Inventario y la curva de caja en Tesorería.</p>
+            <h3>Nivel 4 — ¿Cómo consigo demanda y qué me puede tumbar?</h3>
+            <p><strong>Publicidad</strong> y <strong>Validar producto</strong> por un lado; <strong>Cumplimiento</strong> por otro. El riesgo regulatorio va aparte a propósito: no es una métrica que optimizas, es un interruptor de encendido y apagado.</p>
+            <div class="warn-box"><strong>Nombres funcionales, nunca nombres de marca.</strong> Helium 10 llama a sus herramientas Cerebro, Magnet, Xray, Frankenstein y Scribbles, y ha tenido que añadir descripciones al menú para que se entienda qué hace cada una. Cuando tienes que explicar el nombre, el nombre está mal. Aquí «Tesorería» se llama Tesorería.</div>
+
+            <hr class="hr">
+            <h2 id="x-mercado">Qué copié, de quién y por qué</h2>
+            <table>
+              <tr><th>Decisión</th><th>De dónde</th><th>Por qué</th></tr>
+              <tr><td>Menú por tarea, no por objeto</td><td>Sellerboard</td><td>«Analizar rentabilidad», «Gestionar inventario». Es el modelo mental con el que trabajas de verdad.</td></tr>
+              <tr><td>Separar caja de resultado</td><td>Sellerise</td><td>Es la única que distingue desembolsos reales de cuenta de resultados. La distinción correcta y casi nadie la hace.</td></tr>
+              <tr><td>Bloque de seis indicadores</td><td>Las cuatro serias coinciden</td><td>Ventas, unidades, beneficio neto, margen, ROI y TACOS. Converger aquí no es falta de originalidad, es que están bien elegidos.</td></tr>
+              <tr><td>Análisis ABC como módulo</td><td>Sellerise</td><td>El 80/20 del catálogo merece una pantalla, no un filtro escondido.</td></tr>
+              <tr><td>Pedidos con estados y reparto de flete</td><td>Sellerboard y Helium 10</td><td>Cierra el círculo compra → coste → beneficio. Sin esto tu margen es una estimación.</td></tr>
+              <tr><td>Previsión de caja</td><td>Sellerboard, y ampliado</td><td>La suya extrapola gasto histórico. Esta cruza vencimientos reales de pedidos con el ciclo de liquidación.</td></tr>
+              <tr><td>Ficha de proveedor</td><td>Sellerboard, y ampliado</td><td>La suya es mínima. Aquí se guardan plazos, pedido mínimo y condiciones de pago, que es lo que decide la compra.</td></tr>
+              <tr><td>Lo que <strong>no</strong> copié</td><td>Helium 10</td><td>Su densidad. La queja más repetida de sus usuarios es «demasiada información y demasiadas funciones».</td></tr>
+            </table>
+            <p class="src">Ratings consultados en agosto de 2026: Sellerboard 4,7/5 en G2 con 57 reseñas y 5,0/5 en Capterra · Jungle Scout 4,6/5 con 243 · Teikametrics 4,5/5 con 125 · Perpetua 4,4/5 con 79 · Helium 10 4,2/5 con 184 · Sellerise 4,8/5 pero solo 16 reseñas. Los recuentos fluctúan.</p>
+
+            <hr class="hr">
+            <h2 id="x-huecos">Los cuatro huecos del mercado</h2>
+            <p>Esto es lo que los usuarios se quejan de que ninguna herramienta resuelve, y donde este hub intenta aportar algo que no puedes comprar.</p>
+            <h3>1 · Previsión de tesorería</h3>
+            <p>Es el hueco más grande. Los vendedores que lo han resuelto lo han hecho con hojas de cálculo, con líneas de crédito de 120 días o manteniendo otro trabajo. Con plazos de ocho a diez semanas desde Asia y colchones de seis a diez semanas, hay entre un 20% y un 40% del capital circulante inmovilizado permanentemente, y ninguna herramienta te dice cuándo vas a poder respirar. <strong>Aquí se modela.</strong></p>
+            <h3>2 · Compras y proveedores</h3>
+            <p>Solo dos herramientas tienen pedidos de compra de verdad, y ninguna gestiona anticipos escalonados — que es precisamente lo que destroza la tesorería. Ninguna guarda histórico de precios negociados, incidencias de calidad ni varios proveedores por producto. <strong>Aquí están los anticipos y los plazos, conectados a la caja.</strong></p>
+            <h3>3 · Cumplimiento EPR e IVA multipaís</h3>
+            <p>Cobertura cero en las dieciséis. El espacio está ocupado por proveedores que no se integran con nada. El resultado es que el dato que hace falta para declarar — unidades vendidas por país — vive en tu panel y nadie lo conecta con quien lo necesita. <strong>Aquí al menos el registro está centralizado y el coste entra en el margen.</strong></p>
+            <h3>4 · El país como dimensión de primer nivel</h3>
+            <p>Este es el hueco específicamente europeo y el más ignorado, porque casi todas estas herramientas están pensadas para Estados Unidos. Helium 10 documenta él mismo que en Polonia solo funcionan cuatro de sus módulos y que su constructor de listados no existe en Europa salvo Reino Unido. Las reseñas de Teikametrics dicen literalmente que los usuarios europeos tienen menos funciones y peor rendimiento.</p>
+            <p>Un vendedor PanEU tiene el mismo producto repartido en varios centros logísticos con velocidades distintas, vende en varias divisas, compra en otra, y tiene obligaciones fiscales que dependen de dónde está la mercancía y no de dónde se vende. <strong>Ninguna de las dieciséis modela eso.</strong> Aquí el país no es un desplegable de filtro: es una columna en casi todas las tablas.</p>
+
+            <hr class="hr">
+            <h2 id="x-datos">Cómo entran los datos</h2>
+            <p>El hub reconoce los informes por la <strong>firma de sus cabeceras</strong>, no por el nombre del archivo. Sueltas lo que sea y él decide qué es. Las cabeceras están tomadas de los esquemas del conector de código abierto de Airbyte para la API de Amazon, que es la referencia pública más fiable que existe.</p>
+            <p>Tres detalles de implementación que rompen casi todos los importadores caseros y que aquí están contemplados:</p>
+            <ul>
+              <li>Los ficheros de Amazon son <strong>separados por tabuladores</strong>, no por comas, aunque se llamen CSV. El hub detecta el separador contando ocurrencias en la cabecera.</li>
+              <li>Vienen a menudo en <strong>Latin-1</strong>, no en UTF-8. Se lee el fichero como bytes y se prueban las dos codificaciones, quedándose con la que no produzca caracteres de sustitución.</li>
+              <li>Amazon es <strong>inconsistente consigo mismo</strong>: casi todos los informes usan guiones en las cabeceras, pero el de tarifas de almacenamiento usa guiones bajos, el libro de inventario usa mayúsculas con espacios, y el de previsión de tarifas tiene una columna cuyo nombre literal incluye paréntesis y espacios. La comparación se hace normalizando.</li>
+            </ul>
+            <div class="callout"><strong>Nada de esto sale de tu equipo.</strong> No hay servidor, no hay cuenta, no hay telemetría. El archivo funciona con el wifi apagado. La contrapartida es que la persistencia depende del navegador: usa el botón de copia de seguridad con la misma disciplina con la que guardarías una hoja de cálculo.</div>
+
+            <hr class="hr">
+            <h2 id="x-limites">Límites honestos</h2>
+            <p><strong>Esto no sustituye a Sellerboard por diecinueve dólares al mes.</strong> Si lo único que quieres es tu beneficio neto diario calculado solo, cómpralo — está bien hecho, es alemán, tiene interfaz en español y su relación precio/valor es lo que todo el mundo destaca. Lo que sí hace este hub es lo que Sellerboard no hace: conectar compras, proveedores, caja y cumplimiento con el mismo dato.</p>
+            <p><strong>Los datos son tan frescos como tu última descarga.</strong> Un panel que se actualiza solo cambia tu comportamiento; uno que depende de que te acuerdes, no. Si a las tres semanas dejas de importar, esta herramienta habrá dejado de servir sin avisarte — por eso el Panel muestra la antigüedad de cada informe en rojo cuando envejece.</p>
+            <p><strong>El beneficio proyectado es lineal y por tanto optimista.</strong> Multiplicar margen por unidades asume que el coste publicitario por unidad no sube al escalar, y sube. Trátalo como cota superior.</p>
+            <p><strong>Hay un supuesto sin cerrar que vale dinero.</strong> La base de la comisión de Amazon: el contrato europeo la define incluyendo impuestos, pero hay fuentes que sostienen lo contrario con el servicio de cálculo de IVA activado. Son más de tres puntos de margen. Está detallado en la Auditoría.</p>
+            <p><strong>No hay validación de rangos.</strong> Puedes escribir un coste negativo y el hub calculará con toda naturalidad.</p>
+
+            <hr class="hr">
+            <h2 id="x-siguiente">Qué haría después, por orden</h2>
+            <p><strong>Primero, usarlo tres semanas antes de añadirle nada.</strong> La tentación con un esqueleto completo es rellenarlo entero. El error caro es construir módulos que no vas a abrir. Importa tus informes reales, mira qué pantallas visitas de verdad y qué decisiones cambias por lo que ves. Eso ordena la lista de prioridades mejor que cualquier plan escrito hoy.</p>
+            <p><strong>Segundo, el histórico.</strong> Ahora mismo cada importación reemplaza a la anterior. Guardar series temporales permitiría comparar meses, detectar tendencias y proyectar con estacionalidad en lugar de con la media de los últimos treinta días. Es el salto que más cambia la utilidad del conjunto.</p>
+            <p><strong>Tercero, y solo si lo anterior se ha consolidado, la API.</strong> Registrarte como aplicación privada es más fácil de lo que la gente cree — se hace dentro de Seller Central y sin roles restringidos el acceso es inmediato y gratuito. Pero convierte esto en software que hay que mantener. No des ese paso hasta que el hábito de mirar los datos esté asentado; automatizar un hábito que no existe no crea el hábito.</p>
+            <div class="warn-box"><strong>Ninguna parte de este documento es asesoramiento fiscal, jurídico ni financiero.</strong> Las tarifas proceden del rate card europeo de Amazon vigente el 1 de julio de 2026 y cambian sin previo aviso. Los precios y valoraciones de terceros se consultaron en agosto de 2026. Verifica en tu Seller Central antes de tomar decisiones con dinero.</div>
+          </article>
+        </div>
+      </section>

@@ -387,6 +387,47 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('pero el gasto no se pone a cero, que inflaría el margen', viejo.ppc>0,
     viejo.ppc.toFixed(2)+' € prorrateados');
 
+  console.log('\n=== PNL-N · UNA DEVOLUCIÓN CUESTA DINERO ===');
+  /* retUnits y retRate se calculaban y no restaban nada: un producto con el
+     100 % de devoluciones daba el mismo beneficio que uno con cero. Es el
+     fallo que hace parecer sano un producto de devolución alta.
+
+     Caso: 100 ud a 100 € = 10.000 €, comisión 15 %, coste 5 €/ud, FBA 3 €.
+     Se devuelven 10 unidades, todas sin estado en el informe.
+       ingreso devuelto      = 10 × 100,00        = 1.000,00 €
+       comisión por unidad   = 100 × 0,15         =    15,00 €
+       tasa de gestión       = mín(5, 20 % de 15) =     3,00 €
+       comisión reintegrada  = 10 × (15 − 3)      =   120,00 €
+       coste recuperado      = 0 (sin estado, no se presume vendible)
+       coste de la devolución = 1.000 − 120 − 0   =   880,00 € */
+  const dev = await page.evaluate(js(`
+    DB.imports.orders = {rows:[venta(dia(5),100)], count:1, file:'o'};
+    periodDays = 30;
+    const sin = pnl();
+    DB.imports.returns = {count:1, file:'r', rows:[
+      {orderid:'171-1-1', returndate:dia(3), sku:'TEST-1', quantity:'10', detaileddisposition:''}]};
+    const con = pnl();
+    DB.imports.returns = {count:1, file:'r', rows:[
+      {orderid:'171-1-1', returndate:dia(3), sku:'TEST-1', quantity:'10', detaileddisposition:'SELLABLE'}]};
+    const vend = pnl();
+    return {sinProfit:sin.profit, conProfit:con.profit, coste:con.returnsCost,
+            ing:con.retIngreso, com:con.retComision, sinEstado:con.retSinEstado,
+            vendProfit:vend.profit, vendCoste:vend.returnsCost, vendUd:vend.retVendibles};
+  `));
+  check('se devuelve el ingreso de las 10 unidades', near(dev.ing, 1000),
+    dev.ing.toFixed(2)+' € = 10 × 100,00');
+  check('Amazon reintegra la comisión menos la tasa de gestión', near(dev.com, 120),
+    dev.com.toFixed(2)+' € = 10 × (15,00 − mín(5, 20 % de 15))');
+  check('la devolución cuesta 880 €', near(dev.coste, 880),
+    dev.coste.toFixed(2)+' € · antes costaba 0,00 € y el beneficio no se movía');
+  check('y el beneficio baja exactamente eso', near(dev.sinProfit - dev.conProfit, 880),
+    (dev.sinProfit-dev.conProfit).toFixed(2)+' €');
+  check('sin estado en el informe, el coste de producto se da por perdido',
+    dev.sinEstado===10, dev.sinEstado+' ud · es el supuesto que no infla el beneficio');
+  check('si vuelven vendibles, sí se recupera el coste',
+    near(dev.vendCoste, 830) && dev.vendUd===10,
+    dev.vendCoste.toFixed(2)+' € = 880 − 10 × 5,00 de coste recuperado');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

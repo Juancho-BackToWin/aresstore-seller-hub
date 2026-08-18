@@ -424,6 +424,9 @@ function renderRent(){
     line('Comisión de Amazon',P.referral,cobTxt,true)+
     line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
+    (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
+        num(P.retUnits)+' ud · ingreso devuelto menos comisión reintegrada'+
+        (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
     line('Coste de producto',P.cogs,'',true)+
@@ -474,6 +477,12 @@ function renderRent(){
          ' y solapa el <strong>'+num(P.adSolapePct,0)+'%</strong> del periodo que estás mirando. '+
          'El gasto que ves está prorrateado suponiendo que inviertes parejo: es una cifra ajustada, no medida. '+
          (Math.round(P.adSolapePct)===0 ? 'Con cero solape, descárgate el informe del periodo que quieres analizar antes de fiarte del TACOS.' : '');
+    if(P.retUnits>0){
+      v+='<br><br>Las '+num(P.retUnits)+' devoluciones del periodo cuestan '+fmt(P.returnsCost,0)+': se devuelve el ingreso, Amazon reintegra la comisión menos la tasa de gestión del reembolso, y la tarifa de logística no vuelve.';
+      if(P.retSinEstado>0)
+        v+=' De ellas, '+num(P.retSinEstado)+' vienen sin estado en el informe, así que doy por perdido su coste de producto: si volvieron vendibles, tu beneficio real es algo mayor que este.';
+      v+=' <span class="mut">No está incluida la tasa de procesamiento de devolución, que depende de la categoría y del porcentaje de devoluciones de cada referencia: si Amazon te la cobra, tu beneficio es menor que este.</span>';
+    }
     if(countryFilter!=='ALL' && P.ppc>0)
       v+='<br><br>Estás filtrando por un solo mercado y el informe de publicidad no trae país: el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
     /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en

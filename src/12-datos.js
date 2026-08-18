@@ -883,10 +883,58 @@ function pnl(){
   const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
                             .reduce((a,r)=>a+toNum(r.amounttotal),0);
   const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * (daysInPeriod()/30);
-  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
+
+  /* Devoluciones · lo que cuestan de verdad.
+
+     Hasta ahora se contaban (`retUnits`, `retRate`) y no restaban nada: un
+     producto con el 100 % de devoluciones daba exactamente el mismo beneficio
+     que uno con cero. El motor unitario de Validar producto sí modela la
+     mecánica; la cuenta de resultados no la usaba.
+
+     Por unidad devuelta:
+       · se devuelve el ingreso y su IVA;
+       · Amazon reintegra la comisión MENOS la tasa de gestión del reembolso,
+         que es mín(5 €, 20 % de la comisión);
+       · la tarifa de logística NO se devuelve, así que se queda cobrada;
+       · el coste de producto se recupera solo si la unidad vuelve vendible.
+         Sin saber en qué estado volvió, se cuenta como NO recuperada, que es
+         el supuesto que no infla el beneficio. */
+  const ventaSku = {};
+  S.forEach(r=>{ const k=String(r.sku).toLowerCase();
+    if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0};
+    ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty; });
+  /* `cost.bySku` viene con el SKU tal cual lo escribe el informe; aquí se
+     compara en minúsculas, así que hace falta el índice. */
+  const costeSku = {};
+  Object.keys(cost.bySku||{}).forEach(k=>{ costeSku[k.toLowerCase()] = cost.bySku[k]; });
+  let retIngreso=0, retComision=0, retCoste=0, retVendibles=0, retSinEstado=0;
+  retRows.forEach(r=>{
+    const k = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase();
+    const q = toNum(gv(r,'_qty','quantity'))||1;
+    const v = ventaSku[k];
+    if(!v || !v.units) return;                 // no sé a qué venta corresponde
+    const p = pm[k];
+    const netUd   = (v.rev - v.tax)/v.units;
+    const grossUd = v.rev/v.units;
+    const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
+    const comUd = grossUd*pct;
+    retIngreso  += q*netUd;
+    retComision += q*(comUd - Math.min(5, 0.20*comUd));
+    const disp = String(gv(r,'_disp','detaileddisposition','disposicion','estado')||'').trim().toLowerCase();
+    if(!disp) retSinEstado += q;
+    if(disp==='sellable' || disp==='vendible'){
+      retVendibles += q;
+      const cb = costeSku[k];
+      if(cb && cb.units) retCoste += q*(cb.cogs/cb.units);
+    }
+  });
+  const returnsCost = retIngreso - retComision - retCoste;
+
+  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+    returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,

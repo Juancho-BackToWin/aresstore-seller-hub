@@ -1269,6 +1269,105 @@ function closeModal(){ document.getElementById('modalBg').classList.remove('open
 /* =========================================================================
    17 · EXPORT / IMPORT / DEMO
    ========================================================================= */
+/* =========================================================================
+   EXPORTACIÓN · una por módulo
+
+   La copia de seguridad es un JSON pensado para volver al hub. Esto es otra
+   cosa: la tabla que estás viendo, tal cual, para abrirla en una hoja de
+   cálculo. Se exporta lo CALCULADO, no lo importado, porque lo importado ya lo
+   tienes en el fichero de Amazon.
+
+   Separador de punto y coma y coma decimal, que es lo que espera un Excel en
+   español; con coma de separador y coma decimal, las columnas se desplazan —el
+   mismo fallo del que se protege el importador.
+   ========================================================================= */
+function csvCell(v){
+  if(v==null) return '';
+  if(typeof v==='number') return String(v).replace('.', ',');
+  const s=String(v);
+  return /[";\n]/.test(s) ? '"'+s.split('"').join('""')+'"' : s;
+}
+function descargarCSV(nombre, cabeceras, filas){
+  if(!filas.length){ toast('No hay nada que exportar todavía en esta pantalla.'); return; }
+  const txt = [cabeceras.join(';')].concat(filas.map(f=>f.map(csvCell).join(';'))).join('\r\n');
+  /* BOM para que Excel reconozca el UTF-8 y no parta los acentos. */
+  const blob = new Blob(['\ufeff'+txt], {type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='aresstore-'+nombre+'-'+iso(today())+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  toast(filas.length+' filas exportadas a '+a.download);
+}
+function exportRentabilidad(){
+  const S = skuStats();
+  descargarCSV('rentabilidad',
+    ['SKU','Producto','Clase ABC','Unidades','Ventas con IVA','Ingreso neto','Coste de producto',
+     'Coste unitario','Beneficio','Margen %','% del beneficio','% acumulado'],
+    S.map(r=>[r.sku, r.name, r.abc, r.units, r2(r.revenue), r2(r.netRev), r2(r.cogs),
+              r2(r.unitCost), r2(r.profit), r2(r.margin), r2(r.share), r2(r.cum)]));
+}
+function exportInventario(){
+  const I = invStats();
+  const paises = COUNTRIES.map(c=>c.code);
+  descargarCSV('inventario',
+    ['SKU','Producto','Canal','Stock','Venta diaria','Cobertura (días)','Plazo (días)',
+     'Punto de pedido','En camino','Pedir','Estado','Coste unitario','Valor'].concat(paises),
+    I.map(r=>[r.sku, r.name, r.fbm?'FBM':'FBA', r.qty, r2(r.velocity),
+              r.cover>900?'':r2(r.cover), r.lead, r.reorderPoint, r.enCamino, r.need,
+              {low:'bajo inventario', over:'sobrestock', ok:'en banda'}[r.risk]||r.risk,
+              r2(r.unitCost), r2(r.value)]
+             .concat(paises.map(c=>(r.byCountry||{})[c]||0))));
+}
+function exportCatalogo(){
+  const filas=[];
+  /* Los lotes EN CRUDO, no los fundidos por día: al exportar interesa la
+     compra tal y como se cargó, con su fábrica, su flete y de qué pedido vino.
+     `mergedLots` es una vista para calcular y no lleva esos campos. */
+  DB.products.forEach(p=>{
+    (prodLots(p)||[]).forEach(l=>filas.push([p.sku, p.name, l.date, toNum(l.qty),
+      r2(toNum(l.unit)), r2(toNum(l.freight)), r2(lotCost(l)), l.ref||'']));
+  });
+  descargarCSV('lotes-de-coste',
+    ['SKU','Producto','Fecha','Unidades','Coste de fábrica','Flete por unidad','Coste puesto','Origen'],
+    filas);
+}
+function exportPublicidad(){
+  const A = adStats();
+  descargarCSV('publicidad',
+    ['Término de búsqueda','Campaña','Impresiones','Clics','Gasto','Ventas atribuidas','Pedidos','ACOS %'],
+    A.terms.map(t=>[t.term, t.campaign, t.impr, t.clicks, r2(t.spend), r2(t.sales), t.orders,
+                    t.sales>0 ? r2(t.spend/t.sales*100) : '']));
+}
+function exportCompras(){
+  const filas=[];
+  DB.pos.forEach(po=>{
+    const sup=(DB.suppliers.filter(s=>s.id===po.supplierId)[0]||{});
+    (po.items||[]).forEach(i=>filas.push([po.ref||po.id, sup.name||'', po.status||'', po.eta||'',
+      po.received||'', i.sku, i.qty, r2(i.unitCost), r2(toNum(i.qty)*toNum(i.unitCost)), r2(po.freight)]));
+  });
+  descargarCSV('compras',
+    ['Pedido','Proveedor','Estado','Llegada prevista','Recibido','SKU','Unidades',
+     'Coste de fábrica','Importe','Flete del pedido'], filas);
+}
+function exportTesoreria(){
+  const C = cashProjection();
+  descargarCSV('caja-90-dias',
+    ['Día','Fecha','Cobros','Pagos','Pago de pedido','Saldo'],
+    C.map(c=>[c.k, iso(c.date), r2(c.inflow), r2(c.outflow), r2(c.po), r2(c.bal)]));
+}
+function exportHistorico(){
+  const H = hist(), filas=[];
+  Object.keys(H.d).sort().forEach(k=>{
+    const s=H.d[k].s||{};
+    Object.keys(s).forEach(sk=>filas.push([k,'día',sk, s[sk][0], r2(s[sk][1]), r2(s[sk][2]||0)]));
+  });
+  Object.keys(H.m).sort().forEach(mk=>{
+    const s=H.m[mk].s||{};
+    Object.keys(s).forEach(sk=>filas.push([mk,'mes compactado',sk, s[sk][0], r2(s[sk][1]), r2(s[sk][2]||0)]));
+  });
+  descargarCSV('historico', ['Fecha','Detalle','SKU','Unidades','Ingreso','Impuesto'], filas);
+}
 function exportData(){
   const payload = Object.assign({}, DB, {app:'Aresstore Seller Hub', exported:new Date().toISOString()});
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
@@ -1289,6 +1388,26 @@ function importData(ev){
     try{
       const d=JSON.parse(r.result);
       if(!d || typeof d!=='object'){ toast('El archivo no tiene el formato esperado'); return; }
+      /* Antes valía cualquier JSON. Un objeto cualquiera pasaba el filtro,
+         reemplazaba la base entera y `saveDB()` lo dejaba escrito sin
+         preguntar: el histórico —lo único que no se puede reconstruir
+         descargando informes otra vez— desaparecía por soltar el fichero
+         equivocado. */
+      const esCopia = d.app==='Aresstore Seller Hub' ||
+                      (Array.isArray(d.products) && d.settings && d.imports);
+      if(!esCopia){
+        toast('Ese archivo no es una copia de seguridad del hub. No lo cargo: reemplazaría tus datos y tu histórico.');
+        ev.target.value=''; return;
+      }
+      const hs = (function(){ try{ return historyStats(); }catch(e){ return {span:0}; } })();
+      if(hs.span>0 && !confirm('Restaurar reemplaza TODO lo que tienes ahora, incluido el histórico ('+
+          hs.span+' días archivados desde el '+hs.first+').\n\n'+
+          'El histórico no se puede reconstruir descargando informes otra vez. ¿Continuar?')){
+        ev.target.value=''; return;
+      }
+      /* `app` y `exported` son del sobre, no del contenido: si se quedan
+         dentro, se guardan en la base y vuelven a salir en la copia siguiente. */
+      delete d.app; delete d.exported;
       DB = Object.assign(blankDB(), d);
       TARGET = Object.assign(TARGET, (DB.settings&&DB.settings.targets)||{});
       saveDB(); bootValues(); refreshAll(); toast('Datos restaurados');

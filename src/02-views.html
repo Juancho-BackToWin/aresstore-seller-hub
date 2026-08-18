@@ -131,6 +131,47 @@
         </div>
       </section>
 
+      <!-- ==================== HISTÓRICO (M0) ==================== -->
+      <section class="view" id="view-historico">
+        <div class="panel">
+          <h2>Lo que ya no se puede reconstruir</h2>
+          <p class="desc">Los informes de Seller Central son una foto del presente. El de inventario dice cuánto stock hay hoy; mañana ese número se ha ido y Amazon no lo guarda en ningún sitio. Aquí es donde cada importación deja historia propia.</p>
+          <div id="histBanner"></div>
+        </div>
+
+        <div class="kpis" id="histKpis"></div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Ventas por día</h2>
+              <p class="desc" style="margin:0">Cada barra es un día. Las claras son días de los que todavía no tienes dato: el histórico empieza donde llegó tu primer informe de pedidos, no antes.</p>
+            </div>
+            <div class="ph-actions"><button class="btn sm" onclick="rebuildHistory()" title="Vuelve a leer los informes cargados y rellena el histórico">Reconstruir desde lo importado</button></div>
+          </div>
+          <div class="cashchart" id="histChart"></div>
+          <div class="cashaxis" id="histAxis"></div>
+          <div class="assumptions" style="margin-top:14px" id="histVerdict"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Velocidad de venta real</h2>
+          <p class="desc">La media simple reparte las unidades entre todos los días del periodo. La velocidad real las reparte solo entre los días en que tuviste stock, que es la que sirve para decidir cuánto reponer. Vender 60 unidades en 30 días estando 12 sin stock no son 2 al día: son 3,3.</p>
+          <div class="tbl-wrap"><table class="grid" id="histVelTable"></table></div>
+          <div class="assumptions" style="margin-top:14px" id="histVelNote"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Registro de importaciones</h2>
+          <p class="desc">Qué has cargado y cuándo. Sirve para saber si el hábito semanal se está cumpliendo, que es la única condición de la que depende todo lo demás.</p>
+          <div class="tbl-wrap"><table class="grid" id="histLogTable"></table></div>
+          <div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
+            <button class="btn sm primary" onclick="exportData()">Descargar copia de seguridad</button>
+            <button class="btn danger sm" onclick="wipeHistory()">Borrar histórico</button>
+          </div>
+        </div>
+      </section>
+
       <!-- ==================== RENTABILIDAD ==================== -->
       <section class="view" id="view-rentabilidad">
         <div class="panel tight">
@@ -221,6 +262,27 @@
           <div class="tbl-wrap"><table class="grid" id="productTable"></table></div>
         </div>
         <div class="panel" id="productDetail" style="display:none"></div>
+
+        <!-- ============ M1.1 · LOTES DE COSTE ============ -->
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>Lotes de coste</h2>
+              <p class="desc" style="margin:0">Un coste único por SKU cuenta que el producto que vendiste en marzo te costó lo mismo que el que compraste en agosto. Con el flete moviéndose, eso falsea el margen justo donde decides si escalar. Un lote es una compra: fecha, unidades, coste de fábrica y flete repartido.</p>
+            </div>
+            <div class="ph-actions">
+              <button class="btn sm" onclick="lotPasteModal()">Pegar lotes</button>
+              <button class="btn sm primary" onclick="lotAddModal()">+ Lote</button>
+            </div>
+          </div>
+          <div id="lotMethodBox"></div>
+          <div id="lotCoverage" style="margin-top:14px"></div>
+          <div class="tbl-wrap" style="margin-top:14px"><table class="grid" id="lotTable"></table></div>
+          <h2 style="margin-top:26px">Cuadre de unidades</h2>
+          <p class="desc">La cuenta que separa «existe un lote con fecha anterior» de «había unidades»: lo comprado contra lo vendido en tu informe más lo que queda hoy en almacén. Si sobra, se vendió antes de que empezara el informe y se descuenta de la cola. Si falta, hay una compra sin cargar y el coste que ves está prolongando un precio viejo.</p>
+          <div class="tbl-wrap"><table class="grid" id="lotBalTable"></table></div>
+          <div class="assumptions" style="margin-top:16px" id="lotVerdict"></div>
+        </div>
       </section>
 
       <!-- ==================== INVENTARIO ==================== -->

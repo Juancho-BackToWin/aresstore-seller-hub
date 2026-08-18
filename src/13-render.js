@@ -42,6 +42,7 @@ function renderHome(){
    ========================================================================= */
 const CRUMBS = {
   panel:'Estado del negocio', datos:'Informes de Seller Central',
+  historico:'Lo que ya no se puede reconstruir',
   rentabilidad:'Devengo · qué has ganado', tesoreria:'Caja · qué has cobrado y qué debes',
   catalogo:'El objeto que atraviesa todo el hub', inventario:'Cobertura, reposición y riesgo de tarifas',
   compras:'Proveedores, pedidos y anticipos', publicidad:'Términos de búsqueda y desperdicio',
@@ -186,7 +187,34 @@ function renderPanel(){
         fmt(P.profit,0)+' y el margen del '+num(P.margin,1)+'% están inflados. Es el error más común y el más caro: da por bueno un producto que pierde dinero. '+
         'Crea los productos en Catálogo con su coste real.', go:'catalogo'});
   } else if(nocost.length) A.push({p:6,lvl:'info',t:nocost.length+' producto sin coste cargado',
-    s:'Sin coste de compra el margen que ves está inflado. Cárgalo en Catálogo o deja que un pedido de compra lo rellene solo.', go:'catalogo'});
+    s:'Sin coste de compra el margen que ves está inflado. Carga el coste base en Catálogo y, si tienes las compras, sus lotes: el coste base es el que se aplica a las ventas anteriores a tu primer lote.', go:'catalogo'});
+  /* M1.1 · un coste sin lote que lo respalde no es un error visible: es un
+     número creíble. Por eso el aviso va aquí y no escondido en Catálogo. */
+  try{
+    const LC = lotCoverage();
+    if(!LC.lots && P.units>0){
+      A.push({p:4.5,lvl:'warn',t:'Todo tu coste sale de un precio único por SKU',
+        s:'Ningún producto tiene lotes de compra cargados, así que una venta de hace un año se costea al mismo precio que la de ayer. Con el flete moviéndose eso desplaza el margen justo donde decides si escalar. Cargar las compras de tus cinco familias es una tarde.', go:'catalogo'});
+    } else if(LC.lots && LC.units>0 && LC.pct < 75){
+      const dudosas = Math.round(LC.units-LC.lot);
+      A.push({p:3.5,lvl:'warn',t:num(100-LC.pct,0)+' % de las unidades se costea sin poder comprobar la compra',
+        s: (LC.stale>0 && !LC.stockKnown
+            ? num(Math.round(LC.stale))+' de esas unidades consumen lotes anteriores a tu informe de pedidos y no hay informe de inventario para cuadrar cantidades, así que no se puede saber si esos lotes seguían enteros. Importa el informe de inventario y el cálculo se corrige solo. '
+            : '')+
+           'En total '+num(dudosas)+' unidades del periodo no tienen detrás una compra con unidades suficientes: falta el lote de apertura o falta alguna compra por cargar.', go:'catalogo'});
+    }
+  }catch(e){}
+  /* M0 · el histórico solo existe en este navegador. Perderlo es el único daño
+     de este hub que no se arregla volviendo a descargar informes de Amazon. */
+  try{
+    const due = backupDue(), hs = historyStats();
+    if(due>=999 && (hs.days||hs.months)) A.push({p:0.5,lvl:'stop',t:'El histórico no tiene ninguna copia de seguridad',
+      s:'Llevas '+hs.span+' días archivados y viven solo en el almacenamiento de este navegador. Si se borran los datos de navegación o cambias de equipo, se pierden, y a diferencia de las ventas el stock de días pasados no se puede volver a pedir a Amazon.', go:'historico'});
+    else if(due>0) A.push({p:2.5,lvl:'warn',t:'Han pasado '+due+' días sin copia de seguridad del histórico',
+      s:'Un minuto de trabajo protege '+hs.span+' días de historia que no se pueden reconstruir.', go:'historico'});
+    if(!hs.days && !hs.months && freshness().length) A.push({p:1.2,lvl:'warn',t:'El histórico está vacío pese a tener informes cargados',
+      s:'Reconstrúyelo desde lo importado: el informe de pedidos trae su propio pasado y rellena hacia atrás.', go:'historico'});
+  }catch(e){}
   if(!A.length) A.push({p:9,lvl:'go',t:'Nada urgente',
     s:'Ninguna alerta activa con los datos cargados. Aprovecha para trabajar en lo importante y no en lo urgente.', go:null});
   A.sort((a,b)=>a.p-b.p);
@@ -242,6 +270,121 @@ function renderDatos(){
 }
 
 /* =========================================================================
+   8b · HISTÓRICO (M0)
+   ========================================================================= */
+function renderHistorico(){
+  const S = historyStats();
+  const nav = document.getElementById('navHist'); if(nav) nav.textContent = S.span || 0;
+
+  /* --- aviso de copia de seguridad y de arranque --- */
+  const due = backupDue();
+  let b = '';
+  if(!S.days && !S.months){
+    b = '<div class="note-box warn" style="margin-top:0"><strong>El histórico está vacío y el reloj corre.</strong> '+
+        'Importa el informe de <em>Todos los pedidos</em> en la pestaña Datos: trae consigo entre 30 y 120 días de pasado, '+
+        'así que la primera importación no empieza el histórico hoy, lo rellena hacia atrás. '+
+        'El de inventario, en cambio, solo puede fecharse hoy: el stock de ayer ya no existe en ningún sitio. '+
+        '<button class="btn sm primary" style="margin-left:8px" onclick="go(\'datos\')">Importar ahora</button></div>';
+  } else if(due>=999){
+    b = '<div class="note-box stop" style="margin-top:0"><strong>Nunca has descargado una copia de seguridad.</strong> '+
+        'El histórico vive en el almacenamiento de este navegador y en ningún otro sitio: si borras datos de navegación, '+
+        'cambias de equipo o el navegador decide liberar espacio, desaparece y no se puede volver a descargar de Amazon. '+
+        '<button class="btn sm primary" style="margin-left:8px" onclick="exportData()">Descargar ahora</button></div>';
+  } else if(due>0){
+    b = '<div class="note-box warn" style="margin-top:0"><strong>Han pasado '+due+' días desde tu última copia.</strong> '+
+        'Descárgala: es el minuto mejor invertido de la semana. '+
+        '<button class="btn sm primary" style="margin-left:8px" onclick="exportData()">Descargar</button></div>';
+  } else {
+    b = '<div class="note-box info" style="margin-top:0"><strong>Copia de seguridad al día</strong> — la última es de hace '+
+        (S.backupAge===0?'menos de un día':S.backupAge+' día'+(S.backupAge===1?'':'s'))+'. '+
+        'Guárdala fuera de este equipo: el histórico no se puede volver a pedir a Amazon.</div>';
+  }
+  document.getElementById('histBanner').innerHTML = b;
+
+  const kb = S.bytes/1024, pct = S.dbBytes/(5*1024*1024)*100;
+  document.getElementById('histKpis').innerHTML =
+    kpi('Historia acumulada', S.span ? num(S.span)+' d' : '—', S.first ? 'desde el '+S.first : 'sin empezar', S.span>0?'accent':'warn')+
+    kpi('Días con detalle', num(S.days), S.months? num(S.months)+' mes'+(S.months===1?'':'es')+' compactado'+(S.months===1?'':'s') : 'se compacta a los 90 días','')+
+    kpi('Fotos de stock', num(S.withStock), S.withStock? 'una por día importado' : 'importa el inventario FBA', S.withStock?'pos':'warn')+
+    kpi('Unidades archivadas', num(S.units), fmt(S.rev,0)+' de ventas','')+
+    kpi('Importaciones', num(S.log),'registradas con su fecha','')+
+    kpi('Espacio ocupado', (kb<1024? num(kb,0)+' KB' : num(kb/1024,1)+' MB'), num(pct,1)+'% del límite del navegador', pct>70?'warn':'pos');
+
+  /* --- serie diaria --- */
+  const SER = historySeries(90);
+  const max = Math.max.apply(null, SER.map(x=>x.units).concat([1]));
+  document.getElementById('histChart').innerHTML = SER.map(x=>{
+    const h = x.has ? Math.max(2, x.units/max*100) : 100;
+    const col = !x.has ? 'var(--hair)' : (x.partial ? 'var(--caution)' : (x.units ? 'var(--brand)' : 'var(--muted-2)'));
+    const t = x.has ? (x.d.toLocaleDateString('es-ES')+': '+num(x.units)+' ud · '+fmt(x.rev,0)+(x.stock?' · foto de stock':'')+(x.partial?' · día incompleto':''))
+                    : (x.d.toLocaleDateString('es-ES')+': sin dato');
+    return '<div class="cbar" style="height:'+h.toFixed(1)+'%;background:'+col+';opacity:'+(x.has?1:.45)+'" title="'+esc(t)+'"></div>';
+  }).join('');
+  document.getElementById('histAxis').innerHTML = '<span>-90 d</span><span>-60 d</span><span>-30 d</span><span>hoy</span>';
+
+  const gaps = SER.filter(x=>!x.has).length;
+  let v;
+  if(!S.days && !S.months){
+    v = 'Sin nada archivado todavía. Este módulo no se ve trabajar: su valor aparece a los tres meses, cuando puedas comparar '+
+        'un mes con el anterior y saber si la caída de ventas es tuya o es la categoría.';
+  } else {
+    v = '<strong>'+num(S.span)+' días de historia propia</strong> desde el '+S.first+'. ';
+    if(gaps>0) v += 'Quedan '+gaps+' días de los últimos 90 sin dato, que son los anteriores a tu primera importación o los que el informe no cubría. ';
+    v += 'A partir de los 90 días el detalle diario se resume a mes: se conservan unidades, ingreso, impuesto y días sin stock, '+
+         'y se suelta la línea a línea. Es lo que evita que el navegador se ahogue sin perder nada de lo que después se consulta.';
+    if(S.cut) v += '<br><br><span class="mut">Compactado hasta el '+S.cut+'. Los días anteriores a esa fecha ya no se reescriben aunque vuelvas a importar un informe antiguo.</span>';
+  }
+  document.getElementById('histVerdict').innerHTML = v;
+
+  /* --- velocidad real --- */
+  const V = velocityStats(30);
+  const pm = prodBySku();
+  tbl('histVelTable','<tr><th>SKU</th><th class="num">Días observados</th><th class="num">Sin stock</th>'+
+    '<th class="num">Unidades</th><th class="num">Media simple</th><th class="num">Velocidad real</th><th class="num">Diferencia</th></tr>'+
+    (V.length ? V.slice(0,40).map(r=>{
+      const p = pm[String(r.sku).toLowerCase()];
+      const dif = r.real - r.simple;
+      return '<tr><td class="name"><strong>'+esc(r.sku)+'</strong>'+
+        (p&&p.name&&p.name!==r.sku?'<br><span class="mut" style="font-size:11px">'+esc(p.name)+'</span>':'')+'</td>'+
+        '<td class="num mut">'+num(r.observed)+'</td>'+
+        '<td class="num '+(r.oos>0?'neg':'mut')+'">'+(r.oos?num(r.oos)+' d':'—')+'</td>'+
+        '<td class="num">'+num(r.units)+'</td>'+
+        '<td class="num mut">'+num(r.simple,2)+'</td>'+
+        '<td class="num" style="font-weight:600">'+num(r.real,2)+'</td>'+
+        '<td class="num '+(dif>0.05?'warn':'mut')+'">'+(dif>0.005? '+'+num(dif/Math.max(r.simple,0.0001)*100,0)+'%' : '—')+'</td></tr>';
+    }).join('') : '<tr><td colspan="7" class="name mut">Todavía no hay días archivados con ventas. Importa el informe de pedidos.</td></tr>'));
+
+  const withOos = V.filter(r=>r.oos>0);
+  let vn = '';
+  if(!V.length){
+    vn = 'Sin datos para calcular velocidad todavía.';
+  } else {
+    vn = 'Ventana de 30 días, excluyendo hoy porque el informe del día en curso siempre viene incompleto. ';
+    if(withOos.length) vn += '<strong>'+withOos.length+' referencia'+(withOos.length===1?'':'s')+' con días sin stock detectados.</strong> '+
+      'Su velocidad real está por encima de la media simple, así que si repones con la media simple te vuelves a quedar corto. ';
+    else vn += 'No se ha detectado ningún día de rotura en la ventana. ';
+    vn += '<br><br><span class="mut">Cómo se detecta un día sin stock: se arrastra hacia delante la última foto de inventario conocida y '+
+      'un día cuenta como roto solo si esa foto estaba a cero <em>y</em> además ese día no se vendió ni una unidad. Las dos condiciones juntas, '+
+      'porque un stock a cero con ventas significa que la foto es vieja y un día sin ventas con stock es simplemente un día flojo. '+
+      'La consecuencia práctica: la precisión de este número depende de cada cuánto importas el inventario. Importando una vez por semana '+
+      'sabes el stock de un día de cada siete, y los seis restantes son una interpolación conservadora, no una medición.</span>';
+  }
+  document.getElementById('histVelNote').innerHTML = vn;
+
+  /* --- registro de importaciones --- */
+  const H = hist();
+  tbl('histLogTable','<tr><th>Cuándo</th><th>Informe</th><th class="num">Filas</th><th>Archivo</th><th>Reconocido por</th></tr>'+
+    (H.log.length ? H.log.slice(0,40).map(x=>{
+      const d = new Date(x.t), age = daysBetween(d, today());
+      return '<tr><td class="name">'+d.toLocaleDateString('es-ES')+' <span class="mut" style="font-size:11px">'+
+        (age===0?'hoy':'hace '+age+' d')+'</span></td>'+
+        '<td class="name">'+esc(x.l||x.r)+'</td><td class="num">'+num(x.n)+'</td>'+
+        '<td class="name mut" style="font-size:11.5px">'+esc(x.f||'—')+'</td>'+
+        '<td class="name mut" style="font-size:11.5px">'+esc(x.h||'—')+'</td></tr>';
+    }).join('') : '<tr><td colspan="5" class="name mut">Ninguna importación registrada todavía.</td></tr>'));
+}
+
+/* =========================================================================
    9 · RENTABILIDAD
    ========================================================================= */
 function renderRent(){
@@ -251,7 +394,10 @@ function renderRent(){
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
     kpi('Beneficio', fmt(P.profit,0), P.measured?'comisiones reales':'comisiones estimadas', P.profit>0?'pos':'neg')+
     kpi('Margen neto', num(P.margin,1)+'%','sobre ingreso sin IVA', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
-    kpi('Coste de producto', fmt(P.cogs,0), P.cogsKnown<P.units? (num(P.units-P.cogsKnown)+' ud sin coste cargado') : 'todas las unidades con coste', P.cogsKnown<P.units?'warn':'')+
+    kpi('Coste de producto', fmt(P.cogs,0),
+        P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
+                            : (costMethodInfo().name.toLowerCase()+' · '+num(P.costMeasuredPct||0,0)+' % con lote'),
+        P.cogsKnown<P.units ? 'warn' : ((P.costMeasuredPct||0)>=90?'':'warn'))+
     kpi('Publicidad', fmt(P.ppc,0),'TACOS '+num(P.tacos,1)+'%', P.tacos<=TARGET.tacos?'pos':'warn')+
     (P.ship>0
       ? kpi('Reparto de canal', num(P.fbaUnits)+' / '+num(P.fbmUnits),'unidades FBA / FBM','')
@@ -386,22 +532,245 @@ function renderCatalogo(){
   const S = skuStats(), I = invStats();
   const sm={}; S.forEach(r=>sm[r.sku]=r);
   const im={}; I.forEach(r=>im[r.sku]=r);
-  tbl('productTable','<tr><th>SKU</th><th>Producto</th><th>Canal</th><th>Proveedor</th><th class="num">Coste</th>'+
-    '<th class="num">Logística</th><th class="num">Stock</th><th class="num">Cobertura</th><th class="num">Beneficio</th><th style="width:70px"></th></tr>'+
+  tbl('productTable','<tr><th>SKU</th><th>Producto</th><th>Canal</th><th>Proveedor</th><th class="num">Coste hoy</th>'+
+    '<th class="num">Lotes</th><th class="num">Logística</th><th class="num">Stock</th><th class="num">Cobertura</th><th class="num">Beneficio</th><th style="width:70px"></th></tr>'+
     (DB.products.length? DB.products.map(p=>{
       const s=sm[String(p.sku)]||{}, i=im[String(p.sku)]||{};
       const sup=DB.suppliers.find(x=>x.id===p.supplierId);
       const fbm = p.channel==='FBM';
+      const nl = prodLots(p).length;
+      const c = unitCostAt(p, iso(today()));
       return '<tr><td><strong>'+esc(p.sku)+'</strong></td><td class="name">'+esc(p.name)+'</td>'+
         '<td><span class="pill '+(fbm?'info':'core')+'">'+(fbm?'FBM':'FBA')+'</span></td>'+
         '<td class="name mut">'+(sup?esc(sup.name):'<span class="pill warn">sin asignar</span>')+'</td>'+
-        '<td class="num">'+fmt(landed(p))+'</td><td class="num mut">'+fmt(fbm?toNum(p.fbmShip):toNum(p.fba))+'</td>'+
+        '<td class="num" title="'+(c.src==='lot'?'del último lote comprado':'coste base del producto, sin lote que lo respalde')+'">'+
+          fmt(c.cost)+(c.src==='lot'?'':' <span class="mut" style="font-size:10px">base</span>')+'</td>'+
+        '<td class="num">'+(nl? '<a href="#" onclick="editProduct(\''+p.id+'\');return false">'+nl+'</a>'
+                              : '<span class="pill warn">0</span>')+'</td>'+
+        '<td class="num mut">'+fmt(fbm?toNum(p.fbmShip):toNum(p.fba))+'</td>'+
         '<td class="num">'+(i.qty!=null?num(i.qty):'—')+'</td>'+
         '<td class="num '+(i.cover<28?'neg':i.cover>154?'warn':'pos')+'">'+(i.cover?num(i.cover,0)+' d':'—')+'</td>'+
         '<td class="num '+((s.profit||0)>0?'pos':'neg')+'">'+(s.profit!=null?fmt(s.profit,0):'—')+'</td>'+
         '<td><button class="icon-btn" onclick="editProduct(\''+p.id+'\')">✎</button></td></tr>';
     }).join('')
-    : '<tr><td colspan="10" class="name mut">Sin productos. Añade uno o carga datos de ejemplo desde la pestaña Datos.</td></tr>'));
+    : '<tr><td colspan="11" class="name mut">Sin productos. Añade uno o carga datos de ejemplo desde la pestaña Datos.</td></tr>'));
+  try{ renderLotes(); }catch(e){ console.warn('lotes',e); }
+}
+
+/* =========================================================================
+   11b · M1.1 · LOTES DE COSTE
+   La pantalla tiene un trabajo por encima de listar lotes: decir qué parte del
+   coste que estás viendo está respaldada por una compra real y qué parte es
+   relleno. Un margen del 33 % calculado con la mitad de las unidades sin lote
+   no es un margen del 33 %, es una estimación disfrazada de medición.
+   ========================================================================= */
+function renderLotes(){
+  const box = document.getElementById('lotMethodBox'); if(!box) return;
+  const m = costMethod();
+  box.innerHTML =
+    '<div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">'+
+      '<span class="mut" style="font-size:12.5px">Cómo se costea cada venta:</span>'+
+      COST_METHODS.map(x=>'<button class="btn sm'+(x.id===m?' primary':'')+'" onclick="setCostMethod(\''+x.id+'\')" title="'+esc(x.short)+'">'+x.name+'</button>').join('')+
+    '</div>'+
+    '<div class="note-box info" style="margin:10px 0 0;font-size:12.5px">'+esc(costMethodInfo().long)+'</div>';
+
+  const C = lotCoverage();
+  const relleno = C.stale + C.open + C.tail + C.base + C.none;
+  document.getElementById('lotCoverage').innerHTML =
+    '<div class="kpis">'+
+    kpi('Unidades con lote', num(Math.round(C.lot))+' de '+num(C.units),
+        C.units? num(C.pct,0)+' % del periodo respaldado por una compra real' : 'sin ventas en el periodo',
+        C.units===0?'':(C.pct>=90?'pos':(C.pct>=50?'warn':'neg')))+
+    kpi('Coste del periodo', fmt(C.cogs,0), 'método: '+costMethodInfo().name, '')+
+    kpi('Productos con lotes', num(C.withLots)+' de '+num(C.products),
+        C.lots+' lote'+(C.lots===1?'':'s')+' cargado'+(C.lots===1?'':'s'), C.withLots<C.products?'warn':'pos')+
+    kpi('Unidades sin cuadrar', num(Math.round(relleno)),
+        relleno? 'sin una compra con unidades detrás' : 'ninguna', relleno?'warn':'pos')+
+    '</div>'+
+    (C.lots && !C.stockKnown
+      ? '<div class="note-box warn" style="margin:12px 0 0;font-size:12.5px"><strong>Falta el stock de algún SKU con ventas.</strong> '+
+        'Sin saber cuántas unidades te quedan hoy no se puede hacer la única cuenta que cierra esto: '+
+        '<em>comprado − vendido en el informe − stock de hoy</em>. Lo que sobre de esa resta se vendió antes de que empezara tu informe de pedidos, '+
+        'y hasta que no se pueda restar, cualquier lote anterior al informe es una suposición. Se hace SKU a SKU: mira la columna «Stock hoy» del cuadre de abajo para ver cuáles faltan. Importa «Inventario de Logística de Amazon» y el cálculo se corrige solo.</div>'
+      : '');
+
+  /* Todos los lotes de todos los productos en una sola tabla: cargarlos es un
+     trabajo de una tarde y hacerlo saltando entre cinco fichas es lo que hace
+     que esa tarde no llegue nunca. */
+  const all = [];
+  DB.products.forEach(p=>(p.lots||[]).forEach(l=>all.push({p, l})));
+  all.sort((a,b)=> String(b.l.date||'').localeCompare(String(a.l.date||'')) || String(a.p.sku).localeCompare(String(b.p.sku)));
+  tbl('lotTable','<tr><th>Fecha</th><th>SKU</th><th class="num">Unidades</th><th class="num">Fábrica</th>'+
+    '<th class="num">Flete/ud</th><th class="num">Coste puesto</th><th>Origen</th><th style="width:36px"></th></tr>'+
+    (all.length ? all.map(({p,l})=>{
+      const malo = !l.date || lotCost(l)<=0;
+      return '<tr'+(malo?' style="opacity:.75"':'')+'>'+
+        '<td class="name">'+(l.date? esc(l.date) : '<span class="pill warn">sin fecha</span>')+'</td>'+
+        '<td><strong>'+esc(p.sku)+'</strong></td>'+
+        '<td class="num">'+(toNum(l.qty)? num(l.qty) : '<span class="mut">—</span>')+'</td>'+
+        '<td class="num">'+fmt(toNum(l.unit))+'</td>'+
+        '<td class="num mut">'+fmt(toNum(l.freight))+'</td>'+
+        '<td class="num"><strong>'+fmt(lotCost(l))+'</strong></td>'+
+        '<td class="name mut">'+esc(l.ref||(l.poId?'pedido de compra':'manual'))+'</td>'+
+        '<td><button class="icon-btn" onclick="lotEditModal(\''+p.id+'\',\''+l.id+'\')">✎</button></td></tr>';
+    }).join('')
+    : '<tr><td colspan="8" class="name mut">Todavía no hay lotes. Mientras no los haya, todo se costea con el coste base de cada producto, que es exactamente lo que hacía la versión anterior.</td></tr>'));
+
+  /* Cuadre por SKU: comprado contra vendido más lo que queda. Es la cuenta que
+     convierte «hay un lote» en «había unidades», y la que dice si falta cargar
+     una compra o si sobra porque se vendió antes de que empezara el informe. */
+  const B = (function(){ try{ return costOfSales(salesRows({from:null, country:'ALL'})).bal || {}; }catch(e){ return {}; } })();
+  const ks = Object.keys(B);
+  if(ks.length){
+    tbl('lotBalTable','<tr><th>SKU</th><th class="num">Comprado</th><th class="num">Vendido neto</th>'+
+      '<th class="num">Stock hoy</th><th class="num">Cuadre</th><th>Qué significa</th></tr>'+
+      ks.sort().map(sk=>{
+        const b = B[sk];
+        const p = DB.products.filter(x=>String(x.sku).toLowerCase()===sk)[0];
+        const dif = b.bought - b.sold - b.stock;
+        let txt, cls;
+        if(b.falta>0){ txt=num(b.falta)+' vendidas que ningún lote explica · van al coste base como stock de apertura'; cls='neg'; }
+        else if(!b.stockKnown){ txt='no se ha visto el stock de este SKU: no se puede cuadrar'; cls='warn'; }
+        else if(b.sobra>0){ txt=num(b.sobra)+' se vendieron antes de tu informe · descontadas de la cola'; cls='mut'; }
+        else { txt='cuadra exactamente'; cls='pos'; }
+        return '<tr><td><strong>'+esc(p?p.sku:sk)+'</strong></td>'+
+          '<td class="num">'+num(b.bought)+'</td>'+
+          '<td class="num">'+num(b.neto)+(b.devuelto?' <span class="mut" style="font-size:10px">−'+num(b.devuelto)+' dev</span>':'')+'</td>'+
+          '<td class="num'+(b.stockKnown?'':' warn')+'">'+(b.stockKnown?num(b.stock):'sin ver')+'</td>'+
+          '<td class="num '+(cls==='neg'?'neg':(cls==='pos'?'pos':''))+'">'+(b.stockKnown?(dif>0?'+':'')+num(dif):'—')+'</td>'+
+          '<td class="name '+cls+'">'+txt+'</td></tr>';
+      }).join(''));
+  } else {
+    tbl('lotBalTable','<tr><td class="name mut">Sin lotes que cuadrar todavía.</td></tr>');
+  }
+
+  /* Veredicto: qué significa lo que se está viendo, sin adornarlo. */
+  let v;
+  if(!C.lots){
+    v = '<strong>Sin lotes cargados, esto no cambia nada todavía.</strong> Cada venta se sigue costeando con el coste base del producto, '+
+        'igual que antes. El módulo empieza a valer en cuanto cargues las compras reales de tus cinco familias: fecha, unidades, coste de fábrica y flete. '+
+        'Es una tarde de trabajo y es lo que separa un margen calculado de un margen inventado.';
+  } else if(relleno > C.units*0.25){
+    v = '<strong style="color:var(--stop)">'+num(Math.round(relleno))+' unidades del periodo ('+num(100-C.pct,0)+' %) no se costean con una compra que se pueda comprobar.</strong> '+
+        (C.stale>0 ? '<br><br><strong>'+num(Math.round(C.stale))+' consumen lotes anteriores al primer pedido de tu informe y no hay stock con el que cuadrarlas.</strong> Lo más probable es que esos lotes ya te los hubieras vendido en parte: darlos por intactos abarata el coste y engorda el margen sin que nada avise. Importa el informe de inventario y esto se cierra solo. ' : '')+
+        (C.tail>0 ? '<br><br><strong>'+num(Math.round(C.tail))+' agotaron lo comprado</strong> y se han costeado prolongando el último precio conocido: falta cargar alguna compra posterior. ' : '')+
+        (C.open>0 ? '<br><br><strong>'+num(Math.round(C.open))+' son anteriores a tu primer lote</strong> y van al coste base del producto. Falta el lote de apertura: el stock que ya tenías el día que empezaste a registrar compras. ' : '')+
+        (C.base>0 ? '<br><br><strong>'+num(Math.round(C.base))+' son de productos sin ningún lote.</strong> ' : '')+
+        '<br><br>Mientras esto sea así, el margen es una estimación razonable, no una medición.';
+  } else {
+    v = '<strong>El '+num(C.pct,0)+' % de las unidades vendidas está respaldado por una compra que se puede comprobar.</strong> '+
+        'A partir de aquí el margen que ves en Rentabilidad es medido, no supuesto, y el capital inmovilizado de Inventario está valorado al coste de reposición.'+
+        (relleno>0 ? ' Quedan '+num(Math.round(relleno))+' unidades rellenadas, poco peso pero conviene saber que están ahí.' : '');
+  }
+  if(C.bad) v += '<br><br><span style="color:var(--caution)">'+C.bad+' lote'+(C.bad===1?'':'s')+' sin fecha o sin coste: no entran en ningún cálculo hasta que se corrijan.</span>';
+  v += '<br><br><span class="mut">Cómo leer los tres métodos: <strong>por periodo</strong> no necesita saber cuántas unidades quedaban de cada lote, así que aguanta un registro incompleto y es el único inmune al agujero de arriba; '+
+       '<strong>FIFO</strong> es el que refleja lo que pagaste por lo que vendiste, y el que exige tener todas las compras Y un informe de pedidos que las cubra; '+
+       '<strong>promedio ponderado</strong> es el más estable y el que más tarda en enseñar un lote caro. '+
+       'Cambiar de método cambia el beneficio del periodo sin que hayas vendido nada distinto: es un cambio de criterio contable, no un dato nuevo.</span>';
+  document.getElementById('lotVerdict').innerHTML = v;
+}
+
+function lotFields(l){
+  return '<div class="row-3">'+
+      '<div class="field"><label>Fecha de la compra</label><input type="date" id="ml_date" value="'+esc(l.date||iso(today()))+'"></div>'+
+      fld('ml_qty','Unidades','number',l.qty,'ud')+
+      fld('ml_unit','Coste de fábrica','number',l.unit,'€/ud')+
+    '</div><div class="row-2">'+
+      fld('ml_freight','Flete + aranceles','number',l.freight,'€/ud')+
+      fld('ml_ref','Referencia','text',l.ref||'')+
+    '</div>';
+}
+function lotAddModal(prodId){
+  if(!DB.products.length){ toast('Añade antes algún producto al catálogo'); return; }
+  const pid = prodId || DB.products[0].id;
+  openModal('Nuevo lote de compra',
+    'La fecha es la que manda: es la que decide qué ventas se costean con este lote. Pon la de recepción del stock, no la del pedido, si lo que quieres es que cuadre con lo que estabas vendiendo.',
+    '<div class="field"><label>Producto</label><select id="ml_prod">'+
+      DB.products.map(p=>'<option value="'+p.id+'"'+(p.id===pid?' selected':'')+'>'+esc(p.sku)+' · '+esc(p.name)+'</option>').join('')+
+    '</select></div>'+
+    lotFields({date:iso(today()), qty:0, unit:0, freight:0, ref:''})+
+    '<div class="note-box info" style="margin:6px 0 0;font-size:12.5px">El flete va <strong>por unidad</strong>, ya repartido. Si solo tienes el total del envío, divídelo entre las unidades del lote — o carga el pedido en Compras y deja que el reparto lo haga el hub, que además lo deja auditable.</div>',
+    ()=>{
+      const l = {date:val('ml_date'), qty:n('ml_qty'), unit:n('ml_unit'), freight:n('ml_freight'), ref:val('ml_ref')||'manual'};
+      if(!l.date || l.unit<=0){ toast('Un lote sin fecha o sin coste de fábrica no sirve para nada'); return; }
+      /* En FIFO un lote sin unidades no se puede consumir: existiría en la
+         lista sin costear nada, y todas las ventas caerían en el relleno. */
+      if(l.qty<=0 && costMethod()==='fifo' &&
+         !confirm('Este lote no lleva unidades. Con FIFO no se puede consumir, así que no costeará ninguna venta y todo caerá en el relleno.\n\n¿Guardarlo igualmente?')) return;
+      addLot(val('ml_prod'), l);
+      saveDB(); refreshAll(); toast('Lote añadido');
+    });
+}
+function lotEditModal(prodId, lotId){
+  const p = DB.products.find(x=>x.id===prodId); if(!p) return;
+  const l = (p.lots||[]).filter(x=>x.id===lotId)[0]; if(!l) return;
+  openModal('Lote de '+p.sku,
+    l.poId ? 'Este lote lo creó un pedido de compra. Si lo editas a mano, volver a aplicar los costes del pedido lo sobrescribirá.'
+           : 'Cambiar la fecha o el coste mueve el margen de todas las ventas que este lote cubre, hacia atrás incluidas.',
+    lotFields(l),
+    ()=>{
+      l.date=val('ml_date'); l.qty=n('ml_qty'); l.unit=n('ml_unit');
+      l.freight=n('ml_freight'); l.ref=val('ml_ref');
+      saveDB(); refreshAll(); toast('Lote guardado');
+    },
+    ()=>{ delLot(prodId, lotId); saveDB(); refreshAll(); toast('Lote eliminado'); });
+}
+/* Pegar desde una hoja de cálculo. Cargar cinco familias con dos años de
+   compras a mano son cien formularios; pegando es un minuto. */
+function lotPasteModal(){
+  openModal('Pegar lotes desde una hoja',
+    'Cinco columnas por posición: SKU, fecha, unidades, coste de fábrica y flete. Separadas por tabulador (que es lo que sale al copiar de Excel), punto y coma o coma.',
+    '<div class="field"><label>Pega aquí</label>'+
+      '<textarea id="ml_paste" rows="9" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" '+
+      'placeholder="ARS-ROD-01&#9;2026-02-14&#9;600&#9;4,35&#9;1,07&#10;ARS-BAN-02&#9;2026-02-14&#9;900&#9;2,70&#9;0,71"></textarea></div>'+
+    '<div class="field"><label>La quinta columna es…</label><select id="ml_ftype">'+
+      '<option value="unit">flete POR UNIDAD</option>'+
+      '<option value="total">flete TOTAL del lote</option>'+
+    '</select></div>'+
+    '<div class="note-box warn" style="margin:6px 0 0;font-size:12.5px">Confundir el flete total con el flete por unidad mete un factor de cientos en el margen y el número sigue pareciendo creíble. Comprueba la vista previa antes de guardar.</div>'+
+    '<div id="ml_prev" style="margin-top:12px"></div>',
+    ()=>{
+      const r = parseLotPaste(val('ml_paste'), val('ml_ftype')==='total');
+      if(!r.lots.length){ toast('No se ha podido leer ninguna línea válida'); return; }
+      const n2 = applyLotPaste(r.lots);
+      toast(n2+' lote'+(n2===1?'':'s')+' añadido'+(n2===1?'':'s')+(r.errs.length?' · '+r.errs.length+' línea(s) descartada(s)':''));
+    });
+  const prev = ()=>{
+    const t = val('ml_paste')||'';
+    const el = document.getElementById('ml_prev');
+    if(!t.trim()){ el.innerHTML=''; return; }
+    const r = parseLotPaste(t, val('ml_ftype')==='total');
+    el.innerHTML = '<div class="tbl-wrap"><table class="grid"><tr><th>SKU</th><th>Fecha</th><th class="num">Ud</th><th class="num">Fábrica</th><th class="num">Flete/ud</th><th class="num">Puesto</th></tr>'+
+      r.lots.slice(0,12).map(l=>'<tr><td><strong>'+esc(l.sku)+'</strong></td><td class="name">'+esc(l.date)+'</td>'+
+        '<td class="num">'+num(l.qty)+'</td><td class="num">'+fmt(l.unit)+'</td><td class="num mut">'+fmt(l.freight)+'</td>'+
+        '<td class="num"><strong>'+fmt(l.unit+l.freight)+'</strong></td></tr>').join('')+
+      '</table></div>'+
+      '<div class="mut" style="font-size:12px;margin-top:8px">'+r.lots.length+' línea(s) válida(s)'+
+      (r.lots.length>12?' · se muestran las 12 primeras':'')+'</div>'+
+      (r.errs.length? '<div class="note-box warn" style="margin-top:10px;font-size:12.5px"><strong>Descartadas:</strong><br>'+r.errs.slice(0,8).map(esc).join('<br>')+'</div>' : '');
+  };
+  document.getElementById('ml_paste').addEventListener('input', prev);
+  document.getElementById('ml_ftype').addEventListener('change', prev);
+}
+/* Resumen de lotes dentro de la ficha del producto. Se muestra, no se edita:
+   abrir un modal encima de otro perdería lo que estuvieras escribiendo aquí,
+   y los lotes se gestionan en su propia tabla, que es donde se cargan en tanda. */
+function lotSummary(p){
+  const L = prodLots(p), bad = badLots(p).length;
+  if(!L.length){
+    return '<div class="note-box warn" style="margin:6px 0 0;font-size:12.5px">'+
+      '<strong>Sin lotes de compra.</strong> Todas las ventas de este producto se costean con el coste base de arriba, el mismo para una venta de hace un año que para la de ayer. '+
+      'Carga sus compras en «Lotes de coste», al final de esta pantalla, y el margen pasa de estimado a medido.'+
+      (bad? ' Hay '+bad+' lote(s) sin fecha o sin coste que no cuentan.' : '')+'</div>';
+  }
+  const last = L[L.length-1], first = L[0];
+  const q = L.reduce((a,l)=>a+Math.max(0,toNum(l.qty)),0);
+  return '<div class="note-box info" style="margin:6px 0 0;font-size:12.5px">'+
+    '<strong>'+L.length+' lote'+(L.length===1?'':'s')+' de compra</strong> · desde el '+esc(first.date)+' hasta el '+esc(last.date)+
+    (q? ' · '+num(q)+' unidades compradas' : '')+'. Último coste puesto: <strong>'+fmt(lotCost(last))+'</strong>'+
+    (Math.abs(lotCost(last)-baseCost(p))>0.005 ? ' (el coste base dice '+fmt(baseCost(p))+')' : '')+'. '+
+    'El coste base solo se usa para las ventas que ningún lote cubra.'+
+    (bad? ' <span style="color:var(--caution)">'+bad+' lote(s) sin fecha o sin coste no cuentan.</span>' : '')+'</div>';
 }
 function addProduct(){ editProduct(null); }
 function editProduct(id){
@@ -409,7 +778,7 @@ function editProduct(id){
     litres:1.5,referral:15,price:24.99,channel:'FBA',fbmShip:0,fbmStock:0};
   if(!p.channel) p.channel='FBA';
   openModal(id?'Editar producto':'Nuevo producto',
-    'Este objeto lo comparten todos los módulos: cambiar el coste aquí mueve el margen en Rentabilidad, el punto de reposición en Inventario y la curva de Tesorería.',
+    'Este objeto lo comparten todos los módulos: cambiar el coste aquí mueve el margen en Rentabilidad, el punto de reposición en Inventario y la curva de Tesorería. El coste base es el que se aplica a las ventas anteriores a tu primer lote de compra.',
     '<div class="row-2">'+
       fld('mp_sku','SKU','text',p.sku)+fld('mp_name','Nombre','text',p.name)+
     '</div><div class="row-2">'+
@@ -423,9 +792,10 @@ function editProduct(id){
         '<option value="FBA"'+(p.channel==='FBA'?' selected':'')+'>FBA · lo envía Amazon</option>'+
         '<option value="FBM"'+(p.channel==='FBM'?' selected':'')+'>FBM · lo envías tú</option>'+
       '</select></div>'+
-      fld('mp_cogs','Coste de fábrica','number',p.cogs,'€')+
+      fld('mp_cogs','Coste base de fábrica','number',p.cogs,'€')+
       fld('mp_freight','Transporte + aranceles','number',p.freight,'€')+
-    '</div><div class="row-3" id="mp_fbaBox" style="display:'+(p.channel==='FBM'?'none':'grid')+'">'+
+    '</div>'+ lotSummary(p) +
+    '<div class="row-3" id="mp_fbaBox" style="display:'+(p.channel==='FBM'?'none':'grid')+'">'+
       fld('mp_fba','Tarifa FBA','number',p.fba,'€')+
       fld('mp_litres','Volumen','number',p.litres,'L')+
       fld('mp_ref','Comisión referral','number',p.referral,'%')+
@@ -529,7 +899,10 @@ function renderCompras(){
         '<div style="text-align:right"><div style="font-family:var(--mono);font-weight:600;font-size:16px">'+fmt(poAmount(po),0)+'</div>'+
           '<div class="mut" style="font-size:11.5px">pagado '+num(paid)+'%</div></div>'+
         '<div style="display:flex;gap:6px"><button class="btn sm" onclick="editPO(\''+po.id+'\')">Editar</button>'+
-        '<button class="btn sm" onclick="applyPOCosts(DB.pos.find(x=>x.id===\''+po.id+'\'))" title="Reparte el flete y actualiza el coste de los productos">Aplicar coste</button></div>'+
+        '<button class="btn sm'+(po.received?'':' ')+'" onclick="applyPOCosts(DB.pos.find(x=>x.id===\''+po.id+'\'))" title="'+
+          (po.received ? 'Reparte el flete y crea un lote de coste por línea, fechado el '+esc(po.received)
+                       : 'Necesita fecha de recepción: sin ella el lote se aplicaría a ventas servidas con stock anterior')+
+          '">Crear lote de coste'+(po.received?'':' ⚠')+'</button></div>'+
       '</div>'+
       '<div class="po-status">'+PO_STATES.map((s,i)=>'<span class="st '+(i<=si?'on':'')+'" title="'+s[1]+'"></span>').join('')+'</div>'+
       '</div>';
@@ -597,6 +970,8 @@ function editPO(id){
         PO_STATES.map(s=>'<option value="'+s[0]+'"'+(s[0]===po.status?' selected':'')+'>'+s[1]+'</option>').join('')+'</select></div>'+
       '</div><div class="row-3">'+
         fld('mo_ord','Fecha de pedido','date',po.ordered)+fld('mo_eta','Llegada prevista','date',po.eta)+
+        fld('mo_rec','Recibido el','date',po.received)+
+      '</div><div class="row-2">'+
         fld('mo_fre','Flete + aranceles total','number',po.freight,'€')+
       '</div>'+
       '<div class="field"><label>Reparto del flete al coste unitario</label><select id="mo_alloc">'+
@@ -621,17 +996,19 @@ function editPO(id){
   }
   window.renderPOModal=()=>{
     const c=document.getElementById('modalBody'); if(!c) return;
-    const keep={ref:val('mo_ref'),sup:val('mo_sup'),st:val('mo_st'),ord:val('mo_ord'),eta:val('mo_eta'),fre:val('mo_fre'),alloc:val('mo_alloc')};
+    const keep={ref:val('mo_ref'),sup:val('mo_sup'),st:val('mo_st'),ord:val('mo_ord'),eta:val('mo_eta'),
+                rec:val('mo_rec'),fre:val('mo_fre'),alloc:val('mo_alloc')};
     if(keep.ref!=null){ po.ref=keep.ref; po.supplierId=keep.sup; po.status=keep.st;
-      po.ordered=keep.ord; po.eta=keep.eta; po.freight=toNum(keep.fre); po.alloc=keep.alloc; }
+      po.ordered=keep.ord; po.eta=keep.eta; po.received=keep.rec; po.freight=toNum(keep.fre); po.alloc=keep.alloc; }
     c.innerHTML=body();
   };
   openModal(id?'Editar pedido de compra':'Nuevo pedido de compra',
-    'Los vencimientos que pongas aquí aparecen directamente en la proyección de caja. «Aplicar coste» reparte el flete y actualiza el coste unitario de cada producto del catálogo.',
+    'Los vencimientos que pongas aquí aparecen directamente en la proyección de caja. «Aplicar coste» reparte el flete y crea un lote de coste por línea, fechado el día de RECEPCIÓN: la mercancía que sigue en un barco no puede haber surtido ninguna venta, así que rellena ese campo antes de aplicarlo.',
     body(),
     ()=>{
       po.ref=val('mo_ref'); po.supplierId=val('mo_sup'); po.status=val('mo_st');
-      po.ordered=val('mo_ord'); po.eta=val('mo_eta'); po.freight=n('mo_fre'); po.alloc=val('mo_alloc');
+      po.ordered=val('mo_ord'); po.eta=val('mo_eta'); po.received=val('mo_rec');
+      po.freight=n('mo_fre'); po.alloc=val('mo_alloc');
       po.items=(po.items||[]).filter(i=>i.sku&&toNum(i.qty)>0);
       if(!id) DB.pos.push(po);
       saveDB(); refreshAll(); toast('Pedido guardado');
@@ -787,7 +1164,10 @@ function exportData(){
   a.download='aresstore-hub-'+iso(today())+'.json';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-  toast('Copia descargada. Guárdala con la misma disciplina que una hoja de cálculo.');
+  /* La copia lleva el histórico dentro, así que descargarla es lo que apaga el
+     aviso semanal. Se anota la fecha para poder avisar si vuelves a olvidarlo. */
+  try{ markBackup(); renderHistorico(); renderPanel(); }catch(e){}
+  toast('Copia descargada, con el histórico dentro. Guárdala fuera de este equipo.');
 }
 function importData(ev){
   const f=ev.target.files[0]; if(!f) return;
@@ -805,19 +1185,32 @@ function importData(ev){
   r.readAsText(f);
 }
 function loadDemo(){
-  if(DB.products.length && !confirm('Se reemplazan los datos actuales por un juego de ejemplo. ¿Continuar?')) return;
+  const hs = (function(){ try{ return historyStats(); }catch(e){ return {span:0}; } })();
+  if(hs.span>0 && !confirm('ATENCIÓN: esto borra también tu HISTÓRICO ('+hs.span+' días archivados desde el '+hs.first+').\n\n'+
+      'El histórico no se puede reconstruir descargando informes otra vez, porque Amazon no guarda el stock de días pasados. '+
+      'Descarga primero una copia de seguridad.\n\n¿Cargar los datos de ejemplo de todas formas?')) return;
+  if(!hs.span && DB.products.length && !confirm('Se reemplazan los datos actuales por un juego de ejemplo. ¿Continuar?')) return;
   DB = blankDB();
   DB.suppliers=[
     {id:'s1',name:'Ningbo Handa Ltd.',country:'CN',lead:52,moq:500,terms:'30% anticipo / 70% contra B/L',incoterm:'FOB Ningbo',notes:'Buen acabado. Dos incidencias de etiquetado en 2025.'},
     {id:'s2',name:'Poliplast Ibérica',country:'ES',lead:14,moq:200,terms:'60 días fecha factura',incoterm:'EXW Valencia',notes:'Más caro pero permite lotes cortos.'}
   ];
+  /* M1.1 · los lotes del ejemplo suben de precio con el tiempo, que es lo que
+     pasa de verdad. Sirven para ver de un vistazo que cambiar de método mueve
+     el beneficio del periodo sin que se haya vendido nada distinto. */
+  const L = (d,qty,unit,freight,ref)=>({id:uid(), date:iso(addDays(today(),-d)), qty, unit, freight, ref});
   DB.products=[
-    {id:'p1',sku:'ARS-ROD-01',name:'Rodillo de masaje muscular',supplierId:'s1',cogs:4.5,freight:1.2,fba:3.2,litres:1.5,referral:15,price:24.99},
-    {id:'p2',sku:'ARS-BAN-02',name:'Set de bandas elásticas',supplierId:'s1',cogs:2.8,freight:0.7,fba:2.9,litres:0.9,referral:15,price:17.99},
-    {id:'p3',sku:'ARS-EST-03',name:'Esterilla plegable',supplierId:'s2',cogs:8.4,freight:2.6,fba:5.1,litres:6.2,referral:15,price:39.99},
-    {id:'p4',sku:'ARS-PEL-04',name:'Pelota de liberación miofascial',supplierId:'s1',cogs:1.6,freight:0.4,fba:2.6,litres:0.6,referral:15,price:11.99},
+    {id:'p1',sku:'ARS-ROD-01',name:'Rodillo de masaje muscular',supplierId:'s1',cogs:4.5,freight:1.2,fba:3.2,litres:1.5,referral:15,price:24.99,
+     lots:[L(300,500,3.95,0.92,'PO-251020'), L(140,600,4.30,1.05,'PO-260328'), L(45,700,4.50,1.20,'PO-260703')]},
+    {id:'p2',sku:'ARS-BAN-02',name:'Set de bandas elásticas',supplierId:'s1',cogs:2.8,freight:0.7,fba:2.9,litres:0.9,referral:15,price:17.99,
+     lots:[L(300,800,2.40,0.55,'PO-251020'), L(140,900,2.70,0.66,'PO-260328'), L(45,1000,2.80,0.70,'PO-260703')]},
+    {id:'p3',sku:'ARS-EST-03',name:'Esterilla plegable',supplierId:'s2',cogs:8.4,freight:2.6,fba:5.1,litres:6.2,referral:15,price:39.99,
+     lots:[L(210,200,7.90,2.35,'PO-260118'), L(60,250,8.40,2.60,'PO-260618')]},
+    {id:'p4',sku:'ARS-PEL-04',name:'Pelota de liberación miofascial',supplierId:'s1',cogs:1.6,freight:0.4,fba:2.6,litres:0.6,referral:15,price:11.99,
+     lots:[L(300,1500,1.42,0.31,'PO-251020'), L(100,2000,1.60,0.40,'PO-260508')]},
     {id:'p5',sku:'ARS-KIT-05',name:'Kit voluminoso de recuperación',supplierId:'s2',cogs:19.5,freight:6.2,fba:0,litres:24,referral:15,price:89.99,
-     channel:'FBM',fbmShip:7.4,fbmStock:60}
+     channel:'FBM',fbmShip:7.4,fbmStock:60,
+     lots:[L(180,120,18.20,5.60,'PO-260219'), L(40,100,19.50,6.20,'PO-260708')]}
   ];
   DB.expenses=[{id:'e1',concept:'Gestoría y contabilidad',amount:280},{id:'e2',concept:'Herramientas (Helium 10, etc.)',amount:99},
                {id:'e3',concept:'Cuota Amazon Professional',amount:39},{id:'e4',concept:'Almacén y prep',amount:150}];
@@ -882,6 +1275,9 @@ function loadDemo(){
   DB.imports.returns={rows:ret,count:ret.length,file:'demo-returns.csv',loadedAt:new Date().toISOString(),cols:13};
 
   DB.settings.cash={start:8400,cycle:14,reserve:15,vat:21,ppcDaily:0};
+  /* El ejemplo también alimenta el histórico: si no, M0 parecería vacío justo
+     cuando alguien está recorriendo los módulos para entender qué hace cada uno. */
+  try{ logImport('orders','Todos los pedidos',orders.length,'demo-all-orders.csv','datos de ejemplo'); captureAll(); }catch(e){}
   saveDB(); bootValues(); refreshAll();
   toast('Datos de ejemplo cargados. Recorre los módulos y luego vacíalos para meter los tuyos.');
 }
@@ -953,6 +1349,7 @@ function bootValues(){
 function refreshAll(){
   try{ renderPanel(); }catch(e){ console.warn('panel',e); }
   try{ renderDatos(); }catch(e){ console.warn('datos',e); }
+  try{ renderHistorico(); }catch(e){ console.warn('hist',e); }
   try{ renderRent(); }catch(e){ console.warn('rent',e); }
   try{ renderTesoreria(); }catch(e){ console.warn('tes',e); }
   try{ renderCatalogo(); }catch(e){ console.warn('cat',e); }

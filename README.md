@@ -18,7 +18,7 @@ Se editan las piezas de `src/` y se ejecuta:
 
 ```bash
 ./build.sh          # versión desde package.json
-./build.sh 0.6      # versión explícita
+./build.sh 0.7      # versión explícita
 ```
 
 El script ensambla `index.html`, sella la versión visible en la interfaz, regenera
@@ -39,6 +39,8 @@ que dispara la actualización automática en los dispositivos— y rasteriza los
 | `src/10-const.js` | Países, tarifas del rate card, objetivos |
 | `src/11-motor-validacion.js` | Motor de la calculadora de margen |
 | `src/12-datos.js` | Estado, persistencia, importador, derivados |
+| `src/12b-historico.js` | **M0** · archivo diario, días sin stock, velocidad real, compactación |
+| `src/12c-lotes.js` | **M1.1** · lotes de coste, libro de unidades y los tres métodos de costeo |
 | `src/13-render.js` | Lanzador, navegación, renderizado, modales, autoactualización |
 
 ---
@@ -50,7 +52,14 @@ npm install
 npm run fixtures     # genera informes de Amazon simulados, en inglés y español
 npm test             # suite general en navegador real
 npm run test:es      # informes en español dan las mismas cifras que en inglés
+npm run test:m0      # el histórico no duplica, no pierde y detecta rotura
+npm run test:m11     # los tres métodos de coste contra la cuenta hecha a mano
+npm run test:all     # las cuatro de una vez
 ```
+
+`tests/pwa.test.js` es aparte: necesita la app servida en `http://localhost:8899`
+(`python3 -m http.server 8899`) porque comprueba el service worker y el modo sin
+conexión, que no funcionan sobre `file://`.
 
 `tests/mkfixtures.js` y `tests/mkfixtures-es.js` generan ficheros con las
 **cabeceras literales de Amazon**, incluidos los casos que rompen importadores
@@ -79,8 +88,12 @@ espacios, guiones bajos, y un CSV desalineado por decimales de coma.
 
 Ver `PLAN-sellerboard.md`. Resumen del orden de ejecución:
 
-- **M0** · Histórico y fotos diarias de stock ← *lo siguiente, y urgente: el dato no capturado no se recupera*
-- **M1** · Motor financiero: costes por lotes, las 21 métricas, gastos indirectos, IVA
+- **M0** · Histórico y fotos diarias de stock — **hecho (v0.6)**. Cada importación
+  archiva ventas por día y SKU, foto de stock por país, precio y tarifas; detecta
+  días sin stock y calcula la velocidad real; compacta el detalle a los 90 días y
+  avisa si llevas una semana sin copia de seguridad.
+- **M1.1** · Costes por lotes ← *lo siguiente*
+- **M1** · Motor financiero: las 21 métricas, gastos indirectos, IVA
 - **M2** · Inventario: velocidad excluyendo días sin stock, seis parámetros de reposición
 - **M3** · Compras y caja: el pedido crea el lote de coste, depósitos de producción
 - **M4** · Publicidad: ACOS de equilibrio por palabra clave

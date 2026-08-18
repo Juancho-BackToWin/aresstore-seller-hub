@@ -1,0 +1,19 @@
+{
+  "name": "aresstore-seller-hub",
+  "version": "0.7.0",
+  "private": true,
+  "description": "Gestion del seller de Amazon de Aresstore: rentabilidad, tesoreria, inventario, compras y cumplimiento. PWA de un solo archivo, sin servidor.",
+  "scripts": {
+    "build": "./build.sh",
+    "fixtures": "node tests/mkfixtures.js && node tests/mkfixtures-es.js",
+    "test": "node tests/hub.test.js",
+    "test:es": "node tests/es.test.js",
+    "test:pwa": "node tests/pwa.test.js",
+    "test:m0": "node tests/m0.test.js",
+    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11",
+    "test:m11": "node tests/m11.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

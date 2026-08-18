@@ -12,9 +12,14 @@ function blankDB(){
   return {
     v:'0.3',
     settings:{ targets:Object.assign({},TARGET),
-               cash:{start:5000, cycle:14, reserve:15, vat:21, ppcDaily:0} },
+               cash:{start:5000, cycle:14, reserve:15, vat:21, ppcDaily:0},
+               /* M1.1 · cómo se costea cada venta. El detalle, en 12c-lotes.js */
+               costMethod:'period' },
     products:[], suppliers:[], pos:[], expenses:[],
-    compliance:comp, saved:[], imports:{}
+    compliance:comp, saved:[], imports:{},
+    /* M0 · lo único que no se puede reconstruir descargando informes otra vez.
+       Estructura y normalización en 12b-historico.js (hist()). */
+    history:{v:1, d:{}, m:{}, log:[], obs:{}, cut:null, bk:{last:null}}
   };
 }
 let DB = blankDB();
@@ -38,6 +43,16 @@ function saveDB(){
   if(!storageOK){ memDB = DB; return false; }
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(DB)); return true; }
   catch(e){
+    /* Lo que crece sin parar es el histórico. Antes de rendirse y degradar a
+       memoria —que es como se pierden los datos sin enterarse— se compacta el
+       detalle diario a 30 días y se reintenta una vez. */
+    try{
+      if(typeof compactHistory==='function' && compactHistory(30)>0){
+        localStorage.setItem(STORE_KEY, JSON.stringify(DB));
+        if(typeof toast==='function') toast('El almacenamiento estaba lleno: he compactado el histórico a 30 días de detalle. Descarga una copia de seguridad.');
+        return true;
+      }
+    }catch(e2){}
     storageOK=false; memDB=DB;
     const b=document.getElementById('storageBanner'); if(b) b.style.display='block';
     toast('El navegador ya no acepta guardar. Descarga una copia antes de cerrar.');
@@ -54,7 +69,18 @@ function fmt(x,d){ if(!isFinite(x)||x===null) return '—';
 function num(x,d){ if(!isFinite(x)||x===null) return '—';
   return x.toLocaleString('es-ES',{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
 function today(){ return new Date(); }
-function iso(d){ return d.toISOString().slice(0,10); }
+/* Fecha en formato aaaa-mm-dd, en HORA LOCAL.
+   Antes usaba toISOString(), que serializa en UTC mientras parseDate() y
+   new Date() construyen fechas locales. En España —UTC+1 en invierno, +2 en
+   verano— eso devolvía SIEMPRE el día anterior: una venta del 15 se archivaba
+   como del 14, y en el día en que cambiaba un lote de coste el margen salía
+   con el precio equivocado. No se veía en las pruebas porque el navegador de
+   pruebas corre en UTC. La usan a la vez el histórico (M0) y los lotes (M1.1),
+   así que tiene que ser una sola función o las dos se desincronizan. */
+function iso(d){
+  const p = n2 => (n2<10?'0':'')+n2;
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
+}
 function addDays(d,k){ const x=new Date(d.getTime()); x.setDate(x.getDate()+k); return x; }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function parseDate(s){
@@ -528,9 +554,19 @@ function saveImport(rep, headers, rows, map, fileName, el, how){
                         loadedAt:new Date().toISOString(), cols:headers.length, how:how||'asignación manual'};
   if(!DB.mappings) DB.mappings={};
   DB.mappings[sheetSig(headers)] = {reportId:rep.id, map:map};
+  /* M0 · antes de guardar, la importación deja su huella en el histórico.
+     Esto es lo que convierte una foto del presente en historia propia. */
+  const hg = (typeof captureHistory==='function')
+    ? captureHistory(rep, norm.length, fileName, how||'asignación manual') : null;
   saveDB();
+  let hnote = '';
+  if(hg){
+    if(hg.orders && hg.orders.days) hnote = ' · <span class="pos">histórico: '+num(hg.orders.days)+' día'+(hg.orders.days===1?'':'s')+'</span>';
+    else if(hg.stock && hg.stock.skus) hnote = ' · <span class="pos">foto de stock de '+num(hg.stock.skus)+' SKU</span>';
+    else if(hg.fees && hg.fees.skus) hnote = ' · <span class="pos">tarifas de '+num(hg.fees.skus)+' SKU</span>';
+  }
   if(el) el.innerHTML='<span class="f-dot ok"></span><span class="f-name">'+esc(fileName)+'</span>'+
-    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+'</span>'+
+    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+hnote+'</span>'+
     '<span class="f-right"><strong>'+num(norm.length)+'</strong> filas · '+headers.length+' col.</span>';
   refreshAll();
 }
@@ -581,8 +617,8 @@ function openMapper(fileName, headers, rows, sig, el, repPre, mapPre){
 }
 
 function wipeImports(){
-  if(!confirm('Se borran los informes importados. Tus productos, proveedores y pedidos se conservan.')) return;
-  DB.imports={}; saveDB(); refreshAll(); toast('Datos importados vaciados');
+  if(!confirm('Se borran los informes importados. Tus productos, proveedores, pedidos y el HISTÓRICO se conservan.')) return;
+  DB.imports={}; saveDB(); refreshAll(); toast('Datos importados vaciados · el histórico sigue intacto');
 }
 function forgetMappings(){
   if(!confirm('Se olvidan las asignaciones de columnas que guardaste. Los datos importados se conservan.')) return;
@@ -599,12 +635,20 @@ function gv(r){ for(let i=1;i<arguments.length;i++){ const k=arguments[i];
 function hasImp(id){ return imp(id).length>0; }
 function prodBySku(){ const m={}; DB.products.forEach(p=>m[String(p.sku).toLowerCase()]=p); return m; }
 function findProd(sku){ return prodBySku()[String(sku||'').toLowerCase()] || null; }
+/* Coste base del producto. Desde M1.1 ya no es la última palabra: es la red de
+   seguridad para las unidades que ningún lote de compra cubre. Quien decide el
+   coste de una venta concreta es unitCostAt(), en 12c-lotes.js. */
 function landed(p){ return p ? (toNum(p.cogs)+toNum(p.freight)) : 0; }
 function periodStart(){ return periodDays ? addDays(today(), -periodDays) : new Date(2000,0,1); }
 
-/* Ventas normalizadas desde el informe de pedidos */
-function salesRows(){
-  const from = periodStart();
+/* Ventas normalizadas desde el informe de pedidos.
+   Sin argumentos se comporta como siempre: periodo y país de la interfaz.
+   El histórico (M0) la llama con {from:null, country:'ALL'} porque archiva el
+   negocio entero, no la vista que tengas abierta. */
+function salesRows(opt){
+  opt = opt || {};
+  const from = opt.from !== undefined ? opt.from : periodStart();
+  const cf   = opt.country !== undefined ? opt.country : countryFilter;
   return imp('orders').map(r=>{
     const d = parseDate(gv(r,'_date','purchasedate'));
     const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
@@ -618,8 +662,8 @@ function salesRows(){
       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
       cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0
     };
-  }).filter(r=>r.date && !r.cancelled && r.date>=from &&
-               (countryFilter==='ALL' || r.country===countryFilter));
+  }).filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
+               (cf==='ALL' || r.country===cf));
 }
 /* Comisiones reales desde la liquidación */
 function settlementFees(){
@@ -667,8 +711,12 @@ function pnl(){
   const tax      = S.reduce((a,r)=>a+r.tax,0);
   const net      = grossInc - tax;
   const pm       = prodBySku();
-  let cogs=0, cogsKnown=0;
-  S.forEach(r=>{ const p=pm[String(r.sku).toLowerCase()]; if(p){ cogs += landed(p)*r.qty; cogsKnown += r.qty; } });
+  /* M1.1 · el coste ya no es una constante por SKU: cada venta se costea con
+     el lote que le toca según el método elegido. `cost.quality` dice cuántas
+     unidades están respaldadas por una compra real y cuántas por la red de
+     seguridad, que es lo que permite auditar este número en vez de creérselo. */
+  const cost = costOfSales(S);
+  const cogs = cost.cogs, cogsKnown = cost.known;
   const sf = settlementFees();
   const measured = sf.rows>0;
   let referral, fba, storage, otherFee;
@@ -699,6 +747,7 @@ function pnl(){
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+    cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
     margin: net>0 ? profit/net*100 : 0,
     tacos: grossInc>0 ? ppc/grossInc*100 : 0,
@@ -722,9 +771,14 @@ function skuStats(){
   const rows = Object.keys(m).map(k=>{
     const x=m[k], p=pm[k.toLowerCase()];
     const netRev = x.revenue/1.21;
-    const cogs = p ? landed(p)*x.units : 0;
+    /* El coste sale del mismo cálculo que el P&L, no de una fórmula paralela.
+       Dos maneras de calcular lo mismo es como los números dejan de cuadrar
+       entre pantallas, que es precisamente la queja que tiene la competencia. */
+    const cb = P.costBySku[k] || {cogs:0, units:0};
+    const cogs = cb.cogs || 0;
     const profit = netRev - x.revenue*feeRate - x.revenue*ppcRate - cogs;
     return Object.assign(x,{netRev, cogs, profit, hasCost:!!p,
+      unitCost: x.units>0 ? cogs/x.units : 0,
       margin: netRev>0?profit/netRev*100:0, share:0, cum:0, abc:'C'});
   }).sort((a,b)=>b.profit-a.profit);
   const totPos = rows.filter(r=>r.profit>0).reduce((a,r)=>a+r.profit,0) || 1;
@@ -770,31 +824,43 @@ function invStats(){
       excess: toNum(pl.estimatedexcessquantity),
       aged: toNum(pl.invage271to365days)+toNum(pl.invage365plusdays),
       sellThrough: toNum(pl.sellthrough),
-      value: qty*landed(p),
+      /* Valorar el stock al coste del último lote comprado, no al coste base
+         de hace un año: el capital inmovilizado es lo que costaría reponerlo. */
+      unitCost: costNow(p),
+      value: qty*costNow(p),
       risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok'))
     };
   }).filter(r=>r.qty>0||r.velocity>0).sort((a,b)=>a.cover-b.cover);
 }
+/* El P&L del negocio entero, sin el filtro de país de la interfaz. Lo necesita
+   la comparativa por mercados: si el numerador es de un solo país y el
+   denominador de todos, los porcentajes no significan nada. */
+function pnlAll(){
+  const c = countryFilter;
+  countryFilter = 'ALL';
+  try{ return pnl(); } finally { countryFilter = c; }
+}
 /* Beneficio por mercado, con la gestoría amortizada entre las unidades reales */
 function countryStats(){
-  const S = imp('orders').map(r=>({d:parseDate(gv(r,'_date','purchasedate')),
-                                   c:countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')),
-                                   q:toNum(gv(r,'_qty','quantity')), rev:toNum(gv(r,'_amount','itemprice')),
-                                   st:String(gv(r,'_status','itemstatus')||'').toLowerCase()}))
-                         .filter(r=>r.d && r.st.indexOf('cancel')<0 && r.st.indexOf('anulad')<0 && r.d>=periodStart());
-  const P = pnl();
+  const rows = salesRows({from:periodStart(), country:'ALL'});
+  const P = pnlAll();
   const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee+P.ppc)/P.grossInc : 0.32;
-  const cogsPerUnit = P.units>0 ? P.cogs/P.units : 0;
+  /* El coste va por PAÍS de verdad, no repartiendo el coste medio entre todas
+     las unidades. Repartir por unidades hacía que el mercado que vende el
+     producto caro saliera igual de rentable que el que vende el barato —o
+     mejor—, que es justo al revés y es la pantalla con la que se decide en qué
+     mercado empujar. */
+  const C = costOfSales(rows);
   const m={};
-  S.forEach(r=>{ const c=r.c||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.q; m[c].rev+=r.rev; });
+  rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.qty; m[c].rev+=r.revenue; });
   const scale = 365/(periodDays||30);
   return COUNTRIES.map(c=>{
     const x = m[c.code]||{units:0,rev:0};
     const conf = DB.compliance[c.code]||{};
     const vatCost = conf.active ? toNum(conf.vatCost) : 0;
     const netRev = x.rev/(1+c.vat/100);
-    const annualUnits = x.units*scale;
-    const gross = netRev - x.rev*feeRate - cogsPerUnit*x.units;
+    const cogs = (C.byCountry[c.code]||{cogs:0}).cogs;
+    const gross = netRev - x.rev*feeRate - cogs;
     const vatShare = vatCost*((periodDays||30)/365);
     const profit = gross - vatShare;
     return {c, units:x.units, rev:x.rev, netRev, profit, annual:profit*scale,
@@ -849,8 +915,11 @@ function poAmount(po){
 function poUnits(po){ return (po.items||[]).reduce((a,i)=>a+toNum(i.qty),0); }
 /* Reparto del flete al coste unitario, que es lo que cierra el círculo
    compra → coste → margen. Sin esto el margen es una estimación. */
-function poUnitCost(po, sku){
-  const it = (po.items||[]).find(i=>String(i.sku)===String(sku));
+/* Por LÍNEA, no por SKU. El mismo SKU puede aparecer dos veces en un pedido
+   —una reposición y una ampliación negociadas a precios distintos— y resolver
+   el flete con la primera línea mientras el coste sale de la segunda producía
+   fletes negativos y un 25 % de coste de menos, sin ningún aviso. */
+function poUnitCostOf(po, it){
   if(!it) return 0;
   const totUnits = poUnits(po), totVal = (po.items||[]).reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0);
   const f = toNum(po.freight);
@@ -859,13 +928,40 @@ function poUnitCost(po, sku){
   else if(totUnits>0) share = f/totUnits;
   return toNum(it.unitCost) + share;
 }
+function poUnitCost(po, sku){
+  return poUnitCostOf(po, (po.items||[]).find(i=>String(i.sku)===String(sku)));
+}
+/* M1.1 · un pedido recibido crea el LOTE, con su fecha, sus unidades y el flete
+   ya repartido. Antes sobrescribía el coste del producto, y eso reescribía
+   hacia atrás el margen de todo lo vendido con el lote anterior: el histórico
+   cambiaba de números sin que nadie hubiera vendido nada distinto.
+   El coste base se sigue actualizando porque es la red de seguridad, pero ya
+   no es lo que costea las ventas anteriores a esta compra. */
 function applyPOCosts(po){
-  let n2=0;
-  (po.items||[]).forEach(i=>{
+  /* Sin fecha de recepción no se crea nada. Antes se caía en la llegada
+     prevista y, si no la había, en la fecha del pedido: un pedido cursado hace
+     45 días y todavía en un barco fechaba el lote hace 45 días y subía un 61 %
+     el coste de ventas que se sirvieron con stock viejo. Y no saltaba ningún
+     aviso, porque el aviso solo miraba fechas futuras. */
+  if(!poLotDate(po)){
+    toast('Este pedido no tiene fecha de recepción. Ponla en «Recibido el»: es la que decide qué ventas se costean con este lote, y sin ella el coste se aplicaría a ventas que se sirvieron con stock anterior.');
+    return;
+  }
+  let n2=0, lots=0;
+  const futuro = poLotDate(po) > iso(today());
+  (po.items||[]).forEach((i,idx)=>{
     const p = findProd(i.sku);
-    if(p){ p.cogs = +toNum(i.unitCost).toFixed(4);
-           p.freight = +(poUnitCost(po,i.sku)-toNum(i.unitCost)).toFixed(4); n2++; }
+    if(!p) return;
+    if(lotFromPO(po, i, idx)) lots++;
+    n2++;
   });
+  /* Ya NO se toca p.cogs. El coste base es lo que el producto valía antes de
+     que hubiera registro de compras, y machacarlo con el precio del último
+     pedido reescribía hacia atrás el margen de todo lo vendido: recibir un
+     contenedor en agosto subía el coste de una venta de marzo. El pedido crea
+     su lote, con su fecha, y ahí se queda. */
   saveDB(); refreshAll();
-  toast(n2 ? ('Coste actualizado en '+n2+' producto'+(n2===1?'':'s')+' con el flete repartido') : 'Ningún SKU del pedido está en el catálogo');
+  if(!n2){ toast('Ningún SKU del pedido está en el catálogo'); return; }
+  toast(lots+' lote'+(lots===1?'':'s')+' de coste creado'+(lots===1?'':'s')+' con fecha '+poLotDate(po)+', flete repartido'+
+    (futuro ? ' · OJO: la fecha de recepción es futura, así que el lote no costeará ninguna venta todavía' : ''));
 }

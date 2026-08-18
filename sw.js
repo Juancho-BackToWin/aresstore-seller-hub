@@ -1,5 +1,5 @@
-/* Aresstore Seller Hub — service worker · v0.5 · 2026-08-17 16:37 UTC */
-const CACHE = 'aresstore-0.5-202608171637';
+/* Aresstore Seller Hub — service worker · v0.7.0 · 2026-08-17 23:53 UTC */
+const CACHE = 'aresstore-0.7.0-202608172353';
 const SHELL = ['./','./index.html','./manifest.webmanifest',
                './icon-192.png','./icon-512.png','./icon-180.png','./icon-maskable-512.png'];
 self.addEventListener('install', e => {

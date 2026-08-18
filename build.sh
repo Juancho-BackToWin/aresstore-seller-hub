@@ -15,7 +15,7 @@ echo "→ Compilando ${STAMP}"
 # 1 · un solo archivo HTML con todo dentro
 cat src/01-head.html src/02-views.html src/03-calculadora.html src/04-acerca.html \
     src/05-auditoria.html src/06-guia.html src/07-close.html \
-    src/10-const.js src/11-motor-validacion.js src/12-datos.js src/13-render.js > index.html
+    src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js > index.html
 printf '\n</script>\n</body>\n</html>\n' >> index.html
 
 # 2 · sellar la versión para que se vea en la interfaz
@@ -84,6 +84,6 @@ c.paste(i,(51,51),i); c.save('icon-maskable-512.png')
 PY
 
 echo "→ index.html $(wc -c < index.html) bytes · cache ${CACHE}"
-node --check <(cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/13-render.js) 2>/dev/null \
-  || { cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/13-render.js > /tmp/_chk.js; node --check /tmp/_chk.js; }
+node --check <(cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js) 2>/dev/null \
+  || { cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js > /tmp/_chk.js; node --check /tmp/_chk.js; }
 echo "→ sintaxis correcta"

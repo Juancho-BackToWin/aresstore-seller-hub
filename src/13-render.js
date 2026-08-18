@@ -627,7 +627,12 @@ function renderLotes(){
       ks.sort().map(sk=>{
         const b = B[sk];
         const p = DB.products.filter(x=>String(x.sku).toLowerCase()===sk)[0];
-        const dif = b.bought - b.sold - b.stock;
+        /* El cuadre se LEE del motor, no se recalcula aquí. Recalcularlo con
+           b.sold (ventas brutas) daba un número distinto del que el motor usa
+           para recortar la cola, y distinto del texto de al lado: exactamente
+           las devoluciones de diferencia. Un SKU que cuadraba perfecto llegaba
+           a mostrar «−12» junto a «cuadra exactamente». */
+        const dif = b.sobra - b.falta;
         let txt, cls;
         if(b.falta>0){ txt=num(b.falta)+' vendidas que ningún lote explica · van al coste base como stock de apertura'; cls='neg'; }
         else if(!b.stockKnown){ txt='no se ha visto el stock de este SKU: no se puede cuadrar'; cls='warn'; }

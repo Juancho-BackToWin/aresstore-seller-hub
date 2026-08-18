@@ -216,7 +216,13 @@
   .storage-banner{background:#FFF3E6;border:1px solid #F5D3AE;color:#7A3D06;border-radius:11px;padding:11px 15px;font-size:12.5px;margin-bottom:16px;display:none}
   /* ---------- TIMELINE / CASH ---------- */
   .cashchart{display:flex;align-items:flex-end;gap:2px;height:170px;padding:10px 0;border-bottom:1px solid var(--hair);position:relative}
-  .cashchart .cbar{flex:1;min-width:2px;border-radius:2px 2px 0 0;position:relative;transition:.2s}
+  /* La barra es la COLUMNA entera; lo que se pinta es .cfill, colgado de la
+     linea de cero. Antes la altura era el valor absoluto contra flex-end, asi
+     que un saldo de -6.000 se dibujaba identico a uno de +6.000 y cuanto mas
+     hondo era el agujero, mas alta salia la barra. */
+  .cashchart .cbar{flex:1;min-width:2px;align-self:stretch;position:relative;transition:.2s}
+  .cashchart .cfill{position:absolute;left:0;right:0;border-radius:2px 2px 0 0}
+  .cashchart .cfill.neg{border-radius:0 0 2px 2px}
   .cashchart .cbar:hover{opacity:.75}
   .cashaxis{display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-2);font-family:var(--mono);margin-top:6px}
   .zeroline{position:absolute;left:0;right:0;border-top:1px dashed var(--stop);pointer-events:none}

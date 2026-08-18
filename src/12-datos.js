@@ -1018,17 +1018,45 @@ function cashProjection(){
   const dayRev  = P.grossInc/daysInPeriod();
   const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
   const dayPpc  = (P.ppc/daysInPeriod()) || cs.ppcDaily || 0;
-  const dayCogsFlow = 0;                       // el coste sale por los pedidos, no a diario
+
+  /* Reponer lo que vendes también cuesta dinero.
+
+     Aquí había un `dayCogsFlow = 0` con el comentario «el coste sale por los
+     pedidos, no a diario». Solo es verdad si has cargado los pedidos, y la
+     curva es justo lo que miras ANTES de cargarlos. Resultado medido con los
+     datos de ejemplo: la pantalla decía «caja mínima €1.424, aguanta los 90
+     días» y recomendaba un pedido adicional de €7.000, cuando reponiendo lo
+     que vende se queda en −€232 y toca el descubierto el mismo día que llamaba
+     mínimo. Vender noventa días sin volver a comprar género no es un escenario
+     prudente: es otro negocio.
+
+     Para no cobrarlo dos veces, la mercancía que ya has pedido y aún no ha
+     llegado cubre sus días: durante esos días no se carga reposición, porque
+     ya la estás pagando en los vencimientos del pedido. */
+  const dayUnits    = P.units/daysInPeriod();
+  const dayCogsFlow = P.cogs/daysInPeriod();
+  const unidsEnCurso = DB.pos.filter(po=>po.status!=='closed')
+                             .reduce((a,po)=>a+poUnits(po), 0);
+  const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
+
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
-  // Vencimientos de pedidos de compra pendientes
+  /* Vencimientos de pedidos de compra pendientes.
+
+     Lo vencido y sin pagar no es dinero que ya no vayas a desembolsar: es el
+     que pagas mañana. Antes el filtro `k>=0` lo tiraba de la curva mientras el
+     KPI «Pagos comprometidos» seguía contándolo, así que la pantalla enseñaba
+     una deuda que la proyección no gastaba nunca. Ahora cae en el día 0. */
   const poFlows = {};
+  let fueraDeVentana = 0;
   DB.pos.forEach(po=>{
     if(po.status==='closed') return;
     (po.payments||[]).forEach(pay=>{
       if(pay.paid) return;
       const d = parseDate(pay.dueDate); if(!d) return;
-      const k = daysBetween(start,d);
-      if(k>=0 && k<days) poFlows[k] = (poFlows[k]||0) + poAmount(po)*(toNum(pay.pct)/100);
+      const importe = poAmount(po)*(toNum(pay.pct)/100);
+      const k = Math.max(0, daysBetween(start,d));
+      if(k<days) poFlows[k] = (poFlows[k]||0) + importe;
+      else fueraDeVentana += importe;      // vence más allá de los 90 días
     });
   });
   let bal = toNum(cs.start), pending = 0;
@@ -1041,13 +1069,15 @@ function cashProjection(){
       inflow = pending*(1 - toNum(cs.reserve)/100);
       pending -= inflow;
     }
-    outflow += dayPpc + dayCogsFlow;
+    outflow += dayPpc;
+    if(k >= diasCubiertos) outflow += dayCogsFlow;   // ver «reponer lo que vendes»
     if(d.getDate()===1) outflow += monthlyFixed;
     if(d.getDate()===20) outflow += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
     if(poFlows[k]) outflow += poFlows[k];
     bal += inflow - outflow;
     out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0});
   }
+  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana};
   return out;
 }
 function poAmount(po){

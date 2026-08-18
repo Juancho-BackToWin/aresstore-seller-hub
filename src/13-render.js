@@ -507,22 +507,29 @@ function renderTesoreria(){
   document.getElementById('cashChart').innerHTML =
     '<div class="zeroline" style="top:'+zeroPct.toFixed(1)+'%"></div>' +
     C.map(c=>{
-      const h = Math.max(1, Math.abs(c.bal)/range*100);
+      const h = Math.max(0.8, Math.abs(c.bal)/range*100);
       const col = c.bal<0 ? 'var(--stop)' : (c.bal<TARGET.cash ? 'var(--caution)' : 'var(--brand)');
-      const bottom = c.bal<0 ? (zeroPct===100?0:0) : 0;
-      return '<div class="cbar" style="height:'+h.toFixed(1)+'%;background:'+col+'" title="'+
-        c.date.toLocaleDateString('es-ES')+': '+fmt(c.bal,0)+(c.po?' · pago de pedido '+fmt(c.po,0):'')+'"></div>';
+      /* Positivo crece hacia arriba desde la línea de cero; negativo cuelga
+         hacia abajo. El signo tiene que verse en la forma, no solo en el color:
+         un descubierto no puede parecer un día con caja de sobra. */
+      const pos = c.bal>=0
+        ? 'bottom:'+(100-zeroPct).toFixed(1)+'%;height:'+h.toFixed(1)+'%'
+        : 'top:'+zeroPct.toFixed(1)+'%;height:'+h.toFixed(1)+'%';
+      return '<div class="cbar" title="'+
+        c.date.toLocaleDateString('es-ES')+': '+fmt(c.bal,0)+(c.po?' · pago de pedido '+fmt(c.po,0):'')+'">'+
+        '<div class="cfill'+(c.bal<0?' neg':'')+'" style="'+pos+';background:'+col+'"></div></div>';
     }).join('');
   document.getElementById('cashAxis').innerHTML =
     '<span>hoy</span><span>+30 d</span><span>+60 d</span><span>+90 d</span>';
 
   const neg = C.filter(c=>c.bal<TARGET.cash);
   let v;
-  if(!DB.pos.length && !DB.expenses.length){
-    v='<strong>Esta curva todavía no dice gran cosa.</strong> Está proyectando solo con las ventas y el ciclo de liquidación. '+
-      'Cobra sentido cuando cargas tus pedidos de compra con sus vencimientos en la pestaña Compras y tus gastos fijos aquí al lado: '+
-      'entonces verás el hueco real entre pagar la fábrica y cobrar de Amazon, que es donde se rompe la mayoría de vendedores en crecimiento.';
-  } else if(neg.length){
+  /* El aviso rojo va PRIMERO. Estaba detrás de «no hay pedidos ni gastos», así
+     que un usuario nuevo podía pasar noventa días por debajo del colchón, o
+     directamente en negativo, sin ver una sola línea roja aquí — mientras el
+     Panel, con los mismos datos, sí avisaba. Dos pantallas y dos veredictos
+     opuestos es peor que no tener veredicto. */
+  if(neg.length){
     v='<strong style="color:var(--stop)">Te quedas por debajo del colchón durante '+neg.length+' día'+(neg.length===1?'':'s')+', empezando el '+neg[0].date.toLocaleDateString('es-ES')+'.</strong> '+
       'Tres salidas por orden de preferencia: retrasar o fraccionar el próximo pedido de compra, negociar un plazo mayor con el proveedor, o buscar financiación. '+
       'La cuarta —reducir stock— parece la más fácil y es la más cara, porque romper cobertura activa la tarifa por bajo inventario y hunde el posicionamiento.';
@@ -530,8 +537,19 @@ function renderTesoreria(){
     v='<strong>La caja aguanta los 90 días por encima del colchón.</strong> Con '+fmt(end.bal-toNum(cs.start),0)+' de generación neta en el periodo, '+
       'tienes margen para un pedido adicional de hasta '+fmt(Math.max(0,min.bal-TARGET.cash),0)+' sin comprometer el mínimo de seguridad.';
   }
+  if(!DB.pos.length && !DB.expenses.length){
+    v+='<br><br>Y todavía le falta la mitad del cuadro: no has cargado ningún pedido de compra ni gastos fijos. '+
+       'Cárgalos en Compras y aquí al lado y verás el hueco real entre pagar la fábrica y cobrar de Amazon, '+
+       'que es donde se rompe la mayoría de vendedores en crecimiento.';
+  }
+  const M = C.meta||{};
+  if(M.fueraDeVentana>0)
+    v+='<br><br>Hay '+fmt(M.fueraDeVentana,0)+' de vencimientos que caen más allá de los 90 días: cuentan en «pagos comprometidos» y no en esta curva.';
   v+='<br><br><span class="mut">Supuestos: las ventas se proyectan con la media del periodo seleccionado y sin estacionalidad, '+
      'el cobro de Amazon se libera cada ciclo reteniendo la reserva, y el IVA se paga el día 20 de cada mes. '+
+     'La reposición de lo que vendes se descuenta a diario ('+fmt(M.dayCogsFlow||0)+'/día a coste puesto)'+
+     (M.diasCubiertos>=1 ? ', salvo los primeros '+num(M.diasCubiertos,0)+' días, que ya los cubre la mercancía que tienes pedida' : '')+'. '+
+     'El primer cobro de Amazon se sitúa a un ciclo completo desde hoy, que es el supuesto más prudente: si tu ciclo va por otro sitio, el mínimo cambia. '+
      'La estacionalidad de Q4 puede desviar esto sustancialmente: úsalo para detectar el problema, no para fijar el importe exacto.</span>';
   document.getElementById('cashVerdict').innerHTML=v;
 

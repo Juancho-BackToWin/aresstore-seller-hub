@@ -1,5 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+
+  "//": "Aqui no se compila nada. index.html se genera en local con ./build.sh y se sube ya compilado, asi que Vercel solo tiene que servir la raiz. Sin esto Vercel ve el script build de package.json, intenta ejecutar ./build.sh y falla: el bit de ejecucion se pierde al subir por la web (exit 126, Permission denied), y ademas build.sh necesita Pillow para rasterizar los iconos, que en el contenedor de Vercel no esta.",
+
+  "installCommand": "echo Sin dependencias: la app es un unico fichero.",
+  "buildCommand": "echo Sin compilacion: index.html ya viene compilado en el repositorio.",
+  "outputDirectory": ".",
+
   "headers": [
     {
       "source": "/sw.js",

@@ -183,6 +183,56 @@ const js = body => '(()=>{' + LAB + body + '})()';
     Math.round(muerta.cartera)+' d = 1.100 ud / 11 al día · la media con tope daba '+
     Math.round(muerta.mediaConTope)+' d, un 253 % más');
 
+  console.log('\n=== INV-F · EL HISTÓRICO NO SE INVENTA DÍAS QUE NO ARCHIVÓ ===');
+  /* `historyStats().first` tomaba el día 1 del mes compactado más antiguo,
+     aunque ese mes solo tuviera los últimos días dentro: el KPI decía «141 días
+     desde el 2026-04-01» cuando el primer dato era del 20 de abril y eran 120.
+     Un número falso en el titular del módulo que existe para ser fiable.
+
+     Caso: se archivan 100 días terminando hoy, y se compacta dejando 30 en
+     detalle. El primer día archivado es hoy − 99, y eso es lo que debe decir. */
+  const spanH = await page.evaluate(js(`
+    const H = hist();
+    for(let k=0;k<100;k++){
+      H.d[dia(k)] = {s:{'rapido':[5, 100, 0]}, cs:{}, k:null};
+    }
+    const primeroReal = dia(99);
+    compactHistory(30);
+    const st = historyStats();
+    return {primeroReal, first:st.first, span:st.span, meses:st.months, dias:st.days};
+  `));
+  check('el primer día que dice es el primero que archivó',
+    spanH.first===spanH.primeroReal,
+    spanH.first+' · el real es '+spanH.primeroReal+' · antes decía el día 1 de ese mes');
+  check('y la historia acumulada son 100 días, ni uno más', spanH.span===100,
+    spanH.span+' d · con el fallo llegaba a inventarse hasta 30');
+
+  console.log('\n=== INV-G · LA ROTURA COMPACTADA SE QUEDA EN SU MES ===');
+  /* El comentario decía que el recuento se repartía al mes que le toca y el
+     código hacía `keys[0].slice(0,7)` DENTRO del bucle: siempre el primero.
+     110 días de rotura acabaron apilados en un mes con 2 días archivados. */
+  const rot = await page.evaluate(js(`
+    const H = hist();
+    /* 100 días: los 50 más antiguos con stock 0 y sin ventas (rotura), los
+       otros 50 vendiendo. La rotura tiene que quedar repartida por meses, y
+       ningún mes puede acumular más días de rotura que días archivados. */
+    for(let k=0;k<100;k++){
+      const roto = k>=50;
+      H.d[dia(k)] = {s: roto?{}:{'rapido':[5,100,0]}, cs:{}, k: roto?{'rapido':0}:{'rapido':500}};
+    }
+    compactHistory(30);
+    const meses = Object.keys(H.m).sort();
+    return meses.map(mk=>({mes:mk, dias:H.m[mk].days,
+      oos: Object.keys(H.m[mk].oos||{}).reduce((a,sk)=>a+H.m[mk].oos[sk],0)}));
+  `));
+  rot.forEach(m=>console.log('     '+m.mes+' · '+m.dias+' días archivados · '+m.oos+' de rotura'));
+  check('ningún mes acumula más rotura que días tiene',
+    rot.every(m=>m.oos<=m.dias),
+    rot.map(m=>m.mes+':'+m.oos+'/'+m.dias).join(' · ')+' · con el fallo el primer mes se llevaba toda la rotura del tramo');
+  check('y la rotura sigue estando repartida en más de un mes',
+    rot.filter(m=>m.oos>0).length>1 || rot.length===1,
+    rot.filter(m=>m.oos>0).length+' meses con rotura');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

@@ -938,7 +938,10 @@ function pnl(){
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
-    margin: net>0 ? profit/net*100 : 0,
+    /* Sin ingreso no hay margen que calcular, y devolver 0 hacía que una
+       pérdida de 900 € con cero ventas se presentara como «Margen neto 0,0 %».
+       `null` es lo que hay: la pantalla escribe «—». */
+    margin: net>0 ? profit/net*100 : null,
     tacos: grossInc>0 ? ppc/grossInc*100 : 0,
     roi: cogs>0 ? profit/cogs*100 : 0,
     avgPrice: units>0 ? grossInc/units : 0,

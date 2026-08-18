@@ -147,7 +147,9 @@ function renderPanel(){
   document.getElementById('panelKpis').innerHTML =
     kpi('Ventas '+(periodDays?periodDays+' d':'histórico'), fmt(P.grossInc,0), num(P.units)+' unidades','accent')+
     kpi('Beneficio neto', fmt(P.profit,0), tag+' · '+num(P.units?P.profit/P.units:0,2)+' €/ud', P.profit>0?'pos':'neg')+
-    kpi('Margen neto', num(P.margin,1)+'%', 'objetivo ≥'+TARGET.net+'%', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
+    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+        P.margin===null?'sin ingreso en el periodo':'objetivo ≥'+TARGET.net+'%',
+        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
     kpi('ROI', num(P.roi,0)+'%', 'sobre coste de producto', P.roi>=TARGET.roi?'pos':(P.roi>0?'warn':'neg'))+
     kpi('TACOS', num(P.tacos,1)+'%', 'objetivo <'+TARGET.tacos+'%', P.tacos<=TARGET.tacos?'pos':'warn')+
     kpi('Precio medio', fmt(P.avgPrice), 'devoluciones '+num(P.retRate,1)+'%','');
@@ -184,7 +186,7 @@ function renderPanel(){
     const miss = P.units-P.cogsKnown;
     A.push({p:1.5,lvl:'stop',t:'El margen que estás viendo no incluye el coste de '+num(miss)+' unidades',
       s:'Solo '+num(P.cogsKnown)+' de '+num(P.units)+' unidades vendidas tienen coste de compra cargado, así que el beneficio de '+
-        fmt(P.profit,0)+' y el margen del '+num(P.margin,1)+'% están inflados. Es el error más común y el más caro: da por bueno un producto que pierde dinero. '+
+        fmt(P.profit,0)+' y el margen del '+(P.margin===null?'—':num(P.margin,1)+'%')+' están inflados. Es el error más común y el más caro: da por bueno un producto que pierde dinero. '+
         'Crea los productos en Catálogo con su coste real.', go:'catalogo'});
   } else if(nocost.length) A.push({p:6,lvl:'info',t:nocost.length+' producto sin coste cargado',
     s:'Sin coste de compra el margen que ves está inflado. Carga el coste base en Catálogo y, si tienes las compras, sus lotes: el coste base es el que se aplica a las ventas anteriores a tu primer lote.', go:'catalogo'});
@@ -405,7 +407,9 @@ function renderRent(){
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
     kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
-    kpi('Margen neto', num(P.margin,1)+'%','sobre ingreso sin IVA', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
+    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+        P.margin===null?'sin ingreso en el periodo':'sobre ingreso sin IVA',
+        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
     kpi('Coste de producto', fmt(P.cogs,0),
         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
                             : (costMethodInfo().name.toLowerCase()+' · '+num(P.costMeasuredPct||0,0)+' % con lote'),
@@ -514,7 +518,11 @@ function renderTesoreria(){
   const end = C[C.length-1]||{bal:0};
   const outPO = DB.pos.filter(p=>p.status!=='closed').reduce((a,p)=>a+
     (p.payments||[]).filter(x=>!x.paid).reduce((s,x)=>s+poAmount(p)*toNum(x.pct)/100,0),0);
-  const tied = DB.pos.filter(p=>p.status!=='closed').reduce((a,p)=>a+poAmount(p),0);
+  /* «En curso» es lo que todavía no ha llegado. Un pedido en estado `received`
+     ya está en el almacén y ya lo valora Inventario: contarlo también aquí
+     declaraba 10.000 € de capital para 5.000 € de género. */
+  const tied = DB.pos.filter(p=>p.status!=='closed' && p.status!=='received')
+                     .reduce((a,p)=>a+poAmount(p),0);
   document.getElementById('cashKpis').innerHTML =
     kpi('Caja hoy', fmt(toNum(cs.start),0),'saldo de partida','accent')+
     kpi('Caja mínima a 90 d', fmt(min.bal,0), 'día '+min.k+' · '+min.date.toLocaleDateString('es-ES'), min.bal<TARGET.cash?'neg':'pos')+
@@ -962,13 +970,29 @@ const PO_STATES=[['draft','Borrador'],['ordered','Pedido'],['production','Produc
 function renderCompras(){
   const open = DB.pos.filter(p=>p.status!=='closed');
   const committed = open.reduce((a,p)=>a+(p.payments||[]).filter(x=>!x.paid).reduce((s,x)=>s+poAmount(p)*toNum(x.pct)/100,0),0);
+  /* Plazo medio real: el de los proveedores a los que compras, pesado por lo
+     que les compras. Sin pedidos no hay plazo medio que dar, y decirlo con un
+     «—» es más honesto que un cero que parece un dato. */
+  let plazoNum=0, plazoDen=0;
+  DB.pos.forEach(po=>{
+    const sup = DB.suppliers.filter(x=>x.id===po.supplierId)[0];
+    if(!sup) return;
+    const u = poUnits(po);
+    plazoNum += toNum(sup.lead)*u; plazoDen += u;
+  });
+  const plazoMedio = plazoDen>0 ? plazoNum/plazoDen : null;
   document.getElementById('poKpis').innerHTML =
     kpi('Pedidos abiertos', num(open.length), DB.pos.length+' en total','accent')+
     kpi('Valor en curso', fmt(open.reduce((a,p)=>a+poAmount(p),0),0),'mercancía comprometida','')+
     kpi('Pendiente de pagar', fmt(committed,0),'anticipos y saldos', committed>0?'warn':'pos')+
     kpi('Unidades entrantes', num(open.reduce((a,p)=>a+poUnits(p),0)),'llegando al almacén','')+
     kpi('Proveedores', num(DB.suppliers.length),'con ficha creada','')+
-    kpi('Plazo medio', num(DB.suppliers.length?DB.suppliers.reduce((a,s)=>a+toNum(s.lead),0)/DB.suppliers.length:0,0)+' d','desde pedido a almacén','');
+    /* Ponderado por las unidades que de verdad has comprado a cada uno. La
+       media simple de las fichas hacía que crear un proveedor rápido al que no
+       le has pedido nada bajara tu plazo de 33 a 23 días en pantalla, y con
+       cero proveedores enseñaba «0 d» como si fuera una medición. */
+    kpi('Plazo medio', plazoMedio===null ? '—' : num(plazoMedio,0)+' d',
+        plazoMedio===null ? 'sin pedidos que ponderar' : 'ponderado por unidades compradas','');
 
   document.getElementById('poList').innerHTML = DB.pos.length ? DB.pos.map(po=>{
     const sup=DB.suppliers.find(s=>s.id===po.supplierId);

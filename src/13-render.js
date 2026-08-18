@@ -895,28 +895,44 @@ function renderInv(){
   const I = invStats();
   const value = I.reduce((a,r)=>a+r.value,0);
   const rupture = I.filter(r=>r.risk==='low'&&r.velocity>0), over = I.filter(r=>r.risk==='over'&&r.qty>0);
+  /* Cobertura de la cartera: stock total entre venta diaria total. No se
+     promedian porcentajes ni ratios por SKU; se dividen los totales. */
+  const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
+  const ventaDia   = I.reduce((a,r)=>a+r.velocity, 0);
+  const coberturaCartera = ventaDia>0 ? stockTotal/ventaDia : 0;
   document.getElementById('invKpis').innerHTML =
     kpi('Unidades en almacén', num(I.reduce((a,r)=>a+r.qty,0)), I.length+' referencias','accent')+
     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
     kpi('Bajo cobertura', num(rupture.length),'riesgo de tarifa por bajo inventario', rupture.length?'neg':'pos')+
     kpi('Sobrestock', num(over.length),'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
-    kpi('Cobertura media', num(I.length?I.reduce((a,r)=>a+Math.min(r.cover,365),0)/I.length:0,0)+' d','objetivo ~'+TARGET.cover+' d','')+
+    /* Cobertura de la CARTERA: unidades totales entre venta diaria total. La
+       media aritmética de las coberturas por SKU decía 119 d con cuatro
+       referencias entre 26 y 113 días y una en 429, y además metía en la media
+       el centinela de «venta cero» como si fueran 365 días de cobertura: una
+       sola referencia muerta subía el titular un 34 %. Un titular de 119 días
+       frente a un objetivo de 35 se lee «voy sobrado» con una referencia a 26
+       días y pidiendo 421 unidades en la fila de abajo. */
+    kpi('Cobertura de la cartera', num(coberturaCartera,0)+' d',
+        'stock total entre venta diaria · objetivo ~'+TARGET.cover+' d','')+
     kpi('Hay que reponer', num(I.filter(r=>r.need>0).length),'referencias por debajo del punto de pedido', I.filter(r=>r.need>0).length?'warn':'pos');
 
   tbl('invTable','<tr><th>SKU</th><th class="num">Stock</th><th class="num">Venta/día</th><th class="num">Cobertura</th>'+
-    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">Pedir</th><th>Estado</th></tr>'+
+    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">En camino</th><th class="num">Pedir</th><th>Estado</th></tr>'+
     (I.length? I.map(r=>
       '<tr><td class="name"><strong>'+esc(r.sku)+'</strong> <span class="pill '+(r.fbm?'info':'core')+'">'+(r.fbm?'FBM':'FBA')+'</span>'+
       (r.name && r.name!==r.sku ? '<br><span class="mut" style="font-size:11px">'+esc(r.name)+'</span>' : '')+'</td>'+
       '<td class="num">'+num(r.qty)+'</td><td class="num">'+num(r.velocity,1)+'</td>'+
       '<td class="num '+(r.cover<28?'neg':r.cover>154?'warn':'pos')+'" style="font-weight:600">'+(r.cover>900?'∞':num(r.cover,0)+' d')+'</td>'+
       '<td class="num mut">'+num(r.lead)+' d</td><td class="num mut">'+num(r.reorderPoint)+'</td>'+
+      '<td class="num '+(r.enCamino>0?'info':'mut')+'">'+(r.enCamino>0?num(r.enCamino):'—')+'</td>'+
       '<td class="num '+(r.need>0?'warn':'')+'" style="font-weight:600">'+(r.need>0?num(r.need):'—')+'</td>'+
       '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>':'<span class="pill stop">tarifa bajo inv.</span>')
              :r.risk==='over'?'<span class="pill warn">sobrestock</span>':'<span class="pill go">en banda</span>')+'</td></tr>').join('')
-      : '<tr><td colspan="8" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
+      : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
 
   let v='';
+  if(countryFilter!=='ALL')
+    v+='<strong>Esta pantalla ignora el filtro de país.</strong> El stock de FBA es europeo y no se puede trocear por país, así que las ventas tampoco: lo que ves es la cobertura del conjunto. Si dividiera las ventas y no el stock, la cobertura saldría cuatro veces mayor de lo que es.<br><br>';
   if(I.length){
     if(rupture.length) v+='<strong style="color:var(--stop)">'+rupture.length+' referencia'+(rupture.length===1?'':'s')+' por debajo de 28 días.</strong> '+
       'La tarifa por bajo inventario son entre 0,16 y 0,67 € por unidad en Alemania, Francia, Italia y España, y solo salta si la cobertura a 30 <em>y</em> a 90 días caen ambas bajo el umbral. Pero el coste real no es la tarifa: es perder posición en la página de resultados mientras estás sin stock, que tarda semanas en recuperarse. ';

@@ -999,11 +999,16 @@ function skuStats(){
 }
 /* Inventario consolidado: stock, cobertura y riesgo de tarifa */
 function invStats(){
-  const S = salesRows(), pm = prodBySku();
+  /* El stock de FBA es europeo y no se puede trocear por el desplegable de
+     país, así que las ventas tampoco. Con el filtro puesto, las ventas se
+     dividían y el stock no: la cobertura salía ×4 y la única referencia en
+     rotura desaparecía de la pantalla junto con las 421 unidades que había que
+     pedir. Aquí se mira siempre el conjunto, y la pantalla lo dice. */
+  const S = salesRows({country:'ALL'}), pm = prodBySku();
   const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
   /* Días OBSERVADOS, no días pedidos: ver salesSpan(). */
-  const days = Math.min(daysInPeriod(), salesSpan().days || daysInPeriod());
-  const stock={}, byCountry={};
+  const days = Math.min(daysInPeriod(), salesSpan({country:'ALL'}).days || daysInPeriod());
+  const stock={}, byCountry={}, mcTotal={};
   imp('inventory').forEach(r=>{
     const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
     stock[k]=(stock[k]||0)+toNum(gv(r,'_qty','afnfulfillablequantity'));
@@ -1011,9 +1016,16 @@ function invStats(){
   imp('multicountry').forEach(r=>{
     const k=gv(r,'_sku','sellersku','sku'), c=countryOf(gv(r,'_country','country')); if(!k) return;
     if(!byCountry[k]) byCountry[k]={};
-    if(c) byCountry[k][c]=(byCountry[k][c]||0)+toNum(gv(r,'_qty','quantityforlocalfulfillment'));
-    if(!stock[k]) stock[k]=0;
+    const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
+    if(c) byCountry[k][c]=(byCountry[k][c]||0)+q;
+    mcTotal[k]=(mcTotal[k]||0)+q;
   });
+  /* Un SKU que solo aparece en el informe multipaís valía CERO unidades aquí y
+     en el histórico, mientras la tabla de países de la misma pantalla enseñaba
+     sus 1.400. Los lotes de coste ya hacían este respaldo; Inventario se quedó
+     fuera de aquella corrección. Solo cuando el SKU no viene en el informe de
+     inventario: sumar los dos contaría el mismo stock dos veces. */
+  Object.keys(mcTotal).forEach(k=>{ if(!(k in stock)) stock[k]=mcTotal[k]; });
   if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku) stock[r.sku]=toNum(r.available); });
   const plan={}; imp('planning').forEach(r=>{ if(r.sku) plan[r.sku]=r; });
   const keys = Array.from(new Set(Object.keys(stock).concat(Object.keys(sold)).concat(DB.products.map(p=>String(p.sku)))));
@@ -1025,9 +1037,15 @@ function invStats(){
     const cover = velocity>0 ? qty/velocity : (qty>0?999:0);
     const lead = p&&p.supplierId ? (DB.suppliers.find(s=>s.id===p.supplierId)||{}).lead||45 : 45;
     const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
+    /* Lo que ya está en un barco cuenta. Sin esto, el ejemplo mandaba pedir
+       421 unidades más de una referencia que tenía 900 llegando, y encima la
+       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa. */
+    const enCamino = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received')
+      .reduce((a,po)=>a+(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
+                                       .reduce((b,i)=>b+toNum(i.qty),0), 0);
     const pl = plan[k]||{};
-    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead),
-      reorderPoint, need: Math.max(0, reorderPoint-qty),
+    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead), enCamino,
+      reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
       byCountry: fbm ? {} : (byCountry[k]||{}),
       excess: toNum(pl.estimatedexcessquantity),
       aged: toNum(pl.invage271to365days)+toNum(pl.invage365plusdays),

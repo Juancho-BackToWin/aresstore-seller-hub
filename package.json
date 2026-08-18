@@ -10,10 +10,11 @@
     "test:es": "node tests/es.test.js",
     "test:pwa": "node tests/pwa.test.js",
     "test:m0": "node tests/m0.test.js",
-    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pnl && npm run test:caja && npm run test:pwa",
+    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pnl && npm run test:caja && npm run test:inv && npm run test:pwa",
     "test:m11": "node tests/m11.test.js",
     "test:pnl": "node tests/pnl.test.js",
-    "test:caja": "node tests/caja.test.js"
+    "test:caja": "node tests/caja.test.js",
+    "test:inv": "node tests/inventario.test.js"
   },
   "devDependencies": {
     "playwright": "^1.62.1"

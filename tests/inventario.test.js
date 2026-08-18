@@ -233,6 +233,31 @@ const js = body => '(()=>{' + LAB + body + '})()';
     rot.filter(m=>m.oos>0).length>1 || rot.length===1,
     rot.filter(m=>m.oos>0).length+' meses con rotura');
 
+  console.log('\n=== INV-H · «NO HUBO ROTURA» NO SE DICE SIN HABER MIRADO ===');
+  /* La rotura se detecta comparando stock cero con venta cero, así que sin
+     ninguna foto de inventario dentro de la ventana no se detecta nada — y la
+     pantalla afirmaba «No se ha detectado ningún día de rotura», que es
+     presentar una ausencia de medición como una medición. */
+  const honest = await page.evaluate(js(`
+    const H = hist();
+    for(let k=1;k<=30;k++) H.d[dia(k)] = {s:{'rapido':[5,100,0]}, cs:{}, k:null};
+    go('historico');
+    const sinFoto = document.getElementById('histVelNote').textContent;
+    for(let k=1;k<=30;k++) H.d[dia(k)].k = {'rapido':500};
+    go('historico');
+    const conFoto = document.getElementById('histVelNote').textContent;
+    return {sinFoto, conFoto};
+  `));
+  check('sin ninguna foto de inventario, dice que NO PUEDE saberlo',
+    /no puedo saber si hubo rotura/i.test(honest.sinFoto),
+    honest.sinFoto.slice(0,110)+'…');
+  check('y no afirma que no hubo rotura',
+    !/^(?!.*no puedo).*no se ha detectado ning/i.test(honest.sinFoto.split('Cómo se detecta')[0]),
+    'antes decía «No se ha detectado ningún día de rotura» sobre cero mediciones');
+  check('con fotos todos los días, ya sí lo afirma y dice sobre cuántas',
+    /no se ha detectado/i.test(honest.conFoto) && /30 días con foto/i.test(honest.conFoto),
+    honest.conFoto.slice(0,120)+'…');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

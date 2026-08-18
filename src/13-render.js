@@ -362,6 +362,14 @@ function renderHistorico(){
     }).join('') : '<tr><td colspan="7" class="name mut">Todavía no hay días archivados con ventas. Importa el informe de pedidos.</td></tr>'));
 
   const withOos = V.filter(r=>r.oos>0);
+  /* Cuántas fotos de stock hay DENTRO de la ventana. La rotura se detecta
+     comparando stock cero con venta cero, así que sin fotos no se detecta
+     nada, y decir «no se ha detectado ninguna rotura» sin haber mirado es
+     presentar una ausencia de medición como una medición: justo lo que la
+     norma del proyecto prohíbe. */
+  const H0 = hist();
+  const desde = iso(addDays(today(), -30));
+  const conFoto = Object.keys(H0.d||{}).filter(k=>k>=desde && H0.d[k].k).length;
   let vn = '';
   if(!V.length){
     vn = 'Sin datos para calcular velocidad todavía.';
@@ -369,7 +377,11 @@ function renderHistorico(){
     vn = 'Ventana de 30 días, excluyendo hoy porque el informe del día en curso siempre viene incompleto. ';
     if(withOos.length) vn += '<strong>'+withOos.length+' referencia'+(withOos.length===1?'':'s')+' con días sin stock detectados.</strong> '+
       'Su velocidad real está por encima de la media simple, así que si repones con la media simple te vuelves a quedar corto. ';
-    else vn += 'No se ha detectado ningún día de rotura en la ventana. ';
+    else if(!conFoto) vn += '<strong>No puedo saber si hubo rotura de stock:</strong> no hay ninguna foto de inventario archivada dentro de esta ventana. '+
+      'La velocidad real que ves es igual a la media simple porque no hay con qué corregirla, y eso la deja por debajo de la verdadera si algún día se agotó algo. '+
+      'Importa el informe de inventario junto con el de pedidos, y cada vez que lo hagas. ';
+    else if(conFoto<10) vn += 'No se ha detectado ningún día de rotura, pero solo hay <strong>'+conFoto+' foto'+(conFoto===1?'':'s')+' de inventario</strong> en los 30 días: los demás son interpolación, no medición. Con una foto semanal se conoce el stock de un día de cada siete. ';
+    else vn += 'No se ha detectado ningún día de rotura en la ventana, sobre '+conFoto+' días con foto de inventario. ';
     vn += '<br><br><span class="mut">Cómo se detecta un día sin stock: se arrastra hacia delante la última foto de inventario conocida y '+
       'un día cuenta como roto solo si esa foto estaba a cero <em>y</em> además ese día no se vendió ni una unidad. Las dos condiciones juntas, '+
       'porque un stock a cero con ventas significa que la foto es vieja y un día sin ventas con stock es simplemente un día flojo. '+

@@ -82,7 +82,17 @@ function iso(d){
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
 }
 function addDays(d,k){ const x=new Date(d.getTime()); x.setDate(x.getDate()+k); return x; }
-function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+/* Días de calendario entre dos fechas, no milisegundos entre dos instantes.
+   `today()` lleva la hora del día y `parseDate()` devuelve medianoche, así que
+   restar en crudo daba un número que cambiaba a lo largo del día: a partir de
+   las 12:00, `round` bajaba un entero. Efectos medidos: el pago de proveedor
+   que vencía HOY salía en −1 y el filtro `k>=0` lo tiraba de la proyección de
+   caja (2.500 € de 10.000 desaparecidos), los demás vencimientos se adelantaban
+   un día, y la «historia acumulada» del histórico decía 8 días por la mañana y
+   9 por la tarde con los mismos datos. Es la misma familia que el fallo de
+   `iso()`: mezclar un instante con una fecha. */
+function startOfDay(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function daysBetween(a,b){ return Math.round((startOfDay(b)-startOfDay(a))/86400000); }
 function parseDate(s){
   if(!s) return null;
   s = String(s).trim();
@@ -641,6 +651,43 @@ function findProd(sku){ return prodBySku()[String(sku||'').toLowerCase()] || nul
 function landed(p){ return p ? (toNum(p.cogs)+toNum(p.freight)) : 0; }
 function periodStart(){ return periodDays ? addDays(today(), -periodDays) : new Date(2000,0,1); }
 
+/* Días que dura el periodo que se está mirando.
+
+   `periodDays = 0` es el botón «Todo», y valer cero lo hacía falsy: cada
+   `periodDays||30` caía al literal 30. Con un informe de 120 días, «Todo»
+   comparaba cuatro meses de ventas contra UN mes de gastos fijos (+10,9 puntos
+   de margen), anualizaba ×12,17 lo que ya eran cuatro meses («Aporta al año
+   €66.635» donde eran €4.100) y multiplicaba por cuatro la velocidad de venta,
+   con lo que Inventario mandaba pedir 2.156 unidades donde tocaban 311. Ni un
+   dato cambiaba: solo el botón. */
+function daysInPeriod(){
+  if(periodDays) return periodDays;
+  const sp = salesSpan();
+  return sp.days || 30;
+}
+
+/* Días que el informe de pedidos cubre DE VERDAD dentro del periodo elegido.
+
+   No es lo mismo que `daysInPeriod()`: pedir «12 meses» con un informe de 120
+   días no convierte los otros 245 en días de venta cero, convierte el informe
+   en insuficiente. Dividir entre 365 hundía la velocidad a un tercio y hacía
+   desaparecer de Inventario la única referencia en rotura. La velocidad se
+   mide sobre los días observados; que el informe no llegue se dice, no se
+   promedia con ceros inventados. */
+function salesSpan(opt){
+  const rows = salesRows(opt);
+  let min=null, max=null;
+  rows.forEach(r=>{ if(!r.date) return;
+    if(!min || r.date<min) min=r.date;
+    if(!max || r.date>max) max=r.date; });
+  if(!min) return {from:null, to:null, days:0};
+  /* El extremo derecho es hoy, no la última venta: un SKU que dejó de venderse
+     hace un mes tiene ese mes de días observados con cero ventas, y contarlos
+     es justo lo que baja su velocidad. */
+  const hasta = today();
+  return {from:min, to:hasta, days: Math.max(1, daysBetween(min, hasta)+1)};
+}
+
 /* Ventas normalizadas desde el informe de pedidos.
    Sin argumentos se comporta como siempre: periodo y país de la interfaz.
    El histórico (M0) la llama con {from:null, country:'ALL'} porque archiva el
@@ -793,16 +840,17 @@ function pnl(){
     feeCoverPct = 0;
   }
   const ads = adStats();
-  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*(periodDays||30);
+  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
   const retRows = imp('returns').filter(r=>{ const d=parseDate(gv(r,'_date','returndate')); return d && d>=periodStart(); });
   const retUnits = retRows.reduce((a,r)=>a+(toNum(gv(r,'_qty','quantity'))||1),0);
   const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
                             .reduce((a,r)=>a+toNum(r.amounttotal),0);
-  const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * ((periodDays||30)/30);
+  const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * (daysInPeriod()/30);
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+    periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
     margin: net>0 ? profit/net*100 : 0,
@@ -850,7 +898,8 @@ function skuStats(){
 function invStats(){
   const S = salesRows(), pm = prodBySku();
   const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
-  const days = periodDays||30;
+  /* Días OBSERVADOS, no días pedidos: ver salesSpan(). */
+  const days = Math.min(daysInPeriod(), salesSpan().days || daysInPeriod());
   const stock={}, byCountry={};
   imp('inventory').forEach(r=>{
     const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
@@ -909,7 +958,7 @@ function countryStats(){
   const C = costOfSales(rows);
   const m={};
   rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.qty; m[c].rev+=r.revenue; });
-  const scale = 365/(periodDays||30);
+  const scale = 365/daysInPeriod();
   return COUNTRIES.map(c=>{
     const x = m[c.code]||{units:0,rev:0};
     const conf = DB.compliance[c.code]||{};
@@ -917,7 +966,7 @@ function countryStats(){
     const netRev = x.rev/(1+c.vat/100);
     const cogs = (C.byCountry[c.code]||{cogs:0}).cogs;
     const gross = netRev - x.rev*feeRate - cogs;
-    const vatShare = vatCost*((periodDays||30)/365);
+    const vatShare = vatCost*(daysInPeriod()/365);
     const profit = gross - vatShare;
     return {c, units:x.units, rev:x.rev, netRev, profit, annual:profit*scale,
             margin: netRev>0?profit/netRev*100:0, active:!!conf.active,
@@ -929,9 +978,9 @@ function cashProjection(){
   const cs = DB.settings.cash, P = pnl();
   const days = 90;
   const start = today();
-  const dayRev  = (periodDays? P.grossInc/(periodDays||30) : 0);
+  const dayRev  = P.grossInc/daysInPeriod();
   const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
-  const dayPpc  = (P.ppc/(periodDays||30)) || cs.ppcDaily || 0;
+  const dayPpc  = (P.ppc/daysInPeriod()) || cs.ppcDaily || 0;
   const dayCogsFlow = 0;                       // el coste sale por los pedidos, no a diario
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
   // Vencimientos de pedidos de compra pendientes

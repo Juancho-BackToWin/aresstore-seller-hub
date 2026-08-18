@@ -459,6 +459,12 @@ function renderRent(){
     v='<strong>'+A.length+' de '+S.length+' productos generan el 80% de tu beneficio.</strong> ';
     if(A.length<=2 && S.length>3) v+='Es una concentración alta: si Amazon suspende uno de esos listados o entra un competidor agresivo, el negocio se para. Diversificar no es una aspiración, es gestión de riesgo. ';
     if(D.length) v+='<span style="color:var(--stop)">'+D.length+' producto'+(D.length===1?'':'s')+' pierde'+(D.length===1?'':'n')+' dinero y consume atención, stock y caja que deberían ir a los de categoría A. La decisión no es optimizarlos: es subirles el precio, renegociar el coste o retirarlos.</span> ';
+    /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en
+       meses de venta cero: convierte el informe en insuficiente. Los gastos
+       fijos sí se cuentan por los días pedidos, así que el margen sale más bajo
+       de lo real, y eso hay que decirlo en vez de dejar que parezca un dato. */
+    if(P.dataDays>0 && P.dataDays < P.periodDaysReal)
+      v+='<br><br><strong>El informe de pedidos cubre '+num(P.dataDays)+' días de los '+num(P.periodDaysReal)+' que estás mirando.</strong> Las ventas son las que hay; los gastos fijos, en cambio, se cuentan por los '+num(P.periodDaysReal)+' días completos, así que el margen que ves está por debajo del real. Descarga un informe más largo o mira un periodo más corto.';
     const cv = Math.round(P.feeCoverPct||0);
     if(cv<=0 && P.settleRows>0 && !P.settleMatched)
       v+='<br><br><strong>Hay una liquidación cargada y no reconozco sus columnas de tarifas.</strong> El fichero plano de Amazon tiene dos formatos y este lector entiende el que trae «item-related-fee-type». Las comisiones siguen estimadas al 15%: prefiero decírtelo a enseñarte 0 € de comisión y llamarlo medido.';
@@ -1108,7 +1114,7 @@ function renderComp(){
     COUNTRIES.map(c=>{
       const x = DB.compliance[c.code]||{};
       const st = countryStats().find(s=>s.c.code===c.code)||{units:0};
-      const annualUnits = st.units*(365/(periodDays||30));
+      const annualUnits = st.units*(365/daysInPeriod());
       const perUnit = annualUnits>0 ? toNum(x.vatCost)/annualUnits : 0;
       const cb=(f,label)=>'<input type="checkbox" style="width:auto" '+(x[f]?'checked':'')+
         ' onchange="setComp(\''+c.code+'\',\''+f+'\',this.checked)" title="'+label+'">';

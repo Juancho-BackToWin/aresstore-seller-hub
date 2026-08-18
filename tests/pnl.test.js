@@ -155,6 +155,77 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('no se declara medido', base.med===false);
   check('y la cobertura de la liquidación es cero', base.cov===0, base.cov+' %');
 
+  console.log('\n=== PNL-E · EL BOTÓN «TODO» NO ES UN MES ===');
+  /* `periodDays = 0` es «Todo», y ser cero lo hacía falsy: cada `periodDays||30`
+     caía al literal 30.
+
+     Caso: 120 días de ventas, 10 ud/día a 100 € = 120.000 € de ingreso, con
+     600 €/mes de gastos fijos.
+       gastos fijos de 120 días = 600 × (120/30) = 2.400,00 €
+       con el fallo             = 600 × ( 30/30) =   600,00 €
+     Es decir, cuatro meses de ventas contra un mes de alquiler: 1.800 € de
+     beneficio regalados solo por pulsar un botón. */
+  const todo = await page.evaluate(js(`
+    const ventas=[]; for(let k=0;k<120;k++) ventas.push(venta(dia(k),10));
+    DB.imports.orders = {rows:ventas, count:120, file:'o'};
+    DB.expenses = [{id:'e1', name:'Gestoría', amount:600}];
+    periodDays = 0;
+    const T = pnl();
+    periodDays = 120;
+    const C = pnl();
+    return {dias:T.periodDaysReal, span:T.dataDays,
+            fijosTodo:T.fixed, fijos120:C.fixed,
+            ventasTodo:T.grossInc, beneficioTodo:T.profit, beneficio120:C.profit};
+  `));
+  check('«Todo» mide los días que de verdad hay', todo.dias===120,
+    todo.dias+' d · con el fallo eran 30');
+  check('los gastos fijos son los de 120 días, no los de 30', near(todo.fijosTodo, 2400),
+    todo.fijosTodo.toFixed(2)+' € = 600 × (120/30) · con el fallo daban 600,00 €');
+  check('y «Todo» da lo mismo que pedir 120 días a mano',
+    near(todo.beneficioTodo, todo.beneficio120) && near(todo.fijosTodo, todo.fijos120),
+    todo.beneficioTodo.toFixed(2)+' € = '+todo.beneficio120.toFixed(2)+' €');
+
+  console.log('\n=== PNL-F · PEDIR MÁS DÍAS DE LOS QUE TRAE EL INFORME SE DICE ===');
+  /* Un informe de 120 días mirado a 365 no convierte los otros 245 en días de
+     venta cero. La velocidad de Inventario dividía entre 365 y se quedaba en un
+     tercio: la única referencia en rotura desaparecía de la pantalla.
+       velocidad honesta = 1.200 ud / 120 días observados = 10,00 ud/día
+       con el fallo      = 1.200 ud / 365                 =  3,29 ud/día */
+  const corto = await page.evaluate(js(`
+    const ventas=[]; for(let k=0;k<120;k++) ventas.push(venta(dia(k),10));
+    DB.imports.orders = {rows:ventas, count:120, file:'o'};
+    DB.imports.inventory = {rows:[{sku:'TEST-1', afnfulfillablequantity:'300'}], count:1, file:'i'};
+    periodDays = 365;
+    const P = pnl();
+    const I = invStats().filter(x=>String(x.sku).toUpperCase()==='TEST-1')[0];
+    return {pedidos:P.periodDaysReal, cubiertos:P.dataDays, vel:I.velocity, cover:I.cover};
+  `));
+  check('el hub sabe que le faltan días de informe',
+    corto.pedidos===365 && corto.cubiertos===120, corto.cubiertos+' de '+corto.pedidos+' días');
+  check('y la velocidad se mide sobre los días observados', near(corto.vel, 10, 0.05),
+    corto.vel.toFixed(2)+' ud/día = 1.200 / 120 · con el fallo daba 3,29');
+  check('así la cobertura no se triplica', Math.round(corto.cover)===30,
+    Math.round(corto.cover)+' d = 300 ud / 10 al día · con el fallo daban 91 d y la rotura desaparecía de la pantalla');
+
+  console.log('\n=== PNL-G · LA FECHA NO PUEDE DEPENDER DE LA HORA A LA QUE MIRES ===');
+  /* daysBetween restaba milisegundos entre un instante (today(), con hora) y
+     una medianoche (parseDate). A partir de las 12:00 locales, Math.round caía
+     un entero: el vencimiento de proveedor de HOY salía en −1 y el filtro k>=0
+     lo tiraba de la proyección de caja. Mismo día, misma base de datos, dos
+     números distintos según la hora. */
+  const horas = await page.evaluate(js(`
+    const hoyISO = dia(0), ayerISO = dia(1), mananaISO = dia(-1);
+    return {hoy: daysBetween(parseDate(hoyISO), today()),
+            ayer: daysBetween(parseDate(ayerISO), today()),
+            manana: daysBetween(parseDate(mananaISO), today()),
+            hora: new Date().getHours()};
+  `));
+  check('la prueba corre a una hora que antes rompía', horas.hora!==undefined, horas.hora+':00');
+  check('hoy son 0 días, a cualquier hora', horas.hoy===0,
+    horas.hoy+' · a partir de las 12:00 daba −1 y el pago de hoy desaparecía de la caja');
+  check('ayer es 1 día', horas.ayer===1, horas.ayer);
+  check('mañana es −1 día', horas.manana===-1, horas.manana);
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

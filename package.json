@@ -4,7 +4,7 @@
   "private": true,
   "description": "Gestion del seller de Amazon de Aresstore: rentabilidad, tesoreria, inventario, compras y cumplimiento. PWA de un solo archivo, sin servidor.",
   "scripts": {
-    "build": "./build.sh",
+    "build": "bash build.sh",
     "fixtures": "node tests/mkfixtures.js && node tests/mkfixtures-es.js",
     "test": "node tests/hub.test.js",
     "test:es": "node tests/es.test.js",

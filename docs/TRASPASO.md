@@ -1,6 +1,7 @@
 # Aresstore Seller Hub — traspaso a sesión nueva
 
-Estado a 17 de agosto de 2026, **actualizado tras cerrar M1.1 (v0.7)**. Este documento
+Estado a 18 de agosto de 2026, **con la v0.7 ya desplegada y verificada en
+producción**. Este documento
 es lo único que hace falta leer para retomar el proyecto desde cero. Todo lo demás
 está en el repositorio.
 
@@ -33,9 +34,9 @@ regenerable con `node docs/plan-docx.js`) y el detalle técnico módulo a módul
 | Repositorio | `github.com/Juancho-BackToWin/aresstore-seller-hub` (privado) |
 | GitHub | creado. **No confundir con `arestora-hub`**, que es el proyecto Next.js de DeporteSeguro/EducaSeguro y no tiene nada que ver |
 | Vercel | proyecto `aresstore-seller-hub`, cuenta *Juancho Back To Win's projects* |
-| URL viva hoy | `aresstore-seller-hub-nu.vercel.app` |
-| URL que debe quedar | `aresstore-seller-hub.vercel.app` ← **pendiente** |
-| Versión | v0.7 (M0 y M1.1 dentro). **En producción sigue estando la v0.5** |
+| URL de producción | `aresstore-seller-hub.vercel.app` — el dominio limpio responde; el problema del `-nu` está resuelto |
+| Despliegue | automático: cada commit en `main` se despliega solo |
+| Versión en producción | **v0.7 (M0 + M1.1), desplegada y verificada el 18 de agosto de 2026** |
 
 ### Estructura
 
@@ -64,39 +65,58 @@ sobrescribe en cada compilación.
 
 ## 3. Lo pendiente, en orden
 
-### 3.0 · Desplegar la v0.7 — lo más urgente, y no es código
+### 3.0 · Despliegue — resuelto el 18 de agosto de 2026
 
-M0 lleva construido desde la v0.6 y **nunca se ha desplegado**: producción sigue
-sirviendo la v0.5. Mientras eso siga así, el histórico —que es el único dato del
-hub que no se puede reconstruir descargando informes otra vez— no se está
-capturando. Cada día que pasa es un día perdido de verdad.
+La v0.7 (M0 + M1.1) **está desplegada y verificada en producción** en
+`aresstore-seller-hub.vercel.app`. El histórico ya se está capturando.
 
-Efecto colateral bueno de ese retraso: como M0 nunca llegó a correr en producción,
-**no hay ningún histórico guardado con el fallo de zona horaria** que se arregló en
-esta versión (ver §5), así que no hace falta migrar nada. Si en algún momento se
-descubriera que sí hubo capturas con la v0.6, las claves de día anteriores al
-arreglo estarían un día por detrás y habría que desplazarlas.
+Como M0 no llegó a correr nunca sobre la v0.6, **no hay ningún histórico guardado
+con el fallo de zona horaria** que se arregló en la v0.7 (ver §5): no hay nada que
+migrar. Si en algún momento apareciera un dispositivo con capturas de la v0.6, sus
+claves de día anteriores al arreglo estarían un día por detrás y habría que
+desplazarlas.
 
-### 3.1 · Dominio (Vercel, 2 minutos, lo hace Juancho)
+#### Cómo se despliega, y por qué no se toca
 
-El proyecto viejo ya está borrado, pero Vercel no ha reasignado la dirección: el
-proyecto sigue sirviéndose en `-nu`. Solución: Settings → Project Name, cambiar a
-cualquier cosa, Save, volver a poner `aresstore-seller-hub`, Save. Ese ida y
-vuelta fuerza la reasignación. Verificar después en Settings → Domains.
+**Vercel no compila nada en este proyecto, y no debe.** `index.html` se genera en
+local con `bash build.sh` y se sube ya compilado. Por eso `vercel.json` lleva:
 
-Importa porque el icono del móvil y el marcador del PC apuntan a la dirección sin
-`-nu`, y porque **los datos guardados están atados a esa dirección** (viven en el
-navegador, no en el servidor).
+```json
+"installCommand": "echo sin dependencias",
+"buildCommand":   "echo sin compilacion, index.html ya viene compilado",
+"outputDirectory": "."
+```
 
-### 3.2 · GitHub
+Esos tres valores no se tocan. Sin ellos el despliegue se rompe, y ya se rompió
+dos veces por ahí:
 
-Repositorio privado creado: `Juancho-BackToWin/aresstore-seller-hub`. Para que yo
-pueda empujar hace falta un *fine-grained token* acotado a ese único repositorio
-con permiso **Contents: Read and write**. Sin eso, cada avance vuelve a ser un zip
-que Juancho sube a mano, que es justo lo que queremos eliminar.
+1. `./build.sh: Permission denied` (exit 126). GitHub guarda **sin bit de
+   ejecución** todo lo que se sube por la web, así que el script no era
+   ejecutable en el contenedor de Vercel.
+2. Aunque lo fuera, `build.sh` rasteriza los iconos con **Pillow**, que no existe
+   en el contenedor de Vercel. La compilación no puede vivir allí.
 
-Después: en Vercel, *Connect Git Repository* → ese repo. A partir de ahí cada
-commit se despliega solo y la app se autoactualiza en sus dispositivos.
+Por el mismo bit de ejecución perdido, el script de npm es **`"build": "bash
+build.sh"`**, no `"./build.sh"`. Corregido el 18 de agosto de 2026.
+
+**`vercel.json` no admite claves libres.** Un `"//"` puesto como comentario tumba
+el despliegue con `should NOT have additional property`. Lo que haya que
+documentar va en el mensaje del commit o aquí, nunca dentro del JSON.
+
+### 3.1 · Dominio — resuelto
+
+El dominio limpio `aresstore-seller-hub.vercel.app` responde. El proyecto viejo
+estaba borrado y Vercel tardó en reasignar la dirección; ya está hecho. Importaba
+porque el icono del móvil y el marcador del PC apuntan a esa dirección, y porque
+**los datos guardados están atados a ella** (viven en el navegador, no en el
+servidor): un cambio de dominio equivale a empezar de cero.
+
+### 3.2 · GitHub — resuelto
+
+Repositorio privado `Juancho-BackToWin/aresstore-seller-hub`, conectado a Vercel.
+Cada commit en `main` se despliega solo y la app se autoactualiza en los
+dispositivos (lo dispara el identificador de caché nuevo que `build.sh` escribe en
+`sw.js` en cada compilación). Ya no hay zips subidos a mano.
 
 ### 3.3 · M0 — hecho en v0.6
 
@@ -203,29 +223,62 @@ corrigen **el número**, no solo la etiqueta.
 de importar **también el informe de inventario**. Sin el stock no se puede hacer el
 cuadre, y sin el cuadre el módulo trabaja a ciegas — y lo dice en pantalla.
 
-### 3.5 · Lo siguiente
+### 3.5 · La cola de trabajo, en orden
 
-M1.2 métricas que faltan (10 de las 21) · M1.3 gastos indirectos con amortización
-diaria · M1.4 IVA como línea del P&L · M2 velocidad e inventario · M5.1 y M5.2
-detectores de reembolso · M3 compras y caja · M4 ACOS de equilibrio · M6
-diferenciales europeos · M1.5 vistas y exportación.
+Con el despliegue resuelto, el trabajo va en tres fases. Las dos primeras son
+transversales; la tercera va herramienta a herramienta, y de cada una se hacen los
+pasos 1 a 3 del método antes de pasar a la siguiente.
 
----
+**Fase A · Inventario funcional honesto.** Recorrer cada pantalla y clasificarla
+por lo que se haya comprobado *ejecutándola*: funciona / funciona a medias /
+maqueta. El resultado va a la tabla de estado de `docs/METODO.md`. Lo que más
+importa es lo que aparenta funcionar y no funciona.
+
+**Fase B · Fontanería.** Entrada y salida de verdad:
+
+- los doce informes del importador, verificados uno a uno en español y en inglés
+  con fixtures realistas;
+- copia de seguridad y restauración, ida y vuelta sin pérdida;
+- las exportaciones de cada módulo;
+- los accesos: app instalable con el icono correcto, autoactualización y
+  funcionamiento sin conexión — incluido el manifest incrustado como `data:` URL
+  que hace fallar `pwa.test.js` (§6). Cuidado ahí: **hay una app ya instalada en
+  móvil y PC**, y los datos viven en el navegador.
+
+**Fase C · Herramienta a herramienta**, en este orden:
+
+| # | Herramienta | Trabajo pendiente |
+|---|---|---|
+| 1 | Datos · importador | verificar los doce informes uno a uno |
+| 2 | Catálogo | verificar |
+| 3 | Rentabilidad / P&L | M1.2 métricas que faltan (10 de 21) · M1.3 gastos indirectos con amortización diaria · M1.4 IVA como línea del P&L |
+| 4 | Histórico (M0) | verificar |
+| 5 | Inventario | M2 velocidad, cobertura y reposición |
+| 6 | Compras y Tesorería | M3 caja y pedidos |
+| 7 | Publicidad | M4 ACOS de equilibrio |
+| 8 | Reembolsos | M5.1 y M5.2 detectores — no construido |
+| 9 | Cumplimiento | M6 diferenciales europeos |
+
+Queda además M1.5 (vistas y exportación de Rentabilidad), que se resuelve dentro
+de la Fase B en lo que toca a exportar.
+
+**Los pasos 4 y 5 del método —cargar datos reales y verificar contra la realidad—
+son de Juancho y van al final, de una sola vez.** Lo que aparezca por el camino y
+dependa de él se anota en `docs/PENDIENTE-JUANCHO.md` y se sigue.
 
 ## 4. Lo que hace falta de Juancho (datos, no decisiones)
 
-1. Los **lotes de compra reales** de sus cinco familias: fecha, cantidad, coste de
-   fábrica y flete. Con la carga por pegado es una tarde, no cien formularios.
-2. La **lista de gastos fijos** mensuales con su importe.
-3. La **comisión real** que le cobra Amazon, del informe de vista previa de
-   tarifas. Estamos calculando al 15 % por defecto y en joyería casi seguro no es
-   ese número: es lo que más distorsiona el margen ahora mismo.
-4. **Plazos de sus dos proveedores**: fabricación, tránsito, condiciones de pago.
-5. El **hábito semanal** de importar pedidos **e inventario**. Sin esto nada
-   funciona, y desde M1.1 el inventario ya no es opcional: es lo que permite
-   cuadrar cantidades.
+La lista viva, con el contexto de cada punto y ordenada por lo que más desbloquea,
+está en **`docs/PENDIENTE-JUANCHO.md`**. Resumen:
 
----
+1. La **comisión real** de Amazon en joyería (P-1) — lo que más distorsiona el
+   margen ahora mismo: estamos calculando al 15 % por defecto.
+2. Los **lotes de compra reales** de sus cinco familias (P-2).
+3. El **hábito semanal** de importar pedidos **e inventario** (P-3). Desde M1.1 el
+   inventario ya no es opcional: es lo que permite cuadrar cantidades.
+4. La **lista de gastos fijos** mensuales (P-4).
+5. **Plazos y condiciones de pago** de sus dos proveedores (P-5).
+6. La consulta escrita a Seller Support sobre la **base de la comisión** (P-6).
 
 ## 5. Errores ya corregidos — no reintroducir
 
@@ -271,6 +324,20 @@ Cada uno costó una iteración. Están documentados aquí para que nadie los rep
   histórico lo llamaba y archivaba solo lo que estuvieras mirando en pantalla.
   Ahora acepta `{from:null, country:'ALL'}` y por defecto se comporta igual que
   antes.
+
+### Del despliegue (v0.7)
+
+- **Vercel intentando compilar.** `./build.sh: Permission denied`, exit 126:
+  GitHub guarda sin bit de ejecución lo que se sube por la web. Y aunque lo
+  tuviera, `build.sh` necesita **Pillow** para rasterizar los iconos y en el
+  contenedor de Vercel no está. La compilación se hace en local y se sube el
+  `index.html` ya compilado; `vercel.json` neutraliza `installCommand` y
+  `buildCommand` (§3.0).
+- **Mismo bit de ejecución, en npm.** `"build": "./build.sh"` fallaba por lo
+  mismo. Ahora es `"build": "bash build.sh"`, que no depende del permiso.
+- **Una clave `"//"` de comentario en `vercel.json`.** El esquema de Vercel no
+  admite claves libres: tumba el despliegue con `should NOT have additional
+  property`. Lo que haya que explicar va en el commit o en este documento.
 
 ### De M1.1 — todos encontrados en revisión adversarial, todos con prueba
 
@@ -369,7 +436,9 @@ hace que se escale un producto que pierde dinero.
 ## 7. Pruebas
 
 ```bash
-npm install
+npm install                    # playwright (los navegadores ya están en el entorno)
+pip3 install Pillow            # solo para build.sh: rasteriza los iconos
+bash build.sh                  # ensambla index.html · nunca editarlo a mano
 npm run fixtures     # informes de Amazon simulados, en inglés y en español
 npm run test         # suite general
 npm run test:es      # los informes en español dan las mismas cifras que en inglés
@@ -392,6 +461,7 @@ manifest, y es anterior a M0.
 
 ## 8. Mensaje para arrancar la sesión nueva
 
-> Retomamos el Aresstore Seller Hub. Lee `docs/TRASPASO.md` del repositorio
-> (zip adjunto) y sigue desde ahí. Prioridad: desplegar la v0.7 y conectar GitHub;
-> después, M1.2.
+> Retomamos el Aresstore Seller Hub. Lee primero `docs/METODO.md` —es la norma del
+> proyecto, no una preferencia de estilo— y después `docs/TRASPASO.md` para el
+> estado técnico. La cola de trabajo está en §3.5; lo que depende de mí, en
+> `docs/PENDIENTE-JUANCHO.md`. No te pares a esperarme: anota y sigue.

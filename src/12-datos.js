@@ -665,10 +665,27 @@ function salesRows(opt){
   }).filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
                (cf==='ALL' || r.country===cf));
 }
-/* Comisiones reales desde la liquidación */
+/* Comisiones reales desde la liquidación.
+
+   Dos cosas que hay que distinguir y antes no se distinguían:
+
+   · `rows` son las filas de liquidación que caen en el periodo. `matched` son
+     las que además traen una columna de tarifa que este lector entiende. La
+     diferencia importa porque el fichero plano de liquidación tiene dos
+     esquemas y solo el viejo lleva `item-related-fee-type`. Con el que Amazon
+     sirve hoy, `rows` sale alto y `matched` cero: las columnas están, pero se
+     llaman de otra manera. Contar filas para decidir si el dato está medido
+     hacía que la comisión saliera 0 € y el beneficio subiera un 23 %, con la
+     etiqueta «medido» encima.
+
+   · `desde`/`hasta` acotan lo que la liquidación cubre de verdad, y solo con
+     las filas entendidas. Amazon liquida cada 14 días: una liquidación suelta
+     cubre una quincena, no el trimestre que estés mirando en pantalla. Sin
+     esto, 14 días de comisiones se restaban a 90 días de ingresos. */
 function settlementFees(){
   const from = periodStart();
-  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0;
+  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0, matched=0;
+  let desde=null, hasta=null;
   imp('settlement').forEach(r=>{
     const d = parseDate(r.posteddate)||parseDate(r.settlementstartdate);
     if(!d || d<from) return;
@@ -676,6 +693,10 @@ function settlementFees(){
     rows++;
     const t=(r.itemrelatedfeetype||'')+' '+(r.orderfeetype||'')+' '+(r.shipmentfeetype||'');
     const amt = toNum(r.itemrelatedfeeamount)+toNum(r.orderfeeamount)+toNum(r.shipmentfeeamount);
+    if(!t.trim() && !amt) return;              // fila de un esquema que no leo
+    matched++;
+    if(!desde || d<desde) desde=d;
+    if(!hasta || d>hasta) hasta=d;
     const tl = t.toLowerCase();
     if(tl.indexOf('commission')>=0||tl.indexOf('referral')>=0) referral += amt;
     else if(tl.indexOf('fba')>=0||tl.indexOf('fulfil')>=0) fba += amt;
@@ -683,7 +704,8 @@ function settlementFees(){
     else other += amt;
     promo += toNum(r.promotionamount);
   });
-  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo, rows};
+  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo,
+          rows, matched, desde, hasta};
 }
 /* Gasto y desperdicio publicitario */
 function adStats(){
@@ -718,8 +740,12 @@ function pnl(){
   const cost = costOfSales(S);
   const cogs = cost.cogs, cogsKnown = cost.known;
   const sf = settlementFees();
-  const measured = sf.rows>0;
-  let referral, fba, storage, otherFee;
+  /* Está medido lo que la liquidación explica, no lo que la liquidación pesa.
+     Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
+     columnas de tarifa no reconocemos salían 0 € de comisión sellados como
+     «medido», y el beneficio subía un 23 %. */
+  const measured = sf.matched>0;
+  let referral, fba, storage, otherFee, feeCoverPct;
   let ship=0, fbmUnits=0, fbaUnits=0;
   S.forEach(r=>{
     const p=pm[String(r.sku).toLowerCase()];
@@ -727,15 +753,44 @@ function pnl(){
     if(isFbm){ fbmUnits+=r.qty; ship += (p?toNum(p.fbmShip):4.5)*r.qty; }
     else fbaUnits+=r.qty;
   });
-  if(measured){ referral=sf.referral; fba=sf.fba; storage=sf.storage; otherFee=sf.other; }
-  else {
-    referral = grossInc*0.15;
-    let f=0; S.forEach(r=>{
+  /* Tarifas estimadas de un subconjunto de ventas. Se usa para el periodo
+     entero cuando no hay liquidación, y solo para el trozo que la liquidación
+     no cubre cuando sí la hay. */
+  const estFees = rows => {
+    let ref=0, f=0;
+    rows.forEach(r=>{
+      ref += r.revenue*0.15;
       const p=pm[String(r.sku).toLowerCase()];
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
       if(!isFbm) f += (p?toNum(p.fba):3.2)*FUEL*r.qty;
     });
-    fba = f; storage = 0; otherFee = 0;
+    return {referral:ref, fba:f};
+  };
+  if(measured){
+    /* Amazon liquida cada 14 días, así que una liquidación cubre una quincena
+       y el periodo en pantalla puede ser un trimestre. Restar 14 días de
+       comisiones a 90 días de ingresos inflaba el beneficio un 20 % con la
+       etiqueta «medido» puesta. Lo que la liquidación cubre va medido; lo que
+       queda fuera se estima, y `feeCoverPct` dice cuánto es cada cosa. */
+    const d0=iso(sf.desde), d1=iso(sf.hasta);
+    const fuera=[], dentro=[]; let cubierto=0;
+    S.forEach(r=>{ const d=iso(r.date);
+      if(d>=d0 && d<=d1){ cubierto+=r.revenue; dentro.push(r); } else fuera.push(r); });
+    const est = estFees(fuera), estDentro = estFees(dentro);
+    /* Una categoría que sale exactamente a cero teniendo ventas cubiertas
+       detrás no es una medición de cero: es que ese concepto no venía en el
+       fichero. Cobrar 0 € de comisión sobre ventas reales no le pasa a nadie.
+       Se estima esa categoría y se deja de llamarla medida. */
+    const refMedido = sf.referral>0, fbaMedido = sf.fba>0;
+    referral = (refMedido ? sf.referral : estDentro.referral) + est.referral;
+    fba      = (fbaMedido ? sf.fba      : estDentro.fba)      + est.fba;
+    storage  = sf.storage; otherFee = sf.other;
+    feeCoverPct = grossInc>0 ? cubierto/grossInc*100 : 100;
+    if(!refMedido) feeCoverPct = 0;   // sin comisión medida, no hay nada medido que presumir
+  } else {
+    const est = estFees(S);
+    referral = est.referral; fba = est.fba; storage = 0; otherFee = 0;
+    feeCoverPct = 0;
   }
   const ads = adStats();
   const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*(periodDays||30);
@@ -747,6 +802,7 @@ function pnl(){
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+    feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
     margin: net>0 ? profit/net*100 : 0,

@@ -389,10 +389,19 @@ function renderHistorico(){
    ========================================================================= */
 function renderRent(){
   const P = pnl();
-  const badge = P.measured ? '<span class="pill go">medido</span>' : '<span class="pill warn">estimado</span>';
+  /* «Medido» solo cuando la liquidación cubre el periodo entero. Cubriendo una
+     parte, el número es una mezcla y decirlo medido es justo lo que hace que
+     alguien se lo crea sin mirarlo. */
+  const cov = Math.round(P.feeCoverPct||0);
+  const badge = cov>=100 ? '<span class="pill go">medido</span>'
+              : cov>0    ? '<span class="pill warn">'+cov+'% medido</span>'
+              :            '<span class="pill warn">estimado</span>';
+  const cobTxt = cov>=100 ? 'de la liquidación'
+               : cov>0    ? cov+'% de la liquidación · el resto estimado al 15%'
+               :            'estimada al 15%';
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
-    kpi('Beneficio', fmt(P.profit,0), P.measured?'comisiones reales':'comisiones estimadas', P.profit>0?'pos':'neg')+
+    kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
     kpi('Margen neto', num(P.margin,1)+'%','sobre ingreso sin IVA', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
     kpi('Coste de producto', fmt(P.cogs,0),
         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
@@ -409,8 +418,8 @@ function renderRent(){
     line('Ingresos con IVA',P.grossInc)+
     line('IVA repercutido',P.tax,'',true)+
     '<tr class="tot"><td class="name">Ingreso neto</td><td class="num">'+fmt(P.net,0)+'</td></tr>'+
-    line('Comisión de Amazon',P.referral,P.measured?'de la liquidación':'estimada al 15%',true)+
-    line('Tarifas FBA',P.fba,P.measured?'':'estimadas con recargo 1,5%',true)+
+    line('Comisión de Amazon',P.referral,cobTxt,true)+
+    line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
@@ -450,7 +459,11 @@ function renderRent(){
     v='<strong>'+A.length+' de '+S.length+' productos generan el 80% de tu beneficio.</strong> ';
     if(A.length<=2 && S.length>3) v+='Es una concentración alta: si Amazon suspende uno de esos listados o entra un competidor agresivo, el negocio se para. Diversificar no es una aspiración, es gestión de riesgo. ';
     if(D.length) v+='<span style="color:var(--stop)">'+D.length+' producto'+(D.length===1?'':'s')+' pierde'+(D.length===1?'':'n')+' dinero y consume atención, stock y caja que deberían ir a los de categoría A. La decisión no es optimizarlos: es subirles el precio, renegociar el coste o retirarlos.</span> ';
-    if(!P.measured) v+='<br><br>Estas cifras usan comisiones estimadas al 15% porque no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado, no aproximado.';
+    const cv = Math.round(P.feeCoverPct||0);
+    if(cv<=0 && P.settleRows>0 && !P.settleMatched)
+      v+='<br><br><strong>Hay una liquidación cargada y no reconozco sus columnas de tarifas.</strong> El fichero plano de Amazon tiene dos formatos y este lector entiende el que trae «item-related-fee-type». Las comisiones siguen estimadas al 15%: prefiero decírtelo a enseñarte 0 € de comisión y llamarlo medido.';
+    else if(cv<=0) v+='<br><br>Estas cifras usan comisiones estimadas al 15% porque no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado, no aproximado.';
+    else if(cv<100) v+='<br><br>La liquidación cargada cubre el <strong>'+cv+'%</strong> de lo facturado en este periodo. Ese trozo son comisiones reales; el resto sigue estimado al 15%. Amazon liquida cada 14 días, así que para cubrir un trimestre hacen falta unas seis liquidaciones.';
   } else v='Sin datos de ventas todavía.';
   document.getElementById('abcVerdict').innerHTML=v;
 }

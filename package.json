@@ -10,7 +10,7 @@
     "test:es": "node tests/es.test.js",
     "test:pwa": "node tests/pwa.test.js",
     "test:m0": "node tests/m0.test.js",
-    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11",
+    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pwa",
     "test:m11": "node tests/m11.test.js"
   },
   "devDependencies": {

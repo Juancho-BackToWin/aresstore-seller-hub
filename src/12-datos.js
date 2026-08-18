@@ -806,8 +806,13 @@ function pnl(){
   const estFees = rows => {
     let ref=0, f=0;
     rows.forEach(r=>{
-      ref += r.revenue*0.15;
       const p=pm[String(r.sku).toLowerCase()];
+      /* La comisión es la del producto, no un 15 % para todo el catálogo. El
+         campo es editable en Catálogo y estaba ahí sin que nadie lo leyera: en
+         joyería, donde Amazon cobra el 20 %, ese 15 % inflaba el margen seis
+         puntos, que es la diferencia entre escalar y no tocar. */
+      const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
+      ref += r.revenue*pct;
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
       if(!isFbm) f += (p?toNum(p.fba):3.2)*FUEL*r.qty;
     });
@@ -868,13 +873,19 @@ function skuStats(){
   const m={};
   S.forEach(r=>{
     const k=String(r.sku);
-    if(!m[k]) m[k]={sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k, units:0, revenue:0, countries:{}};
-    m[k].units+=r.qty; m[k].revenue+=r.revenue;
+    if(!m[k]) m[k]={sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k, units:0, revenue:0, tax:0, countries:{}};
+    m[k].units+=r.qty; m[k].revenue+=r.revenue; m[k].tax+=r.tax;
     if(r.country) m[k].countries[r.country]=(m[k].countries[r.country]||0)+r.qty;
   });
   const rows = Object.keys(m).map(k=>{
     const x=m[k], p=pm[k.toLowerCase()];
-    const netRev = x.revenue/1.21;
+    /* El IVA que se restó es el que traía cada pedido, no un 21 % clavado. Con
+       el 21 % fijo, dos SKU económicamente idénticos —uno vendido en Alemania
+       al 19 % y otro en España al 21 %— salían con un 85 % de diferencia de
+       beneficio, y el alemán, que era el mejor de los dos, se etiquetaba «C»
+       mientras el español se llevaba la «A». Es la pantalla con la que se
+       decide qué producto se empuja. */
+    const netRev = x.revenue - x.tax;
     /* El coste sale del mismo cálculo que el P&L, no de una fórmula paralela.
        Dos maneras de calcular lo mismo es como los números dejan de cuadrar
        entre pantallas, que es precisamente la queja que tiene la competencia. */
@@ -889,7 +900,17 @@ function skuStats(){
   let cum=0;
   rows.forEach(r=>{
     r.share = r.profit>0 ? r.profit/totPos*100 : 0;
-    if(r.profit>0){ cum+=r.share; r.cum=cum; r.abc = cum<=80?'A':(cum<=95?'B':'C'); }
+    if(r.profit>0){
+      /* La clase se decide por lo acumulado ANTES de este producto, que es lo
+         que hace Pareto: «A» son los que hacen falta para llegar al 80 %,
+         incluido el que lo cruza. Mirando el acumulado DESPUÉS, el producto que
+         cruzaba el 80 % nunca entraba en A, y con un solo producto rentable
+         `cum` valía 100 y salía «C»: el que sostiene el negocio con la píldora
+         de los residuales, y el veredicto remitiendo a una categoría A vacía. */
+      const antes = cum;
+      cum += r.share; r.cum = cum;
+      r.abc = antes<80 ? 'A' : (antes<95 ? 'B' : 'C');
+    }
     else { r.cum=100; r.abc='D'; }
   });
   return rows;
@@ -957,14 +978,30 @@ function countryStats(){
      mercado empujar. */
   const C = costOfSales(rows);
   const m={};
-  rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.qty; m[c].rev+=r.revenue; });
+  rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0,tax:0};
+    m[c].units+=r.qty; m[c].rev+=r.revenue; m[c].tax+=r.tax; });
   const scale = 365/daysInPeriod();
-  return COUNTRIES.map(c=>{
-    const x = m[c.code]||{units:0,rev:0};
-    const conf = DB.compliance[c.code]||{};
+  /* Los mercados que no están en COUNTRIES —el Reino Unido, sin ir más lejos—
+     contaban en el P&L y en la ABC y desaparecían de esta tabla: en un caso
+     medido, un 33 % de la facturación se evaporaba sin que nada lo dijera.
+     Ahora se agrupan en una fila «otros» en vez de no existir. */
+  const otros = Object.keys(m).filter(k=>!COUNTRIES.some(c=>c.code===k))
+                              .map(k=>m[k]).filter(x=>x.units>0);
+  const listado = COUNTRIES.slice();
+  if(otros.length) listado.push({code:'··', name:'Otros mercados', vat:0, storage:false, vatCost:0, cur:'EUR', otros:true});
+  return listado.map(c=>{
+    const x = c.otros
+      ? otros.reduce((a,o)=>({units:a.units+o.units, rev:a.rev+o.rev, tax:a.tax+o.tax}), {units:0,rev:0,tax:0})
+      : (m[c.code]||{units:0,rev:0,tax:0});
+    const conf = c.otros ? {} : (DB.compliance[c.code]||{});
     const vatCost = conf.active ? toNum(conf.vatCost) : 0;
-    const netRev = x.rev/(1+c.vat/100);
-    const cogs = (C.byCountry[c.code]||{cogs:0}).cogs;
+    /* IVA realmente cobrado, no el nominal del país: una venta a Alemania
+       facturada con IVA español existe, y con el nominal salían 50 € de
+       ingreso neto inventados por mercado. */
+    const netRev = x.rev - x.tax;
+    const cogs = c.otros
+      ? otros.reduce((a,o)=>a+((C.byCountry[o.code]||{cogs:0}).cogs||0), 0)
+      : (C.byCountry[c.code]||{cogs:0}).cogs;
     const gross = netRev - x.rev*feeRate - cogs;
     const vatShare = vatCost*(daysInPeriod()/365);
     const profit = gross - vatShare;

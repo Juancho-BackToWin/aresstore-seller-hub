@@ -226,6 +226,115 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('ayer es 1 día', horas.ayer===1, horas.ayer);
   check('mañana es −1 día', horas.manana===-1, horas.manana);
 
+  console.log('\n=== PNL-H · LA COMISIÓN ES LA DEL PRODUCTO, NO UN 15 % PARA TODO ===');
+  /* El campo «Comisión referral %» es editable por producto en Catálogo y
+     pnl() no lo leía: usaba grossInc × 0,15 para todo el catálogo. En joyería,
+     donde Amazon cobra el 20 %, eso son seis puntos de margen regalados.
+
+     Caso: 400 ud a 100 € = 40.000 € de ingreso, comisión del producto 20 %.
+       comisión correcta = 40.000 × 0,20 = 8.000,00 €
+       con el fallo      = 40.000 × 0,15 = 6.000,00 €  → 2.000 € de beneficio inventados */
+  const com = await page.evaluate(js(`
+    DB.products[0].referral = 20;
+    DB.imports.orders = {rows:[venta(dia(5),400)], count:1, file:'o'};
+    periodDays = 30;
+    const alto = pnl();
+    DB.products[0].referral = 15;
+    const bajo = pnl();
+    DB.products[0].referral = 0;      // sin poner nada, el 15 % por defecto
+    const cero = pnl();
+    return {alto:alto.referral, bajo:bajo.referral, cero:cero.referral,
+            dif: alto.profit - bajo.profit};
+  `));
+  check('un producto al 20 % paga el 20 %', near(com.alto, 8000),
+    com.alto.toFixed(2)+' € = 40.000 × 0,20 · con el fallo daba 6.000,00 €');
+  check('uno al 15 % paga el 15 %', near(com.bajo, 6000), com.bajo.toFixed(2)+' €');
+  check('y sin porcentaje cargado se mantiene el 15 % por defecto', near(com.cero, 6000),
+    com.cero.toFixed(2)+' € · el defecto no cambia, solo deja de ignorarse lo que sí has puesto');
+  check('la diferencia entre 20 % y 15 % son 2.000 € de beneficio', near(com.dif, -2000),
+    com.dif.toFixed(2)+' €');
+
+  console.log('\n=== PNL-I · EL IVA DE LA TABLA ABC ES EL QUE SE COBRÓ, NO UN 21 % FIJO ===');
+  /* Dos SKU económicamente idénticos: mismo ingreso NETO, mismo coste, misma
+     tarifa. Uno se vende solo en Alemania (IVA 19 %) y otro solo en España
+     (21 %). Dividir entre 1,21 clavado hacía que el alemán —que es igual de
+     bueno— apareciera con mucho menos beneficio, y la ABC lo degradaba.
+
+     Aritmética: 300 ud cada uno, ingreso neto 3.000 € cada uno.
+       ES: bruto 3.630 · IVA 630 · neto 3.000
+       DE: bruto 3.570 · IVA 570 · neto 3.000
+     Con el 21 % fijo, DE salía con 3.570/1,21 = 2.950,41 € de ingreso neto:
+     49,59 € que no existen, y con ellos el ranking al revés. */
+  const abc = await page.evaluate(js(`
+    DB.products = [
+      {id:'a', sku:'ES-ONLY', name:'ES', cogs:5, freight:0, fba:3, referral:15, price:12.1, channel:'FBA', lots:[]},
+      {id:'b', sku:'DE-ONLY', name:'DE', cogs:5, freight:0, fba:3, referral:15, price:11.9, channel:'FBA', lots:[]}];
+    const fila = (sku,ch,pais,bruto,iva)=>({amazonorderid:'o'+sku, purchasedate:dia(5)+'T10:00:00+00:00',
+      fulfillmentchannel:'Amazon', saleschannel:ch, sku:sku, asin:'B0X', itemstatus:'Shipped',
+      quantity:'300', itemprice:String(bruto), itemtax:String(iva), shipcountry:pais});
+    DB.imports.orders = {rows:[fila('ES-ONLY','Amazon.es','ES',3630,630),
+                               fila('DE-ONLY','Amazon.de','DE',3570,570)], count:2, file:'o'};
+    periodDays = 30;
+    const S = skuStats();
+    const g = k => S.filter(x=>x.sku===k)[0];
+    return {es:{net:g('ES-ONLY').netRev, prof:g('ES-ONLY').profit, abc:g('ES-ONLY').abc},
+            de:{net:g('DE-ONLY').netRev, prof:g('DE-ONLY').profit, abc:g('DE-ONLY').abc}};
+  `));
+  check('los dos SKU tienen el mismo ingreso neto: 3.000 €',
+    near(abc.es.net, 3000) && near(abc.de.net, 3000),
+    'ES '+abc.es.net.toFixed(2)+' € · DE '+abc.de.net.toFixed(2)+' € · con el fallo DE daba 2.950,41 €');
+  check('y el alemán ya no sale peor que el español por su IVA', abc.de.prof >= abc.es.prof,
+    'DE '+abc.de.prof.toFixed(2)+' € ≥ ES '+abc.es.prof.toFixed(2)+' € · el alemán paga menos IVA, así que gana más');
+  check('la ABC deja de degradarlo', !(abc.de.abc==='C' && abc.es.abc==='A'),
+    'DE='+abc.de.abc+' · ES='+abc.es.abc+' · con el fallo eran C y A');
+
+  console.log('\n=== PNL-J · LOS MERCADOS DE FUERA DE LA UE NO SE EVAPORAN ===');
+  /* amazon.co.uk no está en COUNTRIES, así que sus ventas contaban en el P&L y
+     en la ABC y desaparecían de la tabla de mercados del Panel sin aviso.
+     Caso: 200 ud a España (2.420 €) y 100 ud al Reino Unido (1.210 €).
+       facturación total = 3.630 €; la tabla enseñaba 2.420 € · faltaba el 33 %. */
+  const fuera = await page.evaluate(js(`
+    const fila = (ch,pais,q,bruto)=>({amazonorderid:'o'+pais, purchasedate:dia(5)+'T10:00:00+00:00',
+      fulfillmentchannel:'Amazon', saleschannel:ch, sku:'TEST-1', asin:'B0X', itemstatus:'Shipped',
+      quantity:String(q), itemprice:String(bruto), itemtax:'0', shipcountry:pais});
+    DB.imports.orders = {rows:[fila('Amazon.es','ES',200,2420), fila('Amazon.co.uk','GB',100,1210)], count:2, file:'o'};
+    periodDays = 30;
+    const P = pnl(), C = countryStats().filter(x=>x.units>0);
+    return {pnl:P.grossInc, tabla:C.reduce((a,x)=>a+x.rev,0),
+            filas:C.map(x=>x.c.code+':'+x.units)};
+  `));
+  check('la tabla de mercados suma lo mismo que el P&L', near(fuera.tabla, fuera.pnl),
+    fuera.tabla.toFixed(2)+' € = '+fuera.pnl.toFixed(2)+' € · con el fallo faltaba el 33 %');
+  check('y el mercado de fuera aparece agrupado, no borrado',
+    fuera.filas.some(f=>/^··/.test(f)), fuera.filas.join(' · '));
+
+  console.log('\n=== PNL-K · EL PRODUCTO QUE SOSTIENE EL NEGOCIO NO PUEDE SER «C» ===');
+  /* La clase salía del acumulado DESPUÉS de sumar el producto, así que el que
+     cruzaba el 80 % nunca entraba en A. Con un solo producto rentable, el
+     acumulado valía 100 y le tocaba «C»: la píldora de los residuales para el
+     que genera el 100 % del beneficio, y el veredicto remitiendo a una
+     categoría A que estaba vacía.
+
+     Caso: BUENO gana dinero, MALO lo pierde. BUENO es el 100 % del beneficio
+     positivo, así que es «A», y MALO es «D» por perder. */
+  const clases = await page.evaluate(js(`
+    DB.products = [
+      {id:'a', sku:'BUENO', name:'B', cogs:4, freight:0, fba:3, referral:15, price:20, channel:'FBA', lots:[]},
+      {id:'b', sku:'MALO',  name:'M', cogs:18, freight:0, fba:3, referral:15, price:20, channel:'FBA', lots:[]}];
+    const fila = (sku,q,bruto)=>({amazonorderid:'o'+sku, purchasedate:dia(5)+'T10:00:00+00:00',
+      fulfillmentchannel:'Amazon', saleschannel:'Amazon.es', sku:sku, asin:'B0X', itemstatus:'Shipped',
+      quantity:String(q), itemprice:String(bruto), itemtax:'0', shipcountry:'ES'});
+    DB.imports.orders = {rows:[fila('BUENO',400,8000), fila('MALO',50,1000)], count:2, file:'o'};
+    periodDays = 30;
+    const S = skuStats();
+    return S.map(x=>({sku:x.sku, abc:x.abc, profit:Math.round(x.profit), cum:Math.round(x.cum)}));
+  `));
+  clases.forEach(c=>console.log('     '+c.abc+' | '+c.sku+' | '+c.profit+' € | acumulado '+c.cum+' %'));
+  const bueno = clases.filter(c=>c.sku==='BUENO')[0], malo = clases.filter(c=>c.sku==='MALO')[0];
+  check('el único producto rentable es «A»', bueno.abc==='A',
+    bueno.abc+' · con el fallo era «C» con el 100 % del beneficio detrás');
+  check('y el que pierde dinero sigue siendo «D»', malo.abc==='D', malo.abc);
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

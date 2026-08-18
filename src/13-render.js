@@ -396,9 +396,12 @@ function renderRent(){
   const badge = cov>=100 ? '<span class="pill go">medido</span>'
               : cov>0    ? '<span class="pill warn">'+cov+'% medido</span>'
               :            '<span class="pill warn">estimado</span>';
+  /* El tipo efectivo se enseña calculado, no como una constante: la comisión
+     sale del % de cada producto y el catálogo puede mezclar categorías. */
+  const tipoEf = P.grossInc>0 ? num(P.referral/P.grossInc*100,1)+'%' : '—';
   const cobTxt = cov>=100 ? 'de la liquidación'
-               : cov>0    ? cov+'% de la liquidación · el resto estimado al 15%'
-               :            'estimada al 15%';
+               : cov>0    ? cov+'% de la liquidación · el resto estimado al '+tipoEf
+               :            'estimada al '+tipoEf+' · el % de cada producto';
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
     kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
@@ -468,7 +471,7 @@ function renderRent(){
     const cv = Math.round(P.feeCoverPct||0);
     if(cv<=0 && P.settleRows>0 && !P.settleMatched)
       v+='<br><br><strong>Hay una liquidación cargada y no reconozco sus columnas de tarifas.</strong> El fichero plano de Amazon tiene dos formatos y este lector entiende el que trae «item-related-fee-type». Las comisiones siguen estimadas al 15%: prefiero decírtelo a enseñarte 0 € de comisión y llamarlo medido.';
-    else if(cv<=0) v+='<br><br>Estas cifras usan comisiones estimadas al 15% porque no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado, no aproximado.';
+    else if(cv<=0) v+='<br><br>Estas cifras usan la comisión que tienes puesta en cada producto, no la que Amazon te cobró: no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado. Y revisa ese porcentaje en Catálogo, porque el valor por defecto es 15% y en muchas categorías no lo es.';
     else if(cv<100) v+='<br><br>La liquidación cargada cubre el <strong>'+cv+'%</strong> de lo facturado en este periodo. Ese trozo son comisiones reales; el resto sigue estimado al 15%. Amazon liquida cada 14 días, así que para cubrir un trimestre hacen falta unas seis liquidaciones.';
   } else v='Sin datos de ventas todavía.';
   document.getElementById('abcVerdict').innerHTML=v;

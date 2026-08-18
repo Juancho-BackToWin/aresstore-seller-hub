@@ -35,7 +35,7 @@ const snap = p => p.evaluate(()=>{
     name:(e.querySelector('.f-name')||{}).textContent, meta:(e.querySelector('.f-meta')||{}).textContent,
     ok:!!e.querySelector('.f-dot.ok')})));
   items.forEach(i=>console.log('     '+(i.ok?'✓':'✗')+' '+i.name.padEnd(22)+' '+(i.meta||'').slice(0,62)));
-  ck('los 6 informes en español se reconocen', items.filter(i=>i.ok).length===6, items.filter(i=>i.ok).length+'/6');
+  ck('los 7 informes traducibles se reconocen en español', items.filter(i=>i.ok).length===7, items.filter(i=>i.ok).length+'/7');
 
   const ES = await snap(p);
   console.log('     '+JSON.stringify(ES));

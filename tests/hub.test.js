@@ -69,7 +69,11 @@ function check(label, cond, extra){
     ok:!!e.querySelector('.f-dot.ok')
   })));
   items.forEach(i => console.log('     ' + (i.ok?'✓':'✗') + ' ' + i.name.padEnd(22) + ' ' + (i.meta||'').slice(0,46).padEnd(48) + (i.right||'')));
-  check('8 de 9 archivos reconocidos', items.filter(i=>i.ok).length===8, items.filter(i=>i.ok).length+'/9');
+  /* Doce informes reconocidos y uno que no: `desconocido.csv` está ahí a
+     propósito, porque tragarse un archivo que no se entiende es peor que
+     rechazarlo. La verificación uno a uno de los doce, en español y en inglés,
+     vive en tests/informes.test.js. */
+  check('12 de 13 archivos reconocidos', items.filter(i=>i.ok).length===12, items.filter(i=>i.ok).length+'/13');
   check('el archivo desconocido falla con mensaje útil',
     items.some(i=>i.name==='desconocido.csv' && !i.ok && /no lo reconozco/i.test(i.meta)));
   check('detecta el libro de inventario pese a venir en Latin-1',
@@ -226,7 +230,7 @@ function check(label, cond, extra){
   await page.waitForTimeout(300);
   const ds = await page.$$eval('#dataState tr', rs=>rs.slice(1).map(r=>Array.from(r.cells).map(c=>c.textContent.trim()).join(' | ')));
   ds.forEach(r=>console.log('     '+r));
-  check('los informes importados sobreviven a recargar', ds.length===8, ds.length+' informes');
+  check('los informes importados sobreviven a recargar', ds.length===12, ds.length+' informes');
 
   console.log('\n=== L · CAPTURAS Y MÓVIL ===');
   for(const v of ['panel','rentabilidad','tesoreria','inventario','compras','datos','cumplimiento','acerca']){

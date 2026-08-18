@@ -249,7 +249,12 @@ function renderDatos(){
       '<div class="c-path mut" style="font-style:italic">'+esc(r.en)+'</div>'+
       (r.warn?'<div class="c-path" style="color:var(--caution);margin-top:4px">⚠ '+esc(r.warn)+'</div>':'')+
       '<div class="c-state">'+(i? '<span class="pos">✓ '+num(i.count)+' filas</span>' : '<span class="mut">sin cargar</span>')+
-      ' · <span class="mut">'+esc(r.feeds)+'</span></div></div>';
+      ' · <span class="mut">'+esc(r.feeds)+'</span></div>'+
+      /* Un «✓ reconocido» sobre un informe que no llega a ningún número es la
+         apariencia de que funciona. Estos tres se guardan enteros y todavía no
+         alimentan nada, y eso se dice aquí. */
+      (r.guardaSinUsar?'<div class="c-path" style="color:var(--caution);margin-top:4px">Se guarda entero, pero todavía no alimenta ningún cálculo del hub.</div>':'')+
+      '</div>';
   }).join('');
   const F = freshness();
   const nMap = Object.keys(DB.mappings||{}).length;

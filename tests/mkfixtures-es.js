@@ -105,6 +105,19 @@ fs.writeFileSync(D+'/terminos-roto.csv', Buffer.from([stH.join(',')].concat(
       t[0].replace(',',''), clicks*36, clicks, '0,28', '0,64', spend, '64,00','17,9','210,6','8','11'].join(',');})
   ).join('\n'),'latin1'));
 
+/* 6b · Libro mayor de inventario en español. Es el único de los siete informes
+   traducibles que no tenía fixture en español: sin él, ese camino de detección
+   —por nombres de columna en español, no por cabecera inglesa— nunca se
+   probaba. Va en Latin-1, que es como lo sirve Amazon. */
+const ledH = ['Fecha','FNSKU','ASIN','MSKU','Título','Tipo de evento','ID de referencia','Cantidad',
+ 'Centro logístico','Estado','Motivo','País','Cantidad conciliada','Cantidad sin conciliar','Fecha y hora'];
+const ledR=[];
+['DE','FR','IT','ES'].forEach((c,ci)=>SKUS.forEach((s,si)=>{
+  ledR.push([iso(ago(ci*3+si)), 'X00'+si, 'B0TEST'+si, s[0], s[1], 'Envíos', '171-x'+si, '-12',
+             'FRA7', 'VENDIBLE', '', c, '0', '0', iso(ago(ci))+' 10:00:00']);
+}));
+tsv('libro-inventario-es.txt', ledH, ledR, 'latin1');
+
 /* 7 · CASO HOSTIL: cabeceras que no dicen nada. Solo puede salir por contenido. */
 const hostH = ordH.map((_,i)=>'columna_'+(i+1));
 tsv('hostil-sin-nombres.txt', hostH, ordR.slice(0,200), 'utf8');

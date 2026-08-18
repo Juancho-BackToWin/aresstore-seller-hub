@@ -289,6 +289,9 @@ const REPORTS = [
 
   {id:'ledger', label:'Libro mayor de inventario', en:'Inventory Ledger',
    path:'Informes › Logística de Amazon › Inventario', feeds:'Movimientos de stock por país',
+   /* Se guarda entero y todavía no alimenta ningún cálculo. Se dice en la
+      pantalla en vez de dejar que el «✓ reconocido» parezca otra cosa. */
+   guardaSinUsar:1,
    hdr:['eventtype','referenceid','fnsku'],
    fields:{
      _date   :{req:1, type:'date',   alias:[/^date/,/^fecha/]},
@@ -306,6 +309,7 @@ const REPORTS = [
 
   {id:'storage', label:'Tarifas mensuales de almacenamiento', en:'FBA Monthly Storage Fees',
    path:'Informes › Logística de Amazon › Pagos', feeds:'Coste real de almacenaje',
+   guardaSinUsar:1,
    hdr:['estimatedmonthlystoragefee'], onlyEn:true, fields:{}, sig:()=>false},
 
   {id:'planning', label:'Salud del inventario', en:'FBA Inventory Planning',
@@ -318,6 +322,7 @@ const REPORTS = [
 
   {id:'vat', label:'Transacciones sujetas a IVA', en:'VAT Transactions',
    path:'Informes › Biblioteca de documentos fiscales', feeds:'IVA por país',
+   guardaSinUsar:1,
    hdr:['transactiontype','salearrivalcountry'], onlyEn:true, fields:{}, sig:()=>false}
 ];
 
@@ -835,18 +840,36 @@ function pnl(){
   /* Tarifas estimadas de un subconjunto de ventas. Se usa para el periodo
      entero cuando no hay liquidación, y solo para el trozo que la liquidación
      no cubre cuando sí la hay. */
+  /* La vista previa de tarifas, cuando está cargada, manda sobre el porcentaje
+     que hayas puesto a mano: es lo que Amazon dice que te va a cobrar por ese
+     SKU. Se importaba, se guardaba y no llegaba a ningún número del P&L, que
+     es justo el informe que hace falta para dejar de suponer el 15 %.
+
+     Del informe se saca el PORCENTAJE (comisión ÷ precio del informe), no el
+     importe por unidad: así se adapta al precio al que vendiste de verdad, que
+     con promociones no es el del informe. */
+  const tarifas = {};
+  imp('fees').forEach(r=>{
+    const sk = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase(); if(!sk) return;
+    const ref   = toNum(gv(r,'_referral','estimatedreferralfeeperunit'));
+    const precio= toNum(gv(r,'_price','yourprice','salesprice'));
+    const fbaUd = toNum(gv(r,'_fba','expectedfulfillmentfeeperunit'));
+    tarifas[sk] = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
+  });
+  let udsConTarifa=0;
   const estFees = rows => {
     let ref=0, f=0;
     rows.forEach(r=>{
-      const p=pm[String(r.sku).toLowerCase()];
-      /* La comisión es la del producto, no un 15 % para todo el catálogo. El
-         campo es editable en Catálogo y estaba ahí sin que nadie lo leyera: en
-         joyería, donde Amazon cobra el 20 %, ese 15 % inflaba el margen seis
-         puntos, que es la diferencia entre escalar y no tocar. */
-      const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
+      const k = String(r.sku).toLowerCase();
+      const p = pm[k], t = tarifas[k];
+      /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el
+         15 % por defecto. El 15 % es el último recurso, no el primero. */
+      const pct = (t && t.pct>0) ? t.pct
+                : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
+      if(t && t.pct>0) udsConTarifa += r.qty;
       ref += r.revenue*pct;
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
-      if(!isFbm) f += (p?toNum(p.fba):3.2)*FUEL*r.qty;
+      if(!isFbm) f += (t && t.fba>0 ? t.fba : (p?toNum(p.fba):3.2)*FUEL)*r.qty;
     });
     return {referral:ref, fba:f};
   };
@@ -934,6 +957,7 @@ function pnl(){
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+    feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,

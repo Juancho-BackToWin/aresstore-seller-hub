@@ -427,7 +427,9 @@ function renderRent(){
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
     line('Coste de producto',P.cogs,'',true)+
-    line('Publicidad',P.ppc,'',true)+
+    line('Publicidad',P.ppc, P.adDays
+        ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
+        : (P.ppc>0?'estimado a diario':''), true)+
     line('Gastos fijos',P.fixed,'prorrateados',true)+
     line('Reembolsos recuperados',P.reimb)+
     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
@@ -462,6 +464,18 @@ function renderRent(){
     v='<strong>'+A.length+' de '+S.length+' productos generan el 80% de tu beneficio.</strong> ';
     if(A.length<=2 && S.length>3) v+='Es una concentración alta: si Amazon suspende uno de esos listados o entra un competidor agresivo, el negocio se para. Diversificar no es una aspiración, es gestión de riesgo. ';
     if(D.length) v+='<span style="color:var(--stop)">'+D.length+' producto'+(D.length===1?'':'s')+' pierde'+(D.length===1?'':'n')+' dinero y consume atención, stock y caja que deberían ir a los de categoría A. La decisión no es optimizarlos: es subirles el precio, renegociar el coste o retirarlos.</span> ';
+    /* El informe de términos de búsqueda no trae fecha por fila pero sí su
+       propio rango. Cargar su gasto entero contra cualquier periodo hacía que
+       el margen fuese de −58,6 % a 30 días y de −13,6 % con «Todo», con las
+       mismas ventas todos los días. Se prorratea, y se dice que se prorratea. */
+    if(P.adDays>0 && Math.round(P.adSolapePct)<100)
+      v+='<br><br>El informe de publicidad cubre '+num(P.adDays)+' días'+
+         (P.adDesde?' ('+P.adDesde.toLocaleDateString('es-ES')+' a '+P.adHasta.toLocaleDateString('es-ES')+')':'')+
+         ' y solapa el <strong>'+num(P.adSolapePct,0)+'%</strong> del periodo que estás mirando. '+
+         'El gasto que ves está prorrateado suponiendo que inviertes parejo: es una cifra ajustada, no medida. '+
+         (Math.round(P.adSolapePct)===0 ? 'Con cero solape, descárgate el informe del periodo que quieres analizar antes de fiarte del TACOS.' : '');
+    if(countryFilter!=='ALL' && P.ppc>0)
+      v+='<br><br>Estás filtrando por un solo mercado y el informe de publicidad no trae país: el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
     /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en
        meses de venta cero: convierte el informe en insuficiente. Los gastos
        fijos sí se cuentan por los días pedidos, así que el margen sale más bajo

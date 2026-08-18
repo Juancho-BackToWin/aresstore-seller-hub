@@ -770,7 +770,39 @@ function adStats(){
     if(term) terms.push({term, campaign:gv(r,'_campaign','campaignname')||'', spend:sp, sales:sa, orders:or_, clicks:cl, impr:im});
   });
   terms.sort((a,b)=> (a.orders===0?1:0)-(b.orders===0?1:0) || b.spend-a.spend);
-  return {spend, sales, clicks, impr, waste, wasteTerms, terms, acos: sales>0?spend/sales*100:0};
+  /* El informe de términos de búsqueda no trae fecha por fila, pero sí trae su
+     propio rango en «Start Date» y «End Date». Sin usarlo, el gasto entero se
+     cargaba a cualquier periodo que estuvieras mirando: con ventas idénticas
+     día a día, el margen iba de −58,6 % a 30 días a −13,6 % con «Todo». El
+     mismo gasto, el mismo negocio, tres respuestas.
+
+     Ahora se prorratea a los días del periodo. Prorratear supone que gastaste
+     parejo, que es una suposición, así que la pantalla lo dice: es una cifra
+     ajustada, no medida. */
+  let d0=null, d1=null;
+  rows.forEach(r=>{
+    const a = parseDate(gv(r,'_from','startdate','fechadeinicio','start'));
+    const b = parseDate(gv(r,'_to','enddate','fechadefin','fechadefinalizacion','end')) || a;
+    if(a && (!d0 || a<d0)) d0=a;
+    if(b && (!d1 || b>d1)) d1=b;
+  });
+  const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
+  const factor = adDays ? daysInPeriod()/adDays : 1;
+  /* Cuánto del periodo cubre de verdad ese informe. Prorratear un informe de
+     junio sobre el mes de agosto da un número utilizable —mejor que cero, que
+     inflaría el margen— pero no es una medición de agosto, y la diferencia
+     tiene que verse en pantalla. */
+  let solape = 0;
+  if(d0 && d1){
+    const pi = periodStart(), pf = today();
+    const a = d0>pi ? d0 : pi, b = d1<pf ? d1 : pf;
+    solape = Math.max(0, daysBetween(a,b)+1);
+  }
+  return {spend: spend*factor, spendBruto: spend, adDays, factor,
+          desde:d0, hasta:d1, solape,
+          solapePct: daysInPeriod()>0 ? Math.min(100, solape/daysInPeriod()*100) : 0,
+          sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
+          acos: sales>0?spend/sales*100:0};
 }
 /* Cuenta de resultados del periodo. Cada línea sabe si está medida o estimada. */
 function pnl(){
@@ -862,7 +894,9 @@ function pnl(){
     tacos: grossInc>0 ? ppc/grossInc*100 : 0,
     roi: cogs>0 ? profit/cogs*100 : 0,
     avgPrice: units>0 ? grossInc/units : 0,
-    adSales: ads.sales, adWaste: ads.waste, adWasteTerms: ads.wasteTerms
+    adSales: ads.sales, adWaste: ads.waste, adWasteTerms: ads.wasteTerms,
+    adDays: ads.adDays, adFactor: ads.factor, adSpendBruto: ads.spendBruto,
+    adSolapePct: ads.solapePct, adDesde: ads.desde, adHasta: ads.hasta
   };
 }
 /* Rentabilidad por SKU + clasificación ABC */

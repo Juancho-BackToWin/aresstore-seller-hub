@@ -335,6 +335,58 @@ const js = body => '(()=>{' + LAB + body + '})()';
     bueno.abc+' · con el fallo era «C» con el 100 % del beneficio detrás');
   check('y el que pierde dinero sigue siendo «D»', malo.abc==='D', malo.abc);
 
+  console.log('\n=== PNL-L · EL GASTO DE PUBLICIDAD SE AJUSTA AL PERIODO ===');
+  /* El informe de términos de búsqueda no trae fecha por fila, pero sí su
+     propio rango en «Start Date» y «End Date». Sin usarlo, el gasto entero se
+     cargaba a cualquier periodo: con ventas idénticas día a día, el margen iba
+     de −58,6 % a 30 días a −13,6 % con «Todo». El mismo gasto y el mismo
+     negocio, tres respuestas distintas.
+
+     Caso: informe de 60 días con 1.200 € de gasto = 20 €/día.
+       mirando 30 días → 600,00 €
+       mirando 60 días → 1.200,00 €
+       mirando 90 días → 1.800,00 € */
+  const ppc = await page.evaluate(js(`
+    const ventas=[]; for(let k=0;k<120;k++) ventas.push(venta(dia(k),10));
+    DB.imports.orders = {rows:ventas, count:120, file:'o'};
+    DB.imports.searchterm = {count:1, file:'ads', rows:[{
+      startdate: dia(59), enddate: dia(0),
+      customersearchterm:'rodillo', campaignname:'SP', impressions:'1000',
+      clicks:'100', spend:'1200', totalsales:'3000', totalorders:'20'}]};
+    const out={};
+    [30,60,90].forEach(d=>{ periodDays=d; const P=pnl();
+      out[d]={ppc:P.ppc, dias:P.adDays, solape:Math.round(P.adSolapePct)}; });
+    periodDays=30;
+    return out;
+  `));
+  check('el hub lee el rango del propio informe', ppc[30].dias===60, ppc[30].dias+' días');
+  check('a 30 días, la mitad del gasto', near(ppc[30].ppc, 600),
+    ppc[30].ppc.toFixed(2)+' € = 1.200 × (30/60) · con el fallo eran 1.200,00 € en los tres casos');
+  check('a 60 días, el gasto entero', near(ppc[60].ppc, 1200), ppc[60].ppc.toFixed(2)+' €');
+  check('a 90 días, uno y medio', near(ppc[90].ppc, 1800), ppc[90].ppc.toFixed(2)+' €');
+  check('y con 30 días el informe cubre el periodo entero', ppc[30].solape===100,
+    ppc[30].solape+' % de solape');
+
+  console.log('\n=== PNL-M · UN INFORME DE PUBLICIDAD VIEJO SE DELATA ===');
+  /* Prorratear un informe de hace tres meses sobre el mes actual da un número
+     utilizable —mejor que cero, que inflaría el margen— pero no es una medición
+     de este mes, y eso tiene que verse. */
+  const viejo = await page.evaluate(js(`
+    const ventas=[]; for(let k=0;k<120;k++) ventas.push(venta(dia(k),10));
+    DB.imports.orders = {rows:ventas, count:120, file:'o'};
+    DB.imports.searchterm = {count:1, file:'ads', rows:[{
+      startdate: dia(119), enddate: dia(90),
+      customersearchterm:'rodillo', campaignname:'SP', impressions:'1000',
+      clicks:'100', spend:'900', totalsales:'2000', totalorders:'10'}]};
+    periodDays = 30;
+    const P = pnl();
+    return {solape:Math.round(P.adSolapePct), ppc:P.ppc};
+  `));
+  check('un informe que no toca el periodo lo dice: 0 % de solape', viejo.solape===0,
+    viejo.solape+' % · el informe es de hace tres meses');
+  check('pero el gasto no se pone a cero, que inflaría el margen', viejo.ppc>0,
+    viejo.ppc.toFixed(2)+' € prorrateados');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

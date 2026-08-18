@@ -1,7 +1,9 @@
 # Aresstore Seller Hub — traspaso a sesión nueva
 
-Estado a 18 de agosto de 2026, **con la v0.7 ya desplegada y verificada en
-producción**. Este documento
+Estado a 18 de agosto de 2026, **con la v0.7 desplegada y con la fontanería
+cerrada**: los doce informes verificados uno a uno, la salida probada de ida y
+vuelta, los accesos en verde, y veinte números creíbles y falsos encontrados en
+revisión adversarial y corregidos con prueba (§5). Este documento
 es lo único que hace falta leer para retomar el proyecto desde cero. Todo lo demás
 está en el repositorio.
 
@@ -53,7 +55,7 @@ src/12b-historico.js  M0 · archivo diario, rotura de stock, velocidad real
 src/12c-lotes.js      M1.1 · lotes de coste, libro de unidades, tres métodos
 src/13-render.js      navegación, render, modales, arranque, autoactualización
 build.sh              ensambla index.html, sella versión, regenera sw.js
-tests/                cinco suites Playwright + generadores de fixtures
+tests/                diez suites Playwright + generadores de fixtures (§7)
 ```
 
 `./build.sh` ensambla, sella `v{VER} · {BUILD} UTC` en el pie, escribe un `sw.js`
@@ -223,48 +225,47 @@ corrigen **el número**, no solo la etiqueta.
 de importar **también el informe de inventario**. Sin el stock no se puede hacer el
 cuadre, y sin el cuadre el módulo trabaja a ciegas — y lo dice en pantalla.
 
-### 3.5 · La cola de trabajo, en orden
+### 3.5 · La cola de trabajo, y dónde va
 
-Con el despliegue resuelto, el trabajo va en tres fases. Las dos primeras son
-transversales; la tercera va herramienta a herramienta, y de cada una se hacen los
-pasos 1 a 3 del método antes de pasar a la siguiente.
+**Fase A · inventario funcional honesto — hecha.** Cada pantalla recorrida
+ejecutándola, no leyéndola, y clasificada en la tabla de estado de
+`docs/METODO.md`. Resultado corto: ninguna pantalla es una maqueta, pero
+**Cumplimiento es un registro manual** (rellenas tú, no lee ningún informe) y el
+**Validar producto / Comparador PanEU es una calculadora independiente** que no
+usa los datos importados.
 
-**Fase A · Inventario funcional honesto.** Recorrer cada pantalla y clasificarla
-por lo que se haya comprobado *ejecutándola*: funciona / funciona a medias /
-maqueta. El resultado va a la tabla de estado de `docs/METODO.md`. Lo que más
-importa es lo que aparenta funcionar y no funciona.
+**Fase B · fontanería — hecha.**
 
-**Fase B · Fontanería.** Entrada y salida de verdad:
+- Los **doce informes**, uno a uno, en inglés, y los siete traducibles también en
+  español (`tests/informes.test.js`). Faltaban fixtures de liquidación, salud del
+  inventario, reembolsos e IVA en inglés y del libro de inventario en español, así
+  que cinco caminos de detección no los probaba nadie. Se importan **de uno en
+  uno** a propósito: en lote, un informe identificado como otro queda tapado.
+- La prueba pregunta además si lo reconocido **alimenta algo**. Tres se guardan
+  enteros y no llegan a ningún número: libro de inventario, tarifas de
+  almacenamiento e IVA por país. La pantalla de Datos lo dice en vez de lucir un
+  tick, y la prueba se rompe si esa lista cambia (ver P-10).
+- **Copia de seguridad y restauración**: ida y vuelta sin pérdida, comparando los
+  números calculados y no el JSON (`tests/salida.test.js`).
+- **Exportaciones**: siete, una por módulo, que no existían.
+- **Accesos**: `pwa.test.js` en verde y dentro de `test:all`, con servidor propio.
 
-- los doce informes del importador, verificados uno a uno en español y en inglés
-  con fixtures realistas;
-- copia de seguridad y restauración, ida y vuelta sin pérdida;
-- las exportaciones de cada módulo;
-- los accesos: app instalable con el icono correcto, autoactualización y
-  funcionamiento sin conexión — incluido el manifest incrustado como `data:` URL
-  que hace fallar `pwa.test.js` (§6). Cuidado ahí: **hay una app ya instalada en
-  móvil y PC**, y los datos viven en el navegador.
+**Fase C · herramienta a herramienta.** Pasos 1 a 3 del método cerrados en todas
+las que ya existen; lo que queda por construir es esto, en este orden:
 
-**Fase C · Herramienta a herramienta**, en este orden:
+| # | Módulo | Qué es | Necesita de Juancho |
+|---|---|---|---|
+| 1 | **M1.2** | las 10 métricas que faltan de las 21 de Rentabilidad | — |
+| 2 | **M1.3** | gastos indirectos con amortización diaria | P-4 |
+| 3 | **M1.4** | IVA como línea propia del P&L | — |
+| 4 | **M2** | velocidad, cobertura por país y previsión de reposición | P-3 |
+| 5 | **M3** | compras y caja: cuándo lanzar el pedido | P-5, P-6 |
+| 6 | **M4** | ACOS de equilibrio | — |
+| 7 | **M5** | detectores de reembolso (5.1 y 5.2) | — |
+| 8 | **M6** | diferenciales europeos de cumplimiento | — |
 
-| # | Herramienta | Trabajo pendiente |
-|---|---|---|
-| 1 | Datos · importador | verificar los doce informes uno a uno |
-| 2 | Catálogo | verificar |
-| 3 | Rentabilidad / P&L | M1.2 métricas que faltan (10 de 21) · M1.3 gastos indirectos con amortización diaria · M1.4 IVA como línea del P&L |
-| 4 | Histórico (M0) | verificar |
-| 5 | Inventario | M2 velocidad, cobertura y reposición |
-| 6 | Compras y Tesorería | M3 caja y pedidos |
-| 7 | Publicidad | M4 ACOS de equilibrio |
-| 8 | Reembolsos | M5.1 y M5.2 detectores — no construido |
-| 9 | Cumplimiento | M6 diferenciales europeos |
-
-Queda además M1.5 (vistas y exportación de Rentabilidad), que se resuelve dentro
-de la Fase B en lo que toca a exportar.
-
-**Los pasos 4 y 5 del método —cargar datos reales y verificar contra la realidad—
-son de Juancho y van al final, de una sola vez.** Lo que aparezca por el camino y
-dependa de él se anota en `docs/PENDIENTE-JUANCHO.md` y se sigue.
+Los pasos 4 y 5 del método —cargar los datos reales y contrastarlos con el
+negocio— son de Juancho y van al final, de una sola vez.
 
 ## 4. Lo que hace falta de Juancho (datos, no decisiones)
 
@@ -393,6 +394,114 @@ hace que se escale un producto que pierde dinero.
 
 ---
 
+### De la revisión adversarial del 18 de agosto de 2026 — veinte, todos con prueba
+
+Tres pasadas adversariales sobre Rentabilidad y Panel, Inventario e Histórico, y
+Tesorería y Compras, buscando **el número creíble y falso** y demostrándolo
+ejecutando, no razonando. Salieron veinte. Ninguno daba error en pantalla.
+
+**Los que sellaban como medido lo que no lo estaba:**
+
+- **`measured = sf.rows > 0`.** Bastaba que hubiera filas de liquidación en el
+  periodo. El fichero plano de Amazon tiene **dos esquemas** y este lector solo
+  entiende el viejo, con `item-related-fee-type`; el que Amazon sirve hoy trae
+  `amount-type`. Con ese, las filas entraban, ninguna columna de tarifa se
+  reconocía, y la comisión salía **0 € declarada medida**: +23,4 % de beneficio.
+  Ahora `matched` cuenta solo las filas cuyas columnas se entienden.
+- **Una liquidación de 14 días midiendo 90.** Amazon liquida cada dos semanas, así
+  que mirar un trimestre con una liquidación cargada es lo normal: se restaban 14
+  días de comisiones a 90 de ingresos. +20,4 %. Ahora la liquidación aporta su
+  rango: lo que cubre va medido y el resto estimado.
+- **Una categoría de tarifa ausente contada como cero.** Cobrar 0 € de comisión
+  sobre ventas reales no le pasa a nadie: es que el concepto no venía en el
+  fichero. Se estima y se deja de llamar medida.
+- **«No se ha detectado ningún día de rotura»** dicho sin una sola foto de
+  inventario dentro de la ventana. Una ausencia de medición presentada como
+  medición.
+
+**Los que dependían de dónde estabas mirando, no de los datos:**
+
+- **`periodDays || 30`.** «Todo» es `periodDays = 0`, y ser cero lo hacía falsy:
+  todo lo que dividía por él caía al literal 30. Cuatro meses de ventas contra un
+  mes de gastos fijos (+10,9 puntos de margen), «Aporta al año» ×12,17 sobre lo
+  que ya eran cuatro meses (66.635 € donde eran 4.100 €), y la velocidad de venta
+  ×4: Inventario mandaba pedir 2.156 unidades donde tocaban 311.
+- **La velocidad dividida por el periodo pedido y no por el observado.** Pedir
+  «12 meses» con un informe de cuatro hundía la velocidad a un tercio y hacía
+  desaparecer de la pantalla la única referencia en rotura.
+- **El filtro de país dividía las ventas y dejaba el stock entero.** El stock de
+  FBA es europeo y no se puede trocear: con España seleccionada, una referencia
+  que se agota en 30 días aparecía con 60 de cobertura.
+- **El gasto de publicidad se cargaba entero a cualquier periodo.** Con ventas
+  idénticas día a día, el margen iba de −58,6 % a −13,6 % según el botón.
+
+**Los que invertían un ranking, que es lo que dirige la atención al sitio equivocado:**
+
+- **Tres bases distintas para el mismo «ingreso neto»**: el P&L con el IVA real,
+  la ABC dividiendo entre 1,21 clavado y la tabla de mercados con el IVA nominal
+  del país. Dos SKU económicamente idénticos, uno alemán y otro español, salían
+  con un 85 % de diferencia de beneficio y el alemán —el mejor de los dos— se
+  llevaba la «C».
+- **La clase ABC se decidía por el acumulado DESPUÉS** de sumar el producto, así
+  que el que cruzaba el 80 % nunca entraba en A. Con un solo producto rentable
+  salía «C» y el veredicto remitía a una categoría A vacía.
+- **La comisión al 15 % para todo el catálogo**, ignorando el campo por producto
+  que es editable en Catálogo, y también el informe de vista previa de tarifas,
+  que se importaba y no llegaba a ningún número. En joyería son seis puntos.
+
+**Los que hacían parecer sana la caja:**
+
+- **`dayCogsFlow = 0`.** La curva proyectaba un negocio que vende noventa días y
+  no vuelve a comprar género. El ejemplo pasaba de «mínimo 1.424 €, aguanta» a
+  −232 € y descubierto, y encima recomendaba un pedido adicional de 7.000 €.
+- **`daysBetween` restaba milisegundos entre un instante y una medianoche.** A
+  partir de las 12:00 locales el vencimiento de HOY salía en −1 y el filtro `k>=0`
+  lo tiraba: 2.500 € de 10.000 desaparecidos, y por la mañana un número y por la
+  tarde otro. Misma familia que el fallo de `iso()`.
+- **Lo vencido y sin pagar no entraba en la curva** mientras el KPI seguía
+  contándolo: una deuda que la proyección no gastaba nunca.
+- **El gráfico dibujaba la altura por valor absoluto**: −6.000 € idéntico a
+  +6.000 €, y cuanto más hondo el agujero más alta la barra.
+- **El aviso rojo estaba detrás de «no hay pedidos ni gastos»**, que es el estado
+  de quien acaba de empezar: noventa días en negativo sin una línea roja aquí,
+  mientras el Panel sí avisaba con los mismos datos.
+
+**Los que contaban dos veces, o ninguna:**
+
+- **Las devoluciones se contaban y no restaban nada.** Un producto con el 100 % de
+  devoluciones daba el mismo beneficio que uno con cero.
+- **El cuadre de Catálogo se recalculaba en la pantalla con las ventas brutas**
+  mientras el motor recortaba con las netas: la columna decía «+1812» junto a la
+  frase «1824 se vendieron antes», y un SKU que cuadraba exacto llegaba a mostrar
+  «−5» pegado a «cuadra exactamente».
+- **Un SKU que solo venía en el informe multipaís valía cero unidades** en
+  Inventario y en el histórico, mientras la tabla de al lado enseñaba sus 1.400.
+- **«Pedir» ignoraba lo que ya estaba en un barco**: 753 unidades de sobrecompra
+  y una alarma de rotura falsa.
+- **«Capital en mercancía · pedidos en curso»** contaba los ya recibidos, que
+  Inventario ya valora.
+- **Las ventas a mercados fuera de `COUNTRIES`** —el Reino Unido— se evaporaban de
+  la tabla de mercados: un 33 % de la facturación.
+
+**Los de etiqueta, que también engañan:**
+
+- **«Cobertura media 119 d»** era la media aritmética de coberturas por SKU, con
+  tope 365 y el centinela de venta cero colándose como 365 días. Ahora es la
+  cobertura de la cartera: totales entre totales, sin promediar ratios.
+- **«Plazo medio»** era la media de las fichas de proveedor: crear la ficha de uno
+  rápido al que no le compras nada bajaba tu plazo de 33 a 23 días.
+- **«Margen neto 0,0 %»** con 900 € de pérdidas y cero ventas.
+- **La historia acumulada se inventaba hasta 30 días**, tomando el día 1 del mes
+  compactado más antiguo, y la rotura compactada se apilaba entera en el primer
+  mes: 110 días de rotura dentro de un mes con 2 días archivados.
+
+**Y uno que no era un número, sino una pérdida:**
+
+- **Restaurar aceptaba cualquier JSON.** Un objeto cualquiera pasaba el filtro,
+  reemplazaba la base entera y `saveDB()` lo dejaba escrito sin preguntar. El
+  histórico —lo único que no se puede reconstruir descargando informes otra vez—
+  desaparecía por soltar el fichero equivocado.
+
 ## 6. Riesgos abiertos y límites honestos
 
 - **La base de la comisión no está cerrada.** El contrato europeo la define sobre
@@ -415,15 +524,31 @@ hace que se escale un producto que pierde dinero.
   no es un problema de software: no se arregla programando.
 - **No están modeladas** las sobretasas de utilización de almacenamiento ni de
   inventario añejo.
-- **El manifest y el apple-touch-icon van incrustados como `data:` URL** en
-  `src/01-head.html`, mientras `build.sh` genera un `manifest.webmanifest` real y
-  `vercel.json` le pone cabeceras de caché. Nadie enlaza ese archivo. `pwa.test.js`
-  falla por esto (dos comprobaciones) y es un fallo anterior a M0, no una
-  regresión. Consecuencia práctica: iOS Safari históricamente ignora los
-  `apple-touch-icon` en `data:`, así que el icono de la pantalla de inicio en
-  iPhone puede no ser el bueno. No se ha tocado a propósito: cambiar la URL del
-  manifest en una app ya instalada en móvil y PC merece hacerse a conciencia y
-  con una copia de seguridad descargada antes.
+- **La fase del ciclo de cobro de Amazon se asume.** La proyección sitúa el
+  primer cobro a un ciclo completo desde hoy, que es lo más prudente, pero la
+  fase real es desconocida y con los datos de ejemplo mueve la caja mínima entre
+  1.424 € y 5.501 € sin que cambie ningún dato. Está dicho en «Supuestos» y es
+  P-8 en la lista de Juancho.
+- **La tasa de procesamiento de devolución no está modelada.** Depende de la
+  categoría y del porcentaje de devoluciones de cada referencia. Si Amazon la
+  cobra, el beneficio real es menor que el que enseña la pantalla; la pantalla lo
+  dice en vez de inventarse el importe. Es P-9.
+- **El gasto de publicidad se prorratea.** El informe de términos de búsqueda no
+  trae fecha por fila, solo su rango, así que el gasto se reparte suponiendo que
+  se invierte parejo. Es una cifra ajustada, no medida, y la pantalla lo dice con
+  el porcentaje de solape. Tampoco trae país: con un mercado filtrado, el gasto
+  que se ve es el de todos.
+- **Tres informes se importan y no alimentan nada**: libro de inventario, tarifas
+  de almacenamiento e IVA por país. Sus módulos no existen todavía. La pantalla de
+  Datos lo dice y `informes.test.js` se rompe si la lista cambia sin que nadie
+  actualice lo que se promete. Es P-10.
+- **Con «365 días» y un informe más corto, el margen sale por debajo del real**:
+  las ventas son las que hay y los gastos fijos se cuentan por los 365 días
+  completos. Se dice en pantalla. Es conservador a propósito.
+- **El histórico solo mide la rotura los días que tienen foto de inventario.** Con
+  una foto semanal, la velocidad real se queda un 23 % por debajo de la verdadera;
+  sin ninguna, colapsa a la media simple (−33 %) y la pantalla dice que no puede
+  saberlo en vez de afirmar que no hubo rotura. Es P-3.
 - **`localStorage` sigue siendo el único sitio donde vive el histórico.** M0
   reduce mucho el riesgo de llenarlo, pero no elimina el de que el navegador
   libere espacio o alguien borre datos de navegación. La copia de seguridad
@@ -439,25 +564,38 @@ hace que se escale un producto que pierde dinero.
 npm install                    # playwright (los navegadores ya están en el entorno)
 pip3 install Pillow            # solo para build.sh: rasteriza los iconos
 bash build.sh                  # ensambla index.html · nunca editarlo a mano
-npm run fixtures     # informes de Amazon simulados, en inglés y en español
-npm run test         # suite general
-npm run test:es      # los informes en español dan las mismas cifras que en inglés
-npm run test:m0      # el histórico no duplica, no pierde y detecta rotura
-npm run test:m11     # los tres métodos de coste contra la cuenta hecha a mano
-npm run test:all     # las cuatro de una vez
+npm run fixtures               # informes de Amazon simulados, en inglés y en español
+npm run test:all               # las diez suites de una vez
 ```
 
-`tests/m11.test.js` está escrito con la aritmética de cada caso **en el comentario**
-a propósito: si alguien cambia el motor y la prueba falla, tiene ahí la cuenta para
-saber quién de los dos está equivocado. `M11-S` abre un contexto de navegador en
-`Europe/Madrid`, porque el fallo de zona horaria era invisible corriendo en UTC.
+| Suite | Qué sujeta |
+|---|---|
+| `test` (`hub.test.js`) | navegación, importación en lote, panel, rentabilidad, persistencia |
+| `test:es` | los informes en español dan las mismas cifras que en inglés |
+| `test:m0` | el histórico no duplica, no pierde y detecta rotura |
+| `test:m11` | los tres métodos de coste contra la cuenta hecha a mano |
+| `test:pnl` | tarifas, comisión, base del ingreso neto, periodo, publicidad, devoluciones |
+| `test:caja` | la proyección de caja a 90 días, incluido el gráfico medido en píxeles |
+| `test:inv` | cobertura, velocidad, reposición y honestidad del histórico |
+| `test:informes` | los doce informes uno a uno, y **qué alimenta cada uno** |
+| `test:salida` | copia de seguridad, restauración y las siete exportaciones |
+| `test:pwa` | instalable, iconos, autoactualización y sin conexión. Levanta su propio servidor |
 
-`tests/pwa.test.js` es aparte: necesita la app servida en `http://localhost:8899`
-(`python3 -m http.server 8899`) porque comprueba el service worker y el modo sin
-conexión, que no funcionan sobre `file://`. Falla dos comprobaciones por lo del
-manifest, y es anterior a M0.
+Las pruebas llevan **la aritmética del caso en el comentario** a propósito: si
+alguien cambia el motor y una falla, tiene ahí la cuenta para saber quién de los
+dos está equivocado. Varias corren en `Europe/Madrid`, porque el fallo de zona
+horaria era invisible en UTC.
 
----
+Tres cosas que estas suites hacen a propósito y conviene no deshacer:
+
+- **`informes.test.js` importa de uno en uno.** En lote, un informe identificado
+  como otro queda tapado porque el segundo pisa al primero y las cuentas siguen
+  saliendo.
+- **`salida.test.js` lee el CSV que se habría descargado**, interceptando el
+  Blob. Comprobar que el botón existe no dice nada: un botón que produce un
+  fichero vacío pasa esa prueba. Así salió que los lotes se exportaban a coste 0.
+- **`caja.test.js` mide el gráfico en píxeles del DOM**, no leyendo el CSS. El
+  fallo era que una barra negativa se dibujaba igual que una positiva.
 
 ## 8. Mensaje para arrancar la sesión nueva
 

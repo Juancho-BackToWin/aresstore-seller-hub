@@ -710,6 +710,11 @@ function salesRows(opt){
       qty: toNum(gv(r,'_qty','quantity')),
       revenue: toNum(gv(r,'_amount','itemprice')),
       tax: toNum(gv(r,'_tax','itemtax')),
+      /* La columna de impuesto es OPCIONAL en este informe (`_tax` req:0), así
+         que hay que distinguir «el IVA es cero» de «no me han dicho el IVA».
+         Confundirlos era el fallo más caro del hub: ver taxBasis(). */
+      taxSeen: (()=>{ const v = gv(r,'_tax','itemtax');
+                      return v !== undefined && v !== null && String(v).trim() !== ''; })(),
       country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
       cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0
@@ -809,12 +814,74 @@ function adStats(){
           sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
           acos: sales>0?spend/sales*100:0};
 }
+/* IVA · la base sobre la que se calcula TODO margen.
+
+   El informe de pedidos trae la columna de impuesto como opcional. Cuando
+   faltaba, `tax` valía 0 y el «ingreso neto» pasaba a ser el ingreso CON IVA,
+   sin un solo aviso. No es solo que inflara el margen 4,5 puntos: **invertía
+   el orden entre mercados**. Amazon cobra la comisión sobre el precio con
+   IVA, así que el país de tipo más alto es genuinamente el peor; sin la
+   columna salía el mejor. Medido en tests/iva.test.js con tres mercados:
+   DE > ES > SE se convertía en SE > ES > DE, exactamente del revés, que es
+   justo la decisión para la que existe el comparador PanEU.
+
+   Ahora, donde falta la columna, el IVA se DEDUCE del tipo del país y todo lo
+   que dependa de la base queda etiquetado como estimado. Nunca medido.
+
+   La salvaguarda del tipo efectivo observado evita el error simétrico: si en
+   las filas que SÍ traen columna el IVA efectivo de ese mercado es ~0, es que
+   sus precios vienen ya netos y no hay nada que deducir. Sin esto, un informe
+   neto se quedaría sin IVA dos veces y el margen saldría hundido en vez de
+   inflado — el mismo tipo de fallo, con el signo cambiado. */
+function taxBasis(S){
+  const nominal = {};
+  COUNTRIES.forEach(c => { nominal[c.code] = c.vat; });
+
+  const obs = {};
+  S.forEach(r => {
+    if(!r.taxSeen || !r.country) return;
+    const o = obs[r.country] || (obs[r.country] = {rev:0, tax:0});
+    o.rev += r.revenue; o.tax += r.tax;
+  });
+  /* Tipo a aplicar a un mercado: el que se observa si hay muestra, y si no el
+     nominal del país. `tax/(rev-tax)` porque el IVA se expresa sobre la base. */
+  const rateFor = c => {
+    const o = obs[c];
+    if(o && o.rev > 0){ const base = o.rev - o.tax; return base > 0 ? o.tax/base*100 : 0; }
+    return nominal[c] != null ? nominal[c] : null;
+  };
+
+  let observed = 0, estimated = 0, revSeen = 0, revEst = 0, revBlind = 0;
+  const paises = {};
+  S.forEach(r => {
+    if(r.taxSeen){ observed += r.tax; revSeen += r.revenue; return; }
+    const pct = r.country != null ? rateFor(r.country) : null;
+    if(pct == null){ revBlind += r.revenue; return; }   /* sin país: no deducible */
+    estimated += r.revenue - r.revenue/(1 + pct/100);
+    revEst += r.revenue;
+    if(r.country) paises[r.country] = pct;
+  });
+
+  const rev = revSeen + revEst + revBlind;
+  return {
+    tax: observed + estimated,
+    observed, estimated,
+    revSeen, revEst, revBlind, rev,
+    paisesDeducidos: paises,
+    coverPct: rev > 0 ? revSeen/rev*100 : 100,
+    known: revEst === 0 && revBlind === 0,   /* toda la base viene del informe */
+    blind: revBlind > 0,                      /* hay ingreso sin país: ni deducible */
+    quality: revEst === 0 && revBlind === 0 ? 'medida' : (revBlind > 0 ? 'desconocida' : 'estimada')
+  };
+}
+
 /* Cuenta de resultados del periodo. Cada línea sabe si está medida o estimada. */
 function pnl(){
   const S = salesRows();
   const grossInc = S.reduce((a,r)=>a+r.revenue,0);
   const units    = S.reduce((a,r)=>a+r.qty,0);
-  const tax      = S.reduce((a,r)=>a+r.tax,0);
+  const tb       = taxBasis(S);
+  const tax      = tb.tax;
   const net      = grossInc - tax;
   const pm       = prodBySku();
   /* M1.1 · el coste ya no es una constante por SKU: cada venta se costea con
@@ -828,7 +895,11 @@ function pnl(){
      Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
      columnas de tarifa no reconocemos salían 0 € de comisión sellados como
      «medido», y el beneficio subía un 23 %. */
-  const measured = sf.matched>0;
+  /* Y no basta con que la liquidación se entienda: si la BASE de ingreso está
+     deducida en vez de leída, el margen que sale encima no está medido por
+     mucho que las comisiones sí lo estén. La etiqueta la fija el eslabón más
+     débil, no el más fuerte. */
+  const measured = sf.matched>0 && tb.known;
   let referral, fba, storage, otherFee, feeCoverPct;
   let ship=0, fbmUnits=0, fbaUnits=0;
   S.forEach(r=>{
@@ -956,6 +1027,7 @@ function pnl(){
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+    taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,

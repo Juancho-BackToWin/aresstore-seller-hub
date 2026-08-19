@@ -425,7 +425,10 @@ function renderRent(){
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
     kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
     kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
-        P.margin===null?'sin ingreso en el periodo':'sobre ingreso sin IVA',
+        P.margin===null ? 'sin ingreso en el periodo'
+        : (P.baseQuality==='medida' ? 'sobre ingreso sin IVA'
+          : P.baseQuality==='estimada' ? 'sobre ingreso sin IVA · IVA DEDUCIDO del tipo de cada país, no leído del informe'
+          : 'sobre ingreso sin IVA · hay ventas sin país: su IVA no se puede deducir'),
         P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
     kpi('Coste de producto', fmt(P.cogs,0),
         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
@@ -458,7 +461,7 @@ function renderRent(){
     line('Reembolsos recuperados',P.reimb)+
     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
 
-  const rows=[['IVA',P.tax,'#9aa8ac'],['Comisión Amazon',P.referral,'#c2410c'],['Tarifas FBA',P.fba,'#ea580c'],
+  const rows=[['IVA'+(P.baseQuality==='medida'?'':' (deducido)'),P.tax,'#9aa8ac'],['Comisión Amazon',P.referral,'#c2410c'],['Tarifas FBA',P.fba,'#ea580c'],
     ['Envío propio (FBM)',P.ship,'#b45309'],
     ['Almacenaje y otras',P.storage+P.otherFee,'#64748b'],['Coste de producto',P.cogs,'#7c3aed'],
     ['Publicidad',P.ppc,'#0284c7'],['Gastos fijos',P.fixed,'#475569'],

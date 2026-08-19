@@ -178,7 +178,10 @@ function renderPanel(){
       s:'Saldo proyectado de '+fmt(low[0].bal,0)+' el '+low[0].date.toLocaleDateString('es-ES')+', por debajo de tu colchón de '+fmt(TARGET.cash,0)+'.', go:'tesoreria'});
   }
   const I = invStats();
-  const rupture = I.filter(r=>r.risk==='low' && r.velocity>0);
+  /* Este aviso del Panel manda PEDIR, así que mira la cobertura contando lo
+     que ya viene en camino. El riesgo de tarifa por inventario bajo es otra
+     cosa y vive en Inventario: se sigue avisando, pero no como orden de compra. */
+  const rupture = I.filter(r=>r.riskCompra==='low' && r.velocity>0);
   if(rupture.length) A.push({p:2,lvl:'warn',t:rupture.length+' producto'+(rupture.length===1?'':'s')+' bajo 28 días de cobertura',
     s:'Entras en tarifa por bajo inventario en Alemania, Francia, Italia y España: '+rupture.slice(0,3).map(r=>esc(r.sku)+' ('+num(r.cover,0)+' d)').join(', ')+'.', go:'inventario'});
   const over = I.filter(r=>r.cover>154 && r.qty>0);
@@ -953,6 +956,7 @@ function renderInv(){
   const I = invStats();
   const value = I.reduce((a,r)=>a+r.value,0);
   const rupture = I.filter(r=>r.risk==='low'&&r.velocity>0), over = I.filter(r=>r.risk==='over'&&r.qty>0);
+  const porPedir = I.filter(r=>r.riskCompra==='low'&&r.velocity>0);
   /* Cobertura de la cartera: stock total entre venta diaria total. No se
      promedian porcentajes ni ratios por SKU; se dividen los totales. */
   const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
@@ -961,7 +965,10 @@ function renderInv(){
   document.getElementById('invKpis').innerHTML =
     kpi('Unidades en almacén', num(I.reduce((a,r)=>a+r.qty,0)), I.length+' referencias','accent')+
     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
-    kpi('Bajo cobertura', num(rupture.length),'riesgo de tarifa por bajo inventario', rupture.length?'neg':'pos')+
+    kpi('Bajo cobertura', num(rupture.length),
+        rupture.length===porPedir.length ? 'riesgo de tarifa por bajo inventario'
+        : 'riesgo de tarifa · '+num(porPedir.length)+' sin cubrir con lo que viene en camino',
+        porPedir.length?'neg':(rupture.length?'warn':'pos'))+
     kpi('Sobrestock', num(over.length),'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
     /* Cobertura de la CARTERA: unidades totales entre venta diaria total. La
        media aritmética de las coberturas por SKU decía 119 d con cuatro
@@ -984,7 +991,11 @@ function renderInv(){
       '<td class="num mut">'+num(r.lead)+' d</td><td class="num mut">'+num(r.reorderPoint)+'</td>'+
       '<td class="num '+(r.enCamino>0?'info':'mut')+'">'+(r.enCamino>0?num(r.enCamino):'—')+'</td>'+
       '<td class="num '+(r.need>0?'warn':'')+'" style="font-weight:600">'+(r.need>0?num(r.need):'—')+'</td>'+
-      '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>':'<span class="pill stop">tarifa bajo inv.</span>')
+      '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>'
+              : (r.riskCompra!=='low'
+                 ? '<span class="pill warn">tarifa bajo inv. · '+num(r.enCamino)+' en camino'+
+                   (r.etaConocida ? (r.llegaATiempo?', llegan a tiempo':', llegan tarde') : ', sin fecha prevista')+'</span>'
+                 : '<span class="pill stop">tarifa bajo inv.</span>'))
              :r.risk==='over'?'<span class="pill warn">sobrestock</span>':'<span class="pill go">en banda</span>')+'</td></tr>').join('')
       : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
 
@@ -1444,16 +1455,44 @@ function importData(ev){
         toast('Ese archivo no es una copia de seguridad del hub. No lo cargo: reemplazaría tus datos y tu histórico.');
         ev.target.value=''; return;
       }
+      /* Y una copia con la FORMA correcta y el contenido vacío también pasaba:
+         `{"products":[],"settings":{},"imports":{}}` se llevaba el histórico
+         por delante. El diálogo enseñaba lo que pierdes y nunca lo que trae el
+         fichero entrante, que es la mitad que permite decidir. */
       const hs = (function(){ try{ return historyStats(); }catch(e){ return {span:0}; } })();
-      if(hs.span>0 && !confirm('Restaurar reemplaza TODO lo que tienes ahora, incluido el histórico ('+
-          hs.span+' días archivados desde el '+hs.first+').\n\n'+
+      const trae = {
+        prod: (d.products||[]).length,
+        dias: d.history && d.history.d ? Object.keys(d.history.d).length : 0,
+        meses: d.history && d.history.m ? Object.keys(d.history.m).length : 0,
+        fecha: d.exported ? String(d.exported).slice(0,10) : null
+      };
+      if(!trae.prod && !trae.dias && !trae.meses && (hs.span>0 || DB.products.length)){
+        toast('Esa copia viene vacía: ni productos ni histórico. No la cargo, porque borraría lo que tienes.');
+        ev.target.value=''; return;
+      }
+      if((hs.span>0 || DB.products.length) && !confirm(
+          'Restaurar reemplaza TODO lo que tienes ahora.\n\n'+
+          'PIERDES: '+DB.products.length+' productos'+(hs.span>0?' y '+hs.span+' días de histórico desde el '+hs.first:' y ningún histórico')+'.\n'+
+          'RECIBES: '+trae.prod+' productos y '+(trae.dias||trae.meses?trae.dias+' días'+(trae.meses?' + '+trae.meses+' meses compactados':''):'ningún histórico')+
+          (trae.fecha?' · copia del '+trae.fecha:'')+'.\n\n'+
           'El histórico no se puede reconstruir descargando informes otra vez. ¿Continuar?')){
         ev.target.value=''; return;
       }
       /* `app` y `exported` son del sobre, no del contenido: si se quedan
          dentro, se guardan en la base y vuelven a salir en la copia siguiente. */
       delete d.app; delete d.exported;
-      DB = Object.assign(blankDB(), d);
+      /* Fusión superficial con una excepción: `settings`. Una copia con
+         `settings:{}` sustituía el objeto entero y dejaba la base sin `cash`,
+         así que Tesorería y el P&L reventaban DESPUÉS, lejos del sitio donde
+         se causó el daño. Los ajustes que la copia no traiga se quedan con su
+         valor por defecto. */
+      const base = blankDB();
+      const settings = Object.assign({}, base.settings, d.settings||{});
+      Object.keys(base.settings||{}).forEach(k=>{
+        if(base.settings[k] && typeof base.settings[k]==='object' && !Array.isArray(base.settings[k]))
+          settings[k] = Object.assign({}, base.settings[k], (d.settings&&d.settings[k])||{});
+      });
+      DB = Object.assign(base, d, {settings});
       TARGET = Object.assign(TARGET, (DB.settings&&DB.settings.targets)||{});
       saveDB(); bootValues(); refreshAll(); toast('Datos restaurados');
     }catch(e){ toast('No se pudo leer el archivo'); }

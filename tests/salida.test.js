@@ -89,6 +89,46 @@ const check = (label, cond, extra) => {
     guardia.aceptados+' aceptados · antes los aceptaba los tres y sobrescribía sin preguntar');
   check('y una copia de verdad sí pasa', guardia.aceptaLaBuena===true);
 
+  console.log('\n=== SAL-E · UNA COPIA CON LA FORMA BUENA Y NADA DENTRO TAMPOCO PASA ===');
+  /* SAL-B protege del fichero que no se parece a una copia. Queda el que SÍ se
+     parece: `{"products":[],"settings":{},"imports":{}}` tiene lista, ajustes e
+     importaciones, así que pasaba el filtro, se llevaba el histórico por
+     delante y además dejaba `DB.settings` sin `cash`, con lo que Tesorería y el
+     P&L reventaban DESPUÉS, lejos del sitio donde se causó el daño.
+
+     Aquí se ejercita `importData` de verdad, soltando el fichero en el input,
+     no reimplementando el filtro en la prueba. */
+  const os = require('os'), fs = require('fs');
+  const tmp = path.join(os.tmpdir(), 'copia-vacia.json');
+  fs.writeFileSync(tmp, JSON.stringify({products:[], settings:{}, imports:{}}));
+  await page.evaluate(()=>{ loadDemo(); });
+  const antesVacia = await page.evaluate(()=>({prod:DB.products.length, dias:historyStats().days,
+                                               cash: !!(DB.settings&&DB.settings.cash)}));
+  await page.setInputFiles('#importFile', tmp);
+  await page.waitForTimeout(500);
+  const despuesVacia = await page.evaluate(()=>({prod:DB.products.length, dias:historyStats().days,
+                                                 cash: !!(DB.settings&&DB.settings.cash)}));
+  check('había productos e histórico que perder',
+    antesVacia.prod>0 && antesVacia.dias>0, antesVacia.prod+' productos · '+antesVacia.dias+' días');
+  check('la copia vacía NO reemplaza nada',
+    despuesVacia.prod===antesVacia.prod && despuesVacia.dias===antesVacia.dias,
+    despuesVacia.prod+' productos · '+despuesVacia.dias+' días después de soltarla');
+
+  /* Y si la copia trae contenido pero le faltan ajustes, los que no vengan se
+     quedan con su valor por defecto en vez de desaparecer. */
+  const tmp2 = path.join(os.tmpdir(), 'copia-sin-ajustes.json');
+  fs.writeFileSync(tmp2, JSON.stringify({app:'Aresstore Seller Hub',
+    products:[{id:'z', sku:'Z-1', name:'Z', cogs:1, price:10, channel:'FBA', lots:[]}],
+    settings:{}, imports:{}, history:{}}));
+  await page.setInputFiles('#importFile', tmp2);
+  await page.waitForTimeout(500);
+  const parcial = await page.evaluate(()=>({prod:DB.products.length,
+    cash: !!(DB.settings&&DB.settings.cash), pnlOk:(function(){ try{ pnl(); return true; }catch(e){ return false; } })()}));
+  check('una copia sin ajustes sí entra, pero no deja la base coja',
+    parcial.prod===1 && parcial.cash===true, parcial.prod+' producto · settings.cash '+(parcial.cash?'presente':'PERDIDO'));
+  check('y el P&L sigue calculando después de restaurarla', parcial.pnlOk===true,
+    'antes reventaba aquí, lejos de donde se causó el daño');
+
   console.log('\n=== SAL-C · CADA MÓDULO EXPORTA LO QUE ENSEÑA ===');
   /* Se intercepta la descarga para leer el CSV que se habría bajado, en vez de
      comprobar que el botón existe: un botón que produce un fichero vacío pasa

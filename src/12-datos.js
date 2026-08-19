@@ -1201,12 +1201,42 @@ function invStats(){
     const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
     /* Lo que ya está en un barco cuenta. Sin esto, el ejemplo mandaba pedir
        421 unidades más de una referencia que tenía 900 llegando, y encima la
-       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa. */
-    const enCamino = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received')
-      .reduce((a,po)=>a+(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
-                                       .reduce((b,i)=>b+toNum(i.qty),0), 0);
+       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa.
+
+       Un BORRADOR no está en ningún barco: no lo has enviado y el proveedor no
+       lo ha visto. Descontarlo de lo que hay que pedir es descontar una
+       intención, y hace que la pantalla ponga «Pedir —» sobre una referencia
+       que no tiene nada llegando. Mismo criterio que en la curva de caja. */
+    const posSku = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received' && po.status!=='draft')
+      .map(po=>({po, q:(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
+                                     .reduce((b,i)=>b+toNum(i.qty),0)}))
+      .filter(x=>x.q>0);
+    const enCamino = posSku.reduce((a,x)=>a+x.q, 0);
+    /* Y una segunda mitad que faltaba: `enCamino` entraba en lo que hay que
+       pedir pero NO en la cobertura ni en el riesgo, así que la referencia con
+       900 unidades llegando seguía pintada «tarifa bajo inventario» y seguía
+       contando en el KPI «Bajo cobertura». Son dos preguntas distintas y
+       mezclarlas hacía que la pantalla se contradijera consigo misma:
+
+         cover        · días que aguanta lo que HAY EN EL ALMACÉN. Es lo que
+                        determina la tarifa por inventario bajo, porque Amazon
+                        la cobra sobre lo almacenado, no sobre lo que navega.
+                        Meter aquí el tránsito ocultaría un coste real.
+         coverTransito· días que aguanta contando lo que viene. Es la respuesta
+                        a «¿tengo que pedir?».
+
+       El aviso de tarifa se mantiene —se va a cobrar igual—, pero deja de
+       leerse como una orden de compra cuando ya hay mercancía en camino. Si el
+       pedido no tiene fecha prevista no se puede afirmar que llegue a tiempo,
+       y entonces no mitiga nada: se dice y ya. */
+    const etaConocida = posSku.length>0 && posSku.every(x=>!!parseDate(x.po.eta));
+    const diasHastaRotura = velocity>0 ? qty/velocity : 999;
+    const llegaATiempo = etaConocida && posSku.every(x=>{
+      const d = parseDate(x.po.eta); return d && daysBetween(today(), d) <= diasHastaRotura; });
     const pl = plan[k]||{};
-    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead), enCamino,
+    const coverTransito = velocity>0 ? (qty+enCamino)/velocity : ((qty+enCamino)>0?999:0);
+    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, coverTransito,
+      lead:toNum(lead), enCamino, etaConocida, llegaATiempo,
       reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
       byCountry: fbm ? {} : (byCountry[k]||{}),
       excess: toNum(pl.estimatedexcessquantity),
@@ -1216,7 +1246,11 @@ function invStats(){
          de hace un año: el capital inmovilizado es lo que costaría reponerlo. */
       unitCost: costNow(p),
       value: qty*costNow(p),
-      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok'))
+      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok')),
+      /* El riesgo de COMPRA, que es el que manda pedir. El de tarifa sigue
+         siendo `risk` y sigue avisando aunque este esté cubierto. */
+      riskCompra: fbm ? (coverTransito<14?'low':(coverTransito>154?'over':'ok'))
+                      : (coverTransito<28 ? 'low' : (coverTransito>154 ? 'over' : 'ok'))
     };
   }).filter(r=>r.qty>0||r.velocity>0).sort((a,b)=>a.cover-b.cover);
 }

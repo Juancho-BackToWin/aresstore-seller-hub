@@ -495,6 +495,92 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('y la devolución reintegra 64 €, no 120 €', near(reint.retCom, 64, 1),
     reint.retCom.toFixed(2)+' € = 10 × (8,00 − 1,60)');
 
+  console.log('\n=== PNL-R · LA ETIQUETA «MEDIDO» NO SE REGALA ===');
+  /* Tres formas distintas de que un número estimado saliera con la etiqueta de
+     máxima confianza. Las tres son de rótulo, no de aritmética, y son las que
+     hacen que alguien se crea el número.
+
+     R1 · El Panel decía «medido» a secas mientras Rentabilidad, con los mismos
+          datos, decía «comisiones 16 % reales». 90 días de ventas contra una
+          liquidación de 14: cobertura 14/90 = 15,6 %.
+     R2 · Una cobertura del 99,97 % redondeaba a 100 y la insignia saltaba a
+          «medido». El redondeo es para enseñar, no para decidir.
+     R3 · La salvedad de la tarifa FBA colgaba de la cobertura de COMISIÓN, así
+          que una liquidación con solo líneas de comisión presentaba como
+          medida una tarifa FBA íntegramente estimada.                        */
+  const etiq = await page.evaluate(js(`
+    const liq = (desdeK, hastaK, conFba) => {
+      const rows = [
+        {settlementid:'S', transactiontype:'Order', posteddate:dia(hastaK), marketplacename:'Amazon.es',
+         itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-1500.00', sku:'TEST-1'},
+        {settlementid:'S', transactiontype:'Order', posteddate:dia(desdeK), marketplacename:'Amazon.es',
+         itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-0.01', sku:'TEST-1'}
+      ];
+      if(conFba) rows.push({settlementid:'S', transactiontype:'Order', posteddate:dia(hastaK),
+         marketplacename:'Amazon.es', itemrelatedfeetype:'FBAPerUnitFulfillmentFee',
+         itemrelatedfeeamount:'-304.50', sku:'TEST-1'});
+      DB.imports.settlement = {count:rows.length, file:'v1', rows};
+    };
+    const ventas=[]; for(let k=0;k<90;k++) ventas.push(venta(dia(k),1));
+    DB.imports.orders = {rows:ventas, count:90, file:'o'};
+    periodDays = 90;
+    liq(13, 0, true);                       // 14 dias de 90
+    const parcial = pnl();
+    go('panel');
+    const tagPanel = document.getElementById('panelKpis').textContent;
+    liq(89, 0, false);                      // cubre el periodo entero, sin FBA
+    const sinFba = pnl();
+    go('rentabilidad');
+    const txtFba = document.getElementById('pnlTable').textContent;
+    const badge  = document.getElementById('pnlKpis').textContent;
+    return {cobParcial: parcial.feeCoverPct, tagPanel,
+            covSinFba: sinFba.feeCoverPct, fbaMedido: sinFba.fbaMedido,
+            refMedido: sinFba.refMedido, txtFba, badge};
+  `));
+  console.log('     cobertura con liquidación de 14 días sobre 90: ' + etiq.cobParcial.toFixed(1) + ' %');
+  check('R1 · con cobertura parcial el Panel NO dice «medido» a secas',
+    /medido al \d+%|estimado/.test(etiq.tagPanel) && !/·\s*medido\s*·/.test(etiq.tagPanel),
+    etiq.tagPanel.replace(/\s+/g,' ').slice(0,80)+'…');
+  check('R3 · con la liquidación cubriendo todo pero sin líneas de FBA, la comisión sí está medida',
+    etiq.refMedido===true && etiq.covSinFba>99, etiq.covSinFba.toFixed(1)+' % de cobertura');
+  const redondeo = await page.evaluate(js(`
+    /* Cobertura 99,97 % por IMPORTE: la liquidación cubre del día −4 al −2, y
+       dentro de esa ventana cae una venta de 9.997 € mientras 3 € quedan
+       fuera. 9.997/10.000 = 99,97 %. Redondeado son 100; sin redondear, no, y
+       la decisión se toma sin redondear. */
+    DB.imports.orders = {rows:[
+      {amazonorderid:'A', purchasedate:dia(3)+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
+       saleschannel:'Amazon.es', sku:'TEST-1', asin:'B0X', itemstatus:'Shipped',
+       quantity:'9997', itemprice:'9997.00', itemtax:'0', shipcountry:'ES'},
+      {amazonorderid:'B', purchasedate:dia(40)+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
+       saleschannel:'Amazon.es', sku:'TEST-1', asin:'B0X', itemstatus:'Shipped',
+       quantity:'3', itemprice:'3.00', itemtax:'0', shipcountry:'ES'}
+    ], count:2, file:'o'};
+    DB.imports.settlement = {count:2, file:'v1', rows:[
+      {settlementid:'S', transactiontype:'Order', posteddate:dia(2), marketplacename:'Amazon.es',
+       itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-1499.55', sku:'TEST-1'},
+      {settlementid:'S', transactiontype:'Order', posteddate:dia(4), marketplacename:'Amazon.es',
+       itemrelatedfeetype:'FBAPerUnitFulfillmentFee', itemrelatedfeeamount:'-304.50', sku:'TEST-1'}
+    ]};
+    periodDays = 90;
+    const p = pnl();
+    go('rentabilidad');
+    const badge = document.getElementById('pnlBadge') ? document.getElementById('pnlBadge').textContent
+                : document.getElementById('pnlKpis').textContent;
+    return {cov:p.feeCoverPct, badge};
+  `));
+  console.log('     cobertura sin redondear: ' + redondeo.cov.toFixed(4) + ' %  (redondeada: ' +
+              Math.round(redondeo.cov) + ' %)');
+  check('R2 · una cobertura del 99,97 % no es 100',
+    redondeo.cov < 100 && redondeo.cov > 99.9, redondeo.cov.toFixed(4)+' %');
+  check('R2 · y por tanto NO se rotula «medido»',
+    !/\bmedido\b(?!\s*al)/.test(redondeo.badge),
+    redondeo.badge.replace(/\s+/g,' ').slice(0,70)+'…');
+
+  check('R3 · pero la tarifa FBA no, y la pantalla lo dice',
+    etiq.fbaMedido===false && /estimadas con recargo/.test(etiq.txtFba),
+    'fbaMedido='+etiq.fbaMedido);
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

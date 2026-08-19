@@ -143,7 +143,15 @@ function renderPanel(){
   }
   document.getElementById('panelFresh').innerHTML = fresh;
 
-  const tag = P.measured ? 'medido' : 'estimado';
+  /* El Panel es la pantalla que más se mira, y era la que peor lo contaba:
+     `P.measured` solo dice «hay al menos una línea casada», no cuánto cubre.
+     Con una liquidación de 14 días contra 90 de ventas —cobertura 15,6 %—
+     Rentabilidad decía «comisiones 16 % reales» y aquí ponía «medido» a secas.
+     La etiqueta la fija el eslabón más débil, igual que en el motor. */
+  const covPFull = (P.feeCoverPct||0) >= 99.995;
+  const covP = covPFull ? 100 : Math.min(99, Math.floor(P.feeCoverPct||0));
+  const tag = (P.measured && covPFull) ? 'medido'
+            : (covP>0 ? 'medido al '+covP+'%' : 'estimado');
   document.getElementById('panelKpis').innerHTML =
     kpi('Ventas '+(periodDays?periodDays+' d':'histórico'), fmt(P.grossInc,0), num(P.units)+' unidades','accent')+
     kpi('Beneficio neto', fmt(P.profit,0), tag+' · '+num(P.units?P.profit/P.units:0,2)+' €/ud', P.profit>0?'pos':'neg')+
@@ -411,19 +419,26 @@ function renderRent(){
   /* «Medido» solo cuando la liquidación cubre el periodo entero. Cubriendo una
      parte, el número es una mezcla y decirlo medido es justo lo que hace que
      alguien se lo crea sin mirarlo. */
-  const cov = Math.round(P.feeCoverPct||0);
-  const badge = cov>=100 ? '<span class="pill go">medido</span>'
+  /* La decisión se toma sobre el valor SIN redondear: con una cobertura del
+     99,97 % el redondeo la subía a 100 y la insignia saltaba a «medido», que
+     es justamente la etiqueta que hace que alguien se crea el número.
+     Y al enseñarlo se trunca en 99, para que «100 %» solo aparezca cuando de
+     verdad lo es: un 100 redondeado dice lo mismo que la insignia que acabamos
+     de quitar. */
+  const covFull = (P.feeCoverPct||0) >= 99.995;
+  const cov = covFull ? 100 : Math.min(99, Math.floor(P.feeCoverPct||0));
+  const badge = (covFull && P.baseQuality==='medida' && !P.adSpanUnknown) ? '<span class="pill go">medido</span>'
               : cov>0    ? '<span class="pill warn">'+cov+'% medido</span>'
               :            '<span class="pill warn">estimado</span>';
   /* El tipo efectivo se enseña calculado, no como una constante: la comisión
      sale del % de cada producto y el catálogo puede mezclar categorías. */
   const tipoEf = P.grossInc>0 ? num(P.referral/P.grossInc*100,1)+'%' : '—';
-  const cobTxt = cov>=100 ? 'de la liquidación'
+  const cobTxt = covFull ? 'de la liquidación'
                : cov>0    ? cov+'% de la liquidación · el resto estimado al '+tipoEf
                :            'estimada al '+tipoEf+' · el % de cada producto';
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
-    kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
+    kpi('Beneficio', fmt(P.profit,0), covFull?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
     kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
         P.margin===null ? 'sin ingreso en el periodo'
         : (P.baseQuality==='medida' ? 'sobre ingreso sin IVA'
@@ -446,7 +461,7 @@ function renderRent(){
     line('IVA repercutido',P.tax,'',true)+
     '<tr class="tot"><td class="name">Ingreso neto</td><td class="num">'+fmt(P.net,0)+'</td></tr>'+
     line('Comisión de Amazon',P.referral,cobTxt,true)+
-    line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
+    line('Tarifas FBA',P.fba,(P.fbaMedido && covFull)?'':'estimadas con recargo 1,5%',true)+
     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
     (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
         num(P.retImputadas,1)+' ud imputadas de '+num(P.retUnits)+

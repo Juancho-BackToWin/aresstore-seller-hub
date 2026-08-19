@@ -913,6 +913,12 @@ function pnl(){
      débil, no el más fuerte. */
   const measured = sf.matched>0 && tb.known && !ads.spanUnknown;
   let referral, fba, storage, otherFee, feeCoverPct;
+  /* Qué conceptos vienen de verdad de la liquidación. La salvedad de la tarifa
+     FBA colgaba de la cobertura de COMISIÓN, así que una liquidación que
+     cubría el periodo entero con solo líneas de comisión presentaba como
+     medida una tarifa FBA íntegramente estimada. Son cosas distintas y ahora
+     se dicen por separado. */
+  let refMedido = false, fbaMedido = false;
   let ship=0, fbmUnits=0, fbaUnits=0;
   S.forEach(r=>{
     const p=pm[String(r.sku).toLowerCase()];
@@ -983,7 +989,7 @@ function pnl(){
        detrás no es una medición de cero: es que ese concepto no venía en el
        fichero. Cobrar 0 € de comisión sobre ventas reales no le pasa a nadie.
        Se estima esa categoría y se deja de llamarla medida. */
-    const refMedido = sf.referral>0, fbaMedido = sf.fba>0;
+    refMedido = sf.referral>0; fbaMedido = sf.fba>0;
     referral = (refMedido ? sf.referral : estDentro.referral) + est.referral;
     fba      = (fbaMedido ? sf.fba      : estDentro.fba)      + est.fba;
     storage  = sf.storage; otherFee = sf.other;
@@ -1083,6 +1089,7 @@ function pnl(){
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
     ppcSource, adSpanUnknown: ads.spanUnknown,
+    refMedido, fbaMedido,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,

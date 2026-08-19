@@ -261,11 +261,28 @@ function compactHistory(keepDays){
   const limit = iso(addDays(today(), -keep));
   const keys = Object.keys(H.d).filter(k=>k < limit).sort();
   if(!keys.length) return 0;
-  const oos = oosDays(keys[0], keys[keys.length-1]);
+  /* La rotura se cuenta MES A MES, sobre el rango de cada mes. Antes se contaba
+     una vez sobre todo el tramo y se volcaba entera en `keys[0].slice(0,7)`,
+     que es siempre el primer mes: 110 días de rotura acabaron apilados en un
+     mes que solo tenía 2 días archivados. El comentario decía que se repartía;
+     el código tomaba el primer mes dentro del bucle. */
+  const porMes = {};
+  keys.forEach(k=>{ const mk=k.slice(0,7); (porMes[mk]||(porMes[mk]=[])).push(k); });
+  const oosMes = {};
+  Object.keys(porMes).forEach(mk=>{
+    const ks = porMes[mk];
+    oosMes[mk] = oosDays(ks[0], ks[ks.length-1]);
+  });
   keys.forEach(k=>{
     const day = H.d[k], mk = k.slice(0,7);
     const m = H.m[mk] || (H.m[mk] = {s:{}, cs:{}, days:0, oos:{}, kEnd:null});
     m.days++;
+    /* El primer día REAL archivado de este mes. Sin él, `historyStats` tomaba
+       el día 1 del mes y se inventaba hasta 30 días de historia: el KPI decía
+       «141 días desde el 2026-04-01» cuando el primer dato era del 20 de abril
+       y eran 120. Un número falso en el titular del módulo que existe
+       precisamente para ser fiable. */
+    if(!m.first || k < m.first) m.first = k;
     Object.keys(day.s||{}).forEach(sk=>{
       const e = m.s[sk] || (m.s[sk] = [0,0,0]), v = day.s[sk];
       e[0]+=v[0]; e[1]=r2(e[1]+v[1]); e[2]=r2(e[2]+v[2]);
@@ -277,11 +294,12 @@ function compactHistory(keepDays){
     if(day.k) m.kEnd = {d:k, k:day.k};
     delete H.d[k];
   });
-  // el recuento de rotura se reparte al mes al que pertenece cada día
-  Object.keys(oos).forEach(sk=>{
-    const mk = keys[0].slice(0,7);
+  // cada mes se lleva su propia rotura, contada sobre sus propios días
+  Object.keys(oosMes).forEach(mk=>{
     const m = H.m[mk]; if(!m) return;
-    m.oos[sk] = (m.oos[sk]||0) + oos[sk];
+    Object.keys(oosMes[mk]).forEach(sk=>{
+      m.oos[sk] = (m.oos[sk]||0) + oosMes[mk][sk];
+    });
   });
   H.cut = keys[keys.length-1];
   return keys.length;
@@ -296,7 +314,10 @@ function historyStats(){
   const months = Object.keys(H.m).sort();
   let first = days[0] || null;
   if(months.length){
-    const m0 = months[0] + '-01';
+    /* El primer día real del mes más antiguo, no su día 1. `m.first` lo escribe
+       compactHistory; para historiales compactados antes de que existiera, el
+       día 1 es lo único que hay y se sigue usando como último recurso. */
+    const m0 = H.m[months[0]].first || (months[0] + '-01');
     if(!first || m0 < first) first = m0;
   }
   const span = first ? daysBetween(parseDate(first), today()) + 1 : 0;

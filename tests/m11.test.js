@@ -587,6 +587,72 @@ const js = body => '(()=>{' + FIXTURE + body + '})()';
     new Set(Object.values(demo.out)).size===3, JSON.stringify(demo.out));
   check('y el ejemplo llega al 100 % de cobertura POR PERIODO', Math.round(demo.cov.pct)===100,
     Math.round(demo.cov.pct)+' % · el ejemplo trae informe de inventario, así que las cantidades cuadran');
+  console.log('\n=== M11-AA · EL CUADRE DE LA PANTALLA ES EL DEL MOTOR ===');
+  /* La columna «Cuadre» se recalculaba en el render con las ventas BRUTAS
+     mientras la fila de al lado enseñaba las NETAS y el motor recortaba la cola
+     con las netas. Resultado: tres números para la misma cuenta, separados
+     exactamente por las devoluciones.
+
+     Caso A · con los datos de ejemplo (ARS-BAN-02):
+       comprado 2700 · vendido bruto 708 · devoluciones 12 · neto 696 · stock 180
+       sobra correcto = 2700 − 696 − 180 = 1824      ← lo que dice el texto
+       lo que pintaba = 2700 − 708 − 180 = 1812      ← 12 de menos
+
+     Caso B · el que lo deja desnudo, un SKU que cuadra EXACTO con devoluciones:
+       comprado 100 · vendido bruto 30 · devoluciones 5 · neto 25 · stock 75
+       100 = 25 + 75, así que sobra = 0 y falta = 0 → el cuadre es CERO
+       lo que pintaba = 100 − 30 − 75 = −5, es decir «−5» pegado a la frase
+       «cuadra exactamente». El número y su explicación se contradecían. */
+  const cuadreDemo = await page.evaluate(()=>{
+    const B = costOfSales(salesRows({from:null, country:'ALL'})).bal;
+    const filas = [...document.querySelectorAll('#lotBalTable tbody tr')].map(tr=>{
+      const c=[...tr.children].map(x=>x.textContent.trim());
+      return {sku:c[0].toLowerCase(), cuadre:c[4], texto:c[5]};
+    }).filter(f=>B[f.sku]);
+    return filas.map(f=>{
+      const b=B[f.sku];
+      const pint = Number(String(f.cuadre).replace(/[^\d-]/g,'')) * (/^-/.test(f.cuadre)?1:1);
+      return {sku:f.sku, pintado:pint, sobra:b.sobra, falta:b.falta,
+              devuelto:b.devuelto, esperado:b.sobra-b.falta,
+              citado:Number((f.texto.match(/^([\d.]+)/)||[0,'0'])[1].replace(/\./g,''))};
+    });
+  });
+  const malDemo = cuadreDemo.filter(f=>f.pintado!==f.esperado);
+  check('cada fila pinta el mismo cuadre que usa el motor para recortar',
+    cuadreDemo.length>0 && malDemo.length===0,
+    cuadreDemo.length+' SKU · '+(malDemo.length?JSON.stringify(malDemo):'ninguno discrepa'));
+  const conDevo = cuadreDemo.filter(f=>f.devuelto>0);
+  check('y el número pintado coincide con el que cita su propia explicación',
+    conDevo.length>0 && conDevo.every(f=>f.pintado===f.citado),
+    conDevo.map(f=>f.sku+': '+f.pintado+' vs «'+f.citado+' se vendieron antes»').join(' · '));
+
+  const cuadreExacto = await page.evaluate(js(`
+    DB.products[0].cogs = 2; DB.products[0].freight = 0;
+    DB.products[0].lots = [{id:'k1', date:'2026-01-01', qty:100, unit:2, freight:0}];
+    const mkK = (d,q)=>({amazonorderid:'K'+d, purchasedate:d+'T10:00:00+00:00',
+      fulfillmentchannel:'Amazon', saleschannel:'Amazon.es', sku:'TEST-1', asin:'B0X',
+      itemstatus:'Shipped', quantity:String(q), itemprice:'100', itemtax:'0', shipcountry:'ES'});
+    DB.imports.orders = {rows:[mkK('2026-02-01',30)], count:1, file:'k', loadedAt:'p'};
+    DB.imports.returns = {rows:[{orderid:'K-1', returndate:'2026-02-10', sku:'TEST-1', quantity:'5'}],
+                          count:1, file:'kr', loadedAt:'q'};
+    DB.imports.inventory = {rows:[{sku:'TEST-1', afnfulfillablequantity:'75'}], count:1, file:'ki', loadedAt:'r'};
+    renderCatalogo();
+    const b = ${COST}.bal['test-1'];
+    const tr = [...document.querySelectorAll('#lotBalTable tbody tr')]
+                 .filter(t=>/TEST-1/i.test(t.children[0].textContent))[0];
+    const c = tr ? [...tr.children].map(x=>x.textContent.trim()) : [];
+    return {sobra:b.sobra, falta:b.falta, devuelto:b.devuelto, neto:b.neto,
+            pintado:c[4], texto:c[5]};
+  `));
+  check('un SKU que cuadra exacto no arrastra sus devoluciones al cuadre',
+    Math.round(cuadreExacto.sobra)===0 && Math.round(cuadreExacto.falta)===0,
+    '100 comprados = 25 netos vendidos + 75 en almacén · 5 devueltas ya restadas');
+  check('y la pantalla escribe 0, no −5',
+    /^0$/.test(String(cuadreExacto.pintado||'').replace(/[+\s]/g,'')),
+    '«'+cuadreExacto.pintado+'» · con el fallo ponía «-5» al lado de «cuadra exactamente»');
+  check('el texto sigue diciendo que cuadra', /cuadra exactamente/.test(cuadreExacto.texto||''),
+    cuadreExacto.texto);
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
 
   console.log('\n=== M11-S · HORARIO DE ESPAÑA: LA FECHA NO PUEDE IRSE UN DÍA ATRÁS ===');

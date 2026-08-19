@@ -4,14 +4,19 @@
   "private": true,
   "description": "Gestion del seller de Amazon de Aresstore: rentabilidad, tesoreria, inventario, compras y cumplimiento. PWA de un solo archivo, sin servidor.",
   "scripts": {
-    "build": "./build.sh",
+    "build": "bash build.sh",
     "fixtures": "node tests/mkfixtures.js && node tests/mkfixtures-es.js",
     "test": "node tests/hub.test.js",
     "test:es": "node tests/es.test.js",
     "test:pwa": "node tests/pwa.test.js",
     "test:m0": "node tests/m0.test.js",
-    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11",
-    "test:m11": "node tests/m11.test.js"
+    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pnl && npm run test:caja && npm run test:inv && npm run test:informes && npm run test:salida && npm run test:pwa",
+    "test:m11": "node tests/m11.test.js",
+    "test:pnl": "node tests/pnl.test.js",
+    "test:caja": "node tests/caja.test.js",
+    "test:inv": "node tests/inventario.test.js",
+    "test:informes": "node tests/informes.test.js",
+    "test:salida": "node tests/salida.test.js"
   },
   "devDependencies": {
     "playwright": "^1.62.1"

@@ -1,6 +1,9 @@
 # Aresstore Seller Hub — traspaso a sesión nueva
 
-Estado a 17 de agosto de 2026, **actualizado tras cerrar M1.1 (v0.7)**. Este documento
+Estado a 18 de agosto de 2026, **con la v0.7 desplegada y con la fontanería
+cerrada**: los doce informes verificados uno a uno, la salida probada de ida y
+vuelta, los accesos en verde, y veinte números creíbles y falsos encontrados en
+revisión adversarial y corregidos con prueba (§5). Este documento
 es lo único que hace falta leer para retomar el proyecto desde cero. Todo lo demás
 está en el repositorio.
 
@@ -33,9 +36,9 @@ regenerable con `node docs/plan-docx.js`) y el detalle técnico módulo a módul
 | Repositorio | `github.com/Juancho-BackToWin/aresstore-seller-hub` (privado) |
 | GitHub | creado. **No confundir con `arestora-hub`**, que es el proyecto Next.js de DeporteSeguro/EducaSeguro y no tiene nada que ver |
 | Vercel | proyecto `aresstore-seller-hub`, cuenta *Juancho Back To Win's projects* |
-| URL viva hoy | `aresstore-seller-hub-nu.vercel.app` |
-| URL que debe quedar | `aresstore-seller-hub.vercel.app` ← **pendiente** |
-| Versión | v0.7 (M0 y M1.1 dentro). **En producción sigue estando la v0.5** |
+| URL de producción | `aresstore-seller-hub.vercel.app` — el dominio limpio responde; el problema del `-nu` está resuelto |
+| Despliegue | automático: cada commit en `main` se despliega solo |
+| Versión en producción | **v0.7 (M0 + M1.1), desplegada y verificada el 18 de agosto de 2026** |
 
 ### Estructura
 
@@ -52,7 +55,7 @@ src/12b-historico.js  M0 · archivo diario, rotura de stock, velocidad real
 src/12c-lotes.js      M1.1 · lotes de coste, libro de unidades, tres métodos
 src/13-render.js      navegación, render, modales, arranque, autoactualización
 build.sh              ensambla index.html, sella versión, regenera sw.js
-tests/                cinco suites Playwright + generadores de fixtures
+tests/                diez suites Playwright + generadores de fixtures (§7)
 ```
 
 `./build.sh` ensambla, sella `v{VER} · {BUILD} UTC` en el pie, escribe un `sw.js`
@@ -64,39 +67,58 @@ sobrescribe en cada compilación.
 
 ## 3. Lo pendiente, en orden
 
-### 3.0 · Desplegar la v0.7 — lo más urgente, y no es código
+### 3.0 · Despliegue — resuelto el 18 de agosto de 2026
 
-M0 lleva construido desde la v0.6 y **nunca se ha desplegado**: producción sigue
-sirviendo la v0.5. Mientras eso siga así, el histórico —que es el único dato del
-hub que no se puede reconstruir descargando informes otra vez— no se está
-capturando. Cada día que pasa es un día perdido de verdad.
+La v0.7 (M0 + M1.1) **está desplegada y verificada en producción** en
+`aresstore-seller-hub.vercel.app`. El histórico ya se está capturando.
 
-Efecto colateral bueno de ese retraso: como M0 nunca llegó a correr en producción,
-**no hay ningún histórico guardado con el fallo de zona horaria** que se arregló en
-esta versión (ver §5), así que no hace falta migrar nada. Si en algún momento se
-descubriera que sí hubo capturas con la v0.6, las claves de día anteriores al
-arreglo estarían un día por detrás y habría que desplazarlas.
+Como M0 no llegó a correr nunca sobre la v0.6, **no hay ningún histórico guardado
+con el fallo de zona horaria** que se arregló en la v0.7 (ver §5): no hay nada que
+migrar. Si en algún momento apareciera un dispositivo con capturas de la v0.6, sus
+claves de día anteriores al arreglo estarían un día por detrás y habría que
+desplazarlas.
 
-### 3.1 · Dominio (Vercel, 2 minutos, lo hace Juancho)
+#### Cómo se despliega, y por qué no se toca
 
-El proyecto viejo ya está borrado, pero Vercel no ha reasignado la dirección: el
-proyecto sigue sirviéndose en `-nu`. Solución: Settings → Project Name, cambiar a
-cualquier cosa, Save, volver a poner `aresstore-seller-hub`, Save. Ese ida y
-vuelta fuerza la reasignación. Verificar después en Settings → Domains.
+**Vercel no compila nada en este proyecto, y no debe.** `index.html` se genera en
+local con `bash build.sh` y se sube ya compilado. Por eso `vercel.json` lleva:
 
-Importa porque el icono del móvil y el marcador del PC apuntan a la dirección sin
-`-nu`, y porque **los datos guardados están atados a esa dirección** (viven en el
-navegador, no en el servidor).
+```json
+"installCommand": "echo sin dependencias",
+"buildCommand":   "echo sin compilacion, index.html ya viene compilado",
+"outputDirectory": "."
+```
 
-### 3.2 · GitHub
+Esos tres valores no se tocan. Sin ellos el despliegue se rompe, y ya se rompió
+dos veces por ahí:
 
-Repositorio privado creado: `Juancho-BackToWin/aresstore-seller-hub`. Para que yo
-pueda empujar hace falta un *fine-grained token* acotado a ese único repositorio
-con permiso **Contents: Read and write**. Sin eso, cada avance vuelve a ser un zip
-que Juancho sube a mano, que es justo lo que queremos eliminar.
+1. `./build.sh: Permission denied` (exit 126). GitHub guarda **sin bit de
+   ejecución** todo lo que se sube por la web, así que el script no era
+   ejecutable en el contenedor de Vercel.
+2. Aunque lo fuera, `build.sh` rasteriza los iconos con **Pillow**, que no existe
+   en el contenedor de Vercel. La compilación no puede vivir allí.
 
-Después: en Vercel, *Connect Git Repository* → ese repo. A partir de ahí cada
-commit se despliega solo y la app se autoactualiza en sus dispositivos.
+Por el mismo bit de ejecución perdido, el script de npm es **`"build": "bash
+build.sh"`**, no `"./build.sh"`. Corregido el 18 de agosto de 2026.
+
+**`vercel.json` no admite claves libres.** Un `"//"` puesto como comentario tumba
+el despliegue con `should NOT have additional property`. Lo que haya que
+documentar va en el mensaje del commit o aquí, nunca dentro del JSON.
+
+### 3.1 · Dominio — resuelto
+
+El dominio limpio `aresstore-seller-hub.vercel.app` responde. El proyecto viejo
+estaba borrado y Vercel tardó en reasignar la dirección; ya está hecho. Importaba
+porque el icono del móvil y el marcador del PC apuntan a esa dirección, y porque
+**los datos guardados están atados a ella** (viven en el navegador, no en el
+servidor): un cambio de dominio equivale a empezar de cero.
+
+### 3.2 · GitHub — resuelto
+
+Repositorio privado `Juancho-BackToWin/aresstore-seller-hub`, conectado a Vercel.
+Cada commit en `main` se despliega solo y la app se autoactualiza en los
+dispositivos (lo dispara el identificador de caché nuevo que `build.sh` escribe en
+`sw.js` en cada compilación). Ya no hay zips subidos a mano.
 
 ### 3.3 · M0 — hecho en v0.6
 
@@ -203,29 +225,61 @@ corrigen **el número**, no solo la etiqueta.
 de importar **también el informe de inventario**. Sin el stock no se puede hacer el
 cuadre, y sin el cuadre el módulo trabaja a ciegas — y lo dice en pantalla.
 
-### 3.5 · Lo siguiente
+### 3.5 · La cola de trabajo, y dónde va
 
-M1.2 métricas que faltan (10 de las 21) · M1.3 gastos indirectos con amortización
-diaria · M1.4 IVA como línea del P&L · M2 velocidad e inventario · M5.1 y M5.2
-detectores de reembolso · M3 compras y caja · M4 ACOS de equilibrio · M6
-diferenciales europeos · M1.5 vistas y exportación.
+**Fase A · inventario funcional honesto — hecha.** Cada pantalla recorrida
+ejecutándola, no leyéndola, y clasificada en la tabla de estado de
+`docs/METODO.md`. Resultado corto: ninguna pantalla es una maqueta, pero
+**Cumplimiento es un registro manual** (rellenas tú, no lee ningún informe) y el
+**Validar producto / Comparador PanEU es una calculadora independiente** que no
+usa los datos importados.
 
----
+**Fase B · fontanería — hecha.**
+
+- Los **doce informes**, uno a uno, en inglés, y los siete traducibles también en
+  español (`tests/informes.test.js`). Faltaban fixtures de liquidación, salud del
+  inventario, reembolsos e IVA en inglés y del libro de inventario en español, así
+  que cinco caminos de detección no los probaba nadie. Se importan **de uno en
+  uno** a propósito: en lote, un informe identificado como otro queda tapado.
+- La prueba pregunta además si lo reconocido **alimenta algo**. Tres se guardan
+  enteros y no llegan a ningún número: libro de inventario, tarifas de
+  almacenamiento e IVA por país. La pantalla de Datos lo dice en vez de lucir un
+  tick, y la prueba se rompe si esa lista cambia (ver P-10).
+- **Copia de seguridad y restauración**: ida y vuelta sin pérdida, comparando los
+  números calculados y no el JSON (`tests/salida.test.js`).
+- **Exportaciones**: siete, una por módulo, que no existían.
+- **Accesos**: `pwa.test.js` en verde y dentro de `test:all`, con servidor propio.
+
+**Fase C · herramienta a herramienta.** Pasos 1 a 3 del método cerrados en todas
+las que ya existen; lo que queda por construir es esto, en este orden:
+
+| # | Módulo | Qué es | Necesita de Juancho |
+|---|---|---|---|
+| 1 | **M1.2** | las 10 métricas que faltan de las 21 de Rentabilidad | — |
+| 2 | **M1.3** | gastos indirectos con amortización diaria | P-4 |
+| 3 | **M1.4** | IVA como línea propia del P&L | — |
+| 4 | **M2** | velocidad, cobertura por país y previsión de reposición | P-3 |
+| 5 | **M3** | compras y caja: cuándo lanzar el pedido | P-5, P-6 |
+| 6 | **M4** | ACOS de equilibrio | — |
+| 7 | **M5** | detectores de reembolso (5.1 y 5.2) | — |
+| 8 | **M6** | diferenciales europeos de cumplimiento | — |
+
+Los pasos 4 y 5 del método —cargar los datos reales y contrastarlos con el
+negocio— son de Juancho y van al final, de una sola vez.
 
 ## 4. Lo que hace falta de Juancho (datos, no decisiones)
 
-1. Los **lotes de compra reales** de sus cinco familias: fecha, cantidad, coste de
-   fábrica y flete. Con la carga por pegado es una tarde, no cien formularios.
-2. La **lista de gastos fijos** mensuales con su importe.
-3. La **comisión real** que le cobra Amazon, del informe de vista previa de
-   tarifas. Estamos calculando al 15 % por defecto y en joyería casi seguro no es
-   ese número: es lo que más distorsiona el margen ahora mismo.
-4. **Plazos de sus dos proveedores**: fabricación, tránsito, condiciones de pago.
-5. El **hábito semanal** de importar pedidos **e inventario**. Sin esto nada
-   funciona, y desde M1.1 el inventario ya no es opcional: es lo que permite
-   cuadrar cantidades.
+La lista viva, con el contexto de cada punto y ordenada por lo que más desbloquea,
+está en **`docs/PENDIENTE-JUANCHO.md`**. Resumen:
 
----
+1. La **comisión real** de Amazon en joyería (P-1) — lo que más distorsiona el
+   margen ahora mismo: estamos calculando al 15 % por defecto.
+2. Los **lotes de compra reales** de sus cinco familias (P-2).
+3. El **hábito semanal** de importar pedidos **e inventario** (P-3). Desde M1.1 el
+   inventario ya no es opcional: es lo que permite cuadrar cantidades.
+4. La **lista de gastos fijos** mensuales (P-4).
+5. **Plazos y condiciones de pago** de sus dos proveedores (P-5).
+6. La consulta escrita a Seller Support sobre la **base de la comisión** (P-6).
 
 ## 5. Errores ya corregidos — no reintroducir
 
@@ -271,6 +325,20 @@ Cada uno costó una iteración. Están documentados aquí para que nadie los rep
   histórico lo llamaba y archivaba solo lo que estuvieras mirando en pantalla.
   Ahora acepta `{from:null, country:'ALL'}` y por defecto se comporta igual que
   antes.
+
+### Del despliegue (v0.7)
+
+- **Vercel intentando compilar.** `./build.sh: Permission denied`, exit 126:
+  GitHub guarda sin bit de ejecución lo que se sube por la web. Y aunque lo
+  tuviera, `build.sh` necesita **Pillow** para rasterizar los iconos y en el
+  contenedor de Vercel no está. La compilación se hace en local y se sube el
+  `index.html` ya compilado; `vercel.json` neutraliza `installCommand` y
+  `buildCommand` (§3.0).
+- **Mismo bit de ejecución, en npm.** `"build": "./build.sh"` fallaba por lo
+  mismo. Ahora es `"build": "bash build.sh"`, que no depende del permiso.
+- **Una clave `"//"` de comentario en `vercel.json`.** El esquema de Vercel no
+  admite claves libres: tumba el despliegue con `should NOT have additional
+  property`. Lo que haya que explicar va en el commit o en este documento.
 
 ### De M1.1 — todos encontrados en revisión adversarial, todos con prueba
 
@@ -326,6 +394,114 @@ hace que se escale un producto que pierde dinero.
 
 ---
 
+### De la revisión adversarial del 18 de agosto de 2026 — veinte, todos con prueba
+
+Tres pasadas adversariales sobre Rentabilidad y Panel, Inventario e Histórico, y
+Tesorería y Compras, buscando **el número creíble y falso** y demostrándolo
+ejecutando, no razonando. Salieron veinte. Ninguno daba error en pantalla.
+
+**Los que sellaban como medido lo que no lo estaba:**
+
+- **`measured = sf.rows > 0`.** Bastaba que hubiera filas de liquidación en el
+  periodo. El fichero plano de Amazon tiene **dos esquemas** y este lector solo
+  entiende el viejo, con `item-related-fee-type`; el que Amazon sirve hoy trae
+  `amount-type`. Con ese, las filas entraban, ninguna columna de tarifa se
+  reconocía, y la comisión salía **0 € declarada medida**: +23,4 % de beneficio.
+  Ahora `matched` cuenta solo las filas cuyas columnas se entienden.
+- **Una liquidación de 14 días midiendo 90.** Amazon liquida cada dos semanas, así
+  que mirar un trimestre con una liquidación cargada es lo normal: se restaban 14
+  días de comisiones a 90 de ingresos. +20,4 %. Ahora la liquidación aporta su
+  rango: lo que cubre va medido y el resto estimado.
+- **Una categoría de tarifa ausente contada como cero.** Cobrar 0 € de comisión
+  sobre ventas reales no le pasa a nadie: es que el concepto no venía en el
+  fichero. Se estima y se deja de llamar medida.
+- **«No se ha detectado ningún día de rotura»** dicho sin una sola foto de
+  inventario dentro de la ventana. Una ausencia de medición presentada como
+  medición.
+
+**Los que dependían de dónde estabas mirando, no de los datos:**
+
+- **`periodDays || 30`.** «Todo» es `periodDays = 0`, y ser cero lo hacía falsy:
+  todo lo que dividía por él caía al literal 30. Cuatro meses de ventas contra un
+  mes de gastos fijos (+10,9 puntos de margen), «Aporta al año» ×12,17 sobre lo
+  que ya eran cuatro meses (66.635 € donde eran 4.100 €), y la velocidad de venta
+  ×4: Inventario mandaba pedir 2.156 unidades donde tocaban 311.
+- **La velocidad dividida por el periodo pedido y no por el observado.** Pedir
+  «12 meses» con un informe de cuatro hundía la velocidad a un tercio y hacía
+  desaparecer de la pantalla la única referencia en rotura.
+- **El filtro de país dividía las ventas y dejaba el stock entero.** El stock de
+  FBA es europeo y no se puede trocear: con España seleccionada, una referencia
+  que se agota en 30 días aparecía con 60 de cobertura.
+- **El gasto de publicidad se cargaba entero a cualquier periodo.** Con ventas
+  idénticas día a día, el margen iba de −58,6 % a −13,6 % según el botón.
+
+**Los que invertían un ranking, que es lo que dirige la atención al sitio equivocado:**
+
+- **Tres bases distintas para el mismo «ingreso neto»**: el P&L con el IVA real,
+  la ABC dividiendo entre 1,21 clavado y la tabla de mercados con el IVA nominal
+  del país. Dos SKU económicamente idénticos, uno alemán y otro español, salían
+  con un 85 % de diferencia de beneficio y el alemán —el mejor de los dos— se
+  llevaba la «C».
+- **La clase ABC se decidía por el acumulado DESPUÉS** de sumar el producto, así
+  que el que cruzaba el 80 % nunca entraba en A. Con un solo producto rentable
+  salía «C» y el veredicto remitía a una categoría A vacía.
+- **La comisión al 15 % para todo el catálogo**, ignorando el campo por producto
+  que es editable en Catálogo, y también el informe de vista previa de tarifas,
+  que se importaba y no llegaba a ningún número. En joyería son seis puntos.
+
+**Los que hacían parecer sana la caja:**
+
+- **`dayCogsFlow = 0`.** La curva proyectaba un negocio que vende noventa días y
+  no vuelve a comprar género. El ejemplo pasaba de «mínimo 1.424 €, aguanta» a
+  −232 € y descubierto, y encima recomendaba un pedido adicional de 7.000 €.
+- **`daysBetween` restaba milisegundos entre un instante y una medianoche.** A
+  partir de las 12:00 locales el vencimiento de HOY salía en −1 y el filtro `k>=0`
+  lo tiraba: 2.500 € de 10.000 desaparecidos, y por la mañana un número y por la
+  tarde otro. Misma familia que el fallo de `iso()`.
+- **Lo vencido y sin pagar no entraba en la curva** mientras el KPI seguía
+  contándolo: una deuda que la proyección no gastaba nunca.
+- **El gráfico dibujaba la altura por valor absoluto**: −6.000 € idéntico a
+  +6.000 €, y cuanto más hondo el agujero más alta la barra.
+- **El aviso rojo estaba detrás de «no hay pedidos ni gastos»**, que es el estado
+  de quien acaba de empezar: noventa días en negativo sin una línea roja aquí,
+  mientras el Panel sí avisaba con los mismos datos.
+
+**Los que contaban dos veces, o ninguna:**
+
+- **Las devoluciones se contaban y no restaban nada.** Un producto con el 100 % de
+  devoluciones daba el mismo beneficio que uno con cero.
+- **El cuadre de Catálogo se recalculaba en la pantalla con las ventas brutas**
+  mientras el motor recortaba con las netas: la columna decía «+1812» junto a la
+  frase «1824 se vendieron antes», y un SKU que cuadraba exacto llegaba a mostrar
+  «−5» pegado a «cuadra exactamente».
+- **Un SKU que solo venía en el informe multipaís valía cero unidades** en
+  Inventario y en el histórico, mientras la tabla de al lado enseñaba sus 1.400.
+- **«Pedir» ignoraba lo que ya estaba en un barco**: 753 unidades de sobrecompra
+  y una alarma de rotura falsa.
+- **«Capital en mercancía · pedidos en curso»** contaba los ya recibidos, que
+  Inventario ya valora.
+- **Las ventas a mercados fuera de `COUNTRIES`** —el Reino Unido— se evaporaban de
+  la tabla de mercados: un 33 % de la facturación.
+
+**Los de etiqueta, que también engañan:**
+
+- **«Cobertura media 119 d»** era la media aritmética de coberturas por SKU, con
+  tope 365 y el centinela de venta cero colándose como 365 días. Ahora es la
+  cobertura de la cartera: totales entre totales, sin promediar ratios.
+- **«Plazo medio»** era la media de las fichas de proveedor: crear la ficha de uno
+  rápido al que no le compras nada bajaba tu plazo de 33 a 23 días.
+- **«Margen neto 0,0 %»** con 900 € de pérdidas y cero ventas.
+- **La historia acumulada se inventaba hasta 30 días**, tomando el día 1 del mes
+  compactado más antiguo, y la rotura compactada se apilaba entera en el primer
+  mes: 110 días de rotura dentro de un mes con 2 días archivados.
+
+**Y uno que no era un número, sino una pérdida:**
+
+- **Restaurar aceptaba cualquier JSON.** Un objeto cualquiera pasaba el filtro,
+  reemplazaba la base entera y `saveDB()` lo dejaba escrito sin preguntar. El
+  histórico —lo único que no se puede reconstruir descargando informes otra vez—
+  desaparecía por soltar el fichero equivocado.
+
 ## 6. Riesgos abiertos y límites honestos
 
 - **La base de la comisión no está cerrada.** El contrato europeo la define sobre
@@ -348,15 +524,31 @@ hace que se escale un producto que pierde dinero.
   no es un problema de software: no se arregla programando.
 - **No están modeladas** las sobretasas de utilización de almacenamiento ni de
   inventario añejo.
-- **El manifest y el apple-touch-icon van incrustados como `data:` URL** en
-  `src/01-head.html`, mientras `build.sh` genera un `manifest.webmanifest` real y
-  `vercel.json` le pone cabeceras de caché. Nadie enlaza ese archivo. `pwa.test.js`
-  falla por esto (dos comprobaciones) y es un fallo anterior a M0, no una
-  regresión. Consecuencia práctica: iOS Safari históricamente ignora los
-  `apple-touch-icon` en `data:`, así que el icono de la pantalla de inicio en
-  iPhone puede no ser el bueno. No se ha tocado a propósito: cambiar la URL del
-  manifest en una app ya instalada en móvil y PC merece hacerse a conciencia y
-  con una copia de seguridad descargada antes.
+- **La fase del ciclo de cobro de Amazon se asume.** La proyección sitúa el
+  primer cobro a un ciclo completo desde hoy, que es lo más prudente, pero la
+  fase real es desconocida y con los datos de ejemplo mueve la caja mínima entre
+  1.424 € y 5.501 € sin que cambie ningún dato. Está dicho en «Supuestos» y es
+  P-8 en la lista de Juancho.
+- **La tasa de procesamiento de devolución no está modelada.** Depende de la
+  categoría y del porcentaje de devoluciones de cada referencia. Si Amazon la
+  cobra, el beneficio real es menor que el que enseña la pantalla; la pantalla lo
+  dice en vez de inventarse el importe. Es P-9.
+- **El gasto de publicidad se prorratea.** El informe de términos de búsqueda no
+  trae fecha por fila, solo su rango, así que el gasto se reparte suponiendo que
+  se invierte parejo. Es una cifra ajustada, no medida, y la pantalla lo dice con
+  el porcentaje de solape. Tampoco trae país: con un mercado filtrado, el gasto
+  que se ve es el de todos.
+- **Tres informes se importan y no alimentan nada**: libro de inventario, tarifas
+  de almacenamiento e IVA por país. Sus módulos no existen todavía. La pantalla de
+  Datos lo dice y `informes.test.js` se rompe si la lista cambia sin que nadie
+  actualice lo que se promete. Es P-10.
+- **Con «365 días» y un informe más corto, el margen sale por debajo del real**:
+  las ventas son las que hay y los gastos fijos se cuentan por los 365 días
+  completos. Se dice en pantalla. Es conservador a propósito.
+- **El histórico solo mide la rotura los días que tienen foto de inventario.** Con
+  una foto semanal, la velocidad real se queda un 23 % por debajo de la verdadera;
+  sin ninguna, colapsa a la media simple (−33 %) y la pantalla dice que no puede
+  saberlo en vez de afirmar que no hubo rotura. Es P-3.
 - **`localStorage` sigue siendo el único sitio donde vive el histórico.** M0
   reduce mucho el riesgo de llenarlo, pero no elimina el de que el navegador
   libere espacio o alguien borre datos de navegación. La copia de seguridad
@@ -369,29 +561,45 @@ hace que se escale un producto que pierde dinero.
 ## 7. Pruebas
 
 ```bash
-npm install
-npm run fixtures     # informes de Amazon simulados, en inglés y en español
-npm run test         # suite general
-npm run test:es      # los informes en español dan las mismas cifras que en inglés
-npm run test:m0      # el histórico no duplica, no pierde y detecta rotura
-npm run test:m11     # los tres métodos de coste contra la cuenta hecha a mano
-npm run test:all     # las cuatro de una vez
+npm install                    # playwright (los navegadores ya están en el entorno)
+pip3 install Pillow            # solo para build.sh: rasteriza los iconos
+bash build.sh                  # ensambla index.html · nunca editarlo a mano
+npm run fixtures               # informes de Amazon simulados, en inglés y en español
+npm run test:all               # las diez suites de una vez
 ```
 
-`tests/m11.test.js` está escrito con la aritmética de cada caso **en el comentario**
-a propósito: si alguien cambia el motor y la prueba falla, tiene ahí la cuenta para
-saber quién de los dos está equivocado. `M11-S` abre un contexto de navegador en
-`Europe/Madrid`, porque el fallo de zona horaria era invisible corriendo en UTC.
+| Suite | Qué sujeta |
+|---|---|
+| `test` (`hub.test.js`) | navegación, importación en lote, panel, rentabilidad, persistencia |
+| `test:es` | los informes en español dan las mismas cifras que en inglés |
+| `test:m0` | el histórico no duplica, no pierde y detecta rotura |
+| `test:m11` | los tres métodos de coste contra la cuenta hecha a mano |
+| `test:pnl` | tarifas, comisión, base del ingreso neto, periodo, publicidad, devoluciones |
+| `test:caja` | la proyección de caja a 90 días, incluido el gráfico medido en píxeles |
+| `test:inv` | cobertura, velocidad, reposición y honestidad del histórico |
+| `test:informes` | los doce informes uno a uno, y **qué alimenta cada uno** |
+| `test:salida` | copia de seguridad, restauración y las siete exportaciones |
+| `test:pwa` | instalable, iconos, autoactualización y sin conexión. Levanta su propio servidor |
 
-`tests/pwa.test.js` es aparte: necesita la app servida en `http://localhost:8899`
-(`python3 -m http.server 8899`) porque comprueba el service worker y el modo sin
-conexión, que no funcionan sobre `file://`. Falla dos comprobaciones por lo del
-manifest, y es anterior a M0.
+Las pruebas llevan **la aritmética del caso en el comentario** a propósito: si
+alguien cambia el motor y una falla, tiene ahí la cuenta para saber quién de los
+dos está equivocado. Varias corren en `Europe/Madrid`, porque el fallo de zona
+horaria era invisible en UTC.
 
----
+Tres cosas que estas suites hacen a propósito y conviene no deshacer:
+
+- **`informes.test.js` importa de uno en uno.** En lote, un informe identificado
+  como otro queda tapado porque el segundo pisa al primero y las cuentas siguen
+  saliendo.
+- **`salida.test.js` lee el CSV que se habría descargado**, interceptando el
+  Blob. Comprobar que el botón existe no dice nada: un botón que produce un
+  fichero vacío pasa esa prueba. Así salió que los lotes se exportaban a coste 0.
+- **`caja.test.js` mide el gráfico en píxeles del DOM**, no leyendo el CSS. El
+  fallo era que una barra negativa se dibujaba igual que una positiva.
 
 ## 8. Mensaje para arrancar la sesión nueva
 
-> Retomamos el Aresstore Seller Hub. Lee `docs/TRASPASO.md` del repositorio
-> (zip adjunto) y sigue desde ahí. Prioridad: desplegar la v0.7 y conectar GitHub;
-> después, M1.2.
+> Retomamos el Aresstore Seller Hub. Lee primero `docs/METODO.md` —es la norma del
+> proyecto, no una preferencia de estilo— y después `docs/TRASPASO.md` para el
+> estado técnico. La cola de trabajo está en §3.5; lo que depende de mí, en
+> `docs/PENDIENTE-JUANCHO.md`. No te pares a esperarme: anota y sigue.

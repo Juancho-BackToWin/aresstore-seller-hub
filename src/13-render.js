@@ -147,7 +147,9 @@ function renderPanel(){
   document.getElementById('panelKpis').innerHTML =
     kpi('Ventas '+(periodDays?periodDays+' d':'histórico'), fmt(P.grossInc,0), num(P.units)+' unidades','accent')+
     kpi('Beneficio neto', fmt(P.profit,0), tag+' · '+num(P.units?P.profit/P.units:0,2)+' €/ud', P.profit>0?'pos':'neg')+
-    kpi('Margen neto', num(P.margin,1)+'%', 'objetivo ≥'+TARGET.net+'%', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
+    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+        P.margin===null?'sin ingreso en el periodo':'objetivo ≥'+TARGET.net+'%',
+        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
     kpi('ROI', num(P.roi,0)+'%', 'sobre coste de producto', P.roi>=TARGET.roi?'pos':(P.roi>0?'warn':'neg'))+
     kpi('TACOS', num(P.tacos,1)+'%', 'objetivo <'+TARGET.tacos+'%', P.tacos<=TARGET.tacos?'pos':'warn')+
     kpi('Precio medio', fmt(P.avgPrice), 'devoluciones '+num(P.retRate,1)+'%','');
@@ -184,7 +186,7 @@ function renderPanel(){
     const miss = P.units-P.cogsKnown;
     A.push({p:1.5,lvl:'stop',t:'El margen que estás viendo no incluye el coste de '+num(miss)+' unidades',
       s:'Solo '+num(P.cogsKnown)+' de '+num(P.units)+' unidades vendidas tienen coste de compra cargado, así que el beneficio de '+
-        fmt(P.profit,0)+' y el margen del '+num(P.margin,1)+'% están inflados. Es el error más común y el más caro: da por bueno un producto que pierde dinero. '+
+        fmt(P.profit,0)+' y el margen del '+(P.margin===null?'—':num(P.margin,1)+'%')+' están inflados. Es el error más común y el más caro: da por bueno un producto que pierde dinero. '+
         'Crea los productos en Catálogo con su coste real.', go:'catalogo'});
   } else if(nocost.length) A.push({p:6,lvl:'info',t:nocost.length+' producto sin coste cargado',
     s:'Sin coste de compra el margen que ves está inflado. Carga el coste base en Catálogo y, si tienes las compras, sus lotes: el coste base es el que se aplica a las ventas anteriores a tu primer lote.', go:'catalogo'});
@@ -247,7 +249,12 @@ function renderDatos(){
       '<div class="c-path mut" style="font-style:italic">'+esc(r.en)+'</div>'+
       (r.warn?'<div class="c-path" style="color:var(--caution);margin-top:4px">⚠ '+esc(r.warn)+'</div>':'')+
       '<div class="c-state">'+(i? '<span class="pos">✓ '+num(i.count)+' filas</span>' : '<span class="mut">sin cargar</span>')+
-      ' · <span class="mut">'+esc(r.feeds)+'</span></div></div>';
+      ' · <span class="mut">'+esc(r.feeds)+'</span></div>'+
+      /* Un «✓ reconocido» sobre un informe que no llega a ningún número es la
+         apariencia de que funciona. Estos tres se guardan enteros y todavía no
+         alimentan nada, y eso se dice aquí. */
+      (r.guardaSinUsar?'<div class="c-path" style="color:var(--caution);margin-top:4px">Se guarda entero, pero todavía no alimenta ningún cálculo del hub.</div>':'')+
+      '</div>';
   }).join('');
   const F = freshness();
   const nMap = Object.keys(DB.mappings||{}).length;
@@ -355,6 +362,14 @@ function renderHistorico(){
     }).join('') : '<tr><td colspan="7" class="name mut">Todavía no hay días archivados con ventas. Importa el informe de pedidos.</td></tr>'));
 
   const withOos = V.filter(r=>r.oos>0);
+  /* Cuántas fotos de stock hay DENTRO de la ventana. La rotura se detecta
+     comparando stock cero con venta cero, así que sin fotos no se detecta
+     nada, y decir «no se ha detectado ninguna rotura» sin haber mirado es
+     presentar una ausencia de medición como una medición: justo lo que la
+     norma del proyecto prohíbe. */
+  const H0 = hist();
+  const desde = iso(addDays(today(), -30));
+  const conFoto = Object.keys(H0.d||{}).filter(k=>k>=desde && H0.d[k].k).length;
   let vn = '';
   if(!V.length){
     vn = 'Sin datos para calcular velocidad todavía.';
@@ -362,7 +377,11 @@ function renderHistorico(){
     vn = 'Ventana de 30 días, excluyendo hoy porque el informe del día en curso siempre viene incompleto. ';
     if(withOos.length) vn += '<strong>'+withOos.length+' referencia'+(withOos.length===1?'':'s')+' con días sin stock detectados.</strong> '+
       'Su velocidad real está por encima de la media simple, así que si repones con la media simple te vuelves a quedar corto. ';
-    else vn += 'No se ha detectado ningún día de rotura en la ventana. ';
+    else if(!conFoto) vn += '<strong>No puedo saber si hubo rotura de stock:</strong> no hay ninguna foto de inventario archivada dentro de esta ventana. '+
+      'La velocidad real que ves es igual a la media simple porque no hay con qué corregirla, y eso la deja por debajo de la verdadera si algún día se agotó algo. '+
+      'Importa el informe de inventario junto con el de pedidos, y cada vez que lo hagas. ';
+    else if(conFoto<10) vn += 'No se ha detectado ningún día de rotura, pero solo hay <strong>'+conFoto+' foto'+(conFoto===1?'':'s')+' de inventario</strong> en los 30 días: los demás son interpolación, no medición. Con una foto semanal se conoce el stock de un día de cada siete. ';
+    else vn += 'No se ha detectado ningún día de rotura en la ventana, sobre '+conFoto+' días con foto de inventario. ';
     vn += '<br><br><span class="mut">Cómo se detecta un día sin stock: se arrastra hacia delante la última foto de inventario conocida y '+
       'un día cuenta como roto solo si esa foto estaba a cero <em>y</em> además ese día no se vendió ni una unidad. Las dos condiciones juntas, '+
       'porque un stock a cero con ventas significa que la foto es vieja y un día sin ventas con stock es simplemente un día flojo. '+
@@ -389,11 +408,25 @@ function renderHistorico(){
    ========================================================================= */
 function renderRent(){
   const P = pnl();
-  const badge = P.measured ? '<span class="pill go">medido</span>' : '<span class="pill warn">estimado</span>';
+  /* «Medido» solo cuando la liquidación cubre el periodo entero. Cubriendo una
+     parte, el número es una mezcla y decirlo medido es justo lo que hace que
+     alguien se lo crea sin mirarlo. */
+  const cov = Math.round(P.feeCoverPct||0);
+  const badge = cov>=100 ? '<span class="pill go">medido</span>'
+              : cov>0    ? '<span class="pill warn">'+cov+'% medido</span>'
+              :            '<span class="pill warn">estimado</span>';
+  /* El tipo efectivo se enseña calculado, no como una constante: la comisión
+     sale del % de cada producto y el catálogo puede mezclar categorías. */
+  const tipoEf = P.grossInc>0 ? num(P.referral/P.grossInc*100,1)+'%' : '—';
+  const cobTxt = cov>=100 ? 'de la liquidación'
+               : cov>0    ? cov+'% de la liquidación · el resto estimado al '+tipoEf
+               :            'estimada al '+tipoEf+' · el % de cada producto';
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
-    kpi('Beneficio', fmt(P.profit,0), P.measured?'comisiones reales':'comisiones estimadas', P.profit>0?'pos':'neg')+
-    kpi('Margen neto', num(P.margin,1)+'%','sobre ingreso sin IVA', P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg'))+
+    kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
+    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+        P.margin===null?'sin ingreso en el periodo':'sobre ingreso sin IVA',
+        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
     kpi('Coste de producto', fmt(P.cogs,0),
         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
                             : (costMethodInfo().name.toLowerCase()+' · '+num(P.costMeasuredPct||0,0)+' % con lote'),
@@ -409,13 +442,18 @@ function renderRent(){
     line('Ingresos con IVA',P.grossInc)+
     line('IVA repercutido',P.tax,'',true)+
     '<tr class="tot"><td class="name">Ingreso neto</td><td class="num">'+fmt(P.net,0)+'</td></tr>'+
-    line('Comisión de Amazon',P.referral,P.measured?'de la liquidación':'estimada al 15%',true)+
-    line('Tarifas FBA',P.fba,P.measured?'':'estimadas con recargo 1,5%',true)+
+    line('Comisión de Amazon',P.referral,cobTxt,true)+
+    line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
+    (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
+        num(P.retUnits)+' ud · ingreso devuelto menos comisión reintegrada'+
+        (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
     line('Coste de producto',P.cogs,'',true)+
-    line('Publicidad',P.ppc,'',true)+
+    line('Publicidad',P.ppc, P.adDays
+        ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
+        : (P.ppc>0?'estimado a diario':''), true)+
     line('Gastos fijos',P.fixed,'prorrateados',true)+
     line('Reembolsos recuperados',P.reimb)+
     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
@@ -450,7 +488,35 @@ function renderRent(){
     v='<strong>'+A.length+' de '+S.length+' productos generan el 80% de tu beneficio.</strong> ';
     if(A.length<=2 && S.length>3) v+='Es una concentración alta: si Amazon suspende uno de esos listados o entra un competidor agresivo, el negocio se para. Diversificar no es una aspiración, es gestión de riesgo. ';
     if(D.length) v+='<span style="color:var(--stop)">'+D.length+' producto'+(D.length===1?'':'s')+' pierde'+(D.length===1?'':'n')+' dinero y consume atención, stock y caja que deberían ir a los de categoría A. La decisión no es optimizarlos: es subirles el precio, renegociar el coste o retirarlos.</span> ';
-    if(!P.measured) v+='<br><br>Estas cifras usan comisiones estimadas al 15% porque no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado, no aproximado.';
+    /* El informe de términos de búsqueda no trae fecha por fila pero sí su
+       propio rango. Cargar su gasto entero contra cualquier periodo hacía que
+       el margen fuese de −58,6 % a 30 días y de −13,6 % con «Todo», con las
+       mismas ventas todos los días. Se prorratea, y se dice que se prorratea. */
+    if(P.adDays>0 && Math.round(P.adSolapePct)<100)
+      v+='<br><br>El informe de publicidad cubre '+num(P.adDays)+' días'+
+         (P.adDesde?' ('+P.adDesde.toLocaleDateString('es-ES')+' a '+P.adHasta.toLocaleDateString('es-ES')+')':'')+
+         ' y solapa el <strong>'+num(P.adSolapePct,0)+'%</strong> del periodo que estás mirando. '+
+         'El gasto que ves está prorrateado suponiendo que inviertes parejo: es una cifra ajustada, no medida. '+
+         (Math.round(P.adSolapePct)===0 ? 'Con cero solape, descárgate el informe del periodo que quieres analizar antes de fiarte del TACOS.' : '');
+    if(P.retUnits>0){
+      v+='<br><br>Las '+num(P.retUnits)+' devoluciones del periodo cuestan '+fmt(P.returnsCost,0)+': se devuelve el ingreso, Amazon reintegra la comisión menos la tasa de gestión del reembolso, y la tarifa de logística no vuelve.';
+      if(P.retSinEstado>0)
+        v+=' De ellas, '+num(P.retSinEstado)+' vienen sin estado en el informe, así que doy por perdido su coste de producto: si volvieron vendibles, tu beneficio real es algo mayor que este.';
+      v+=' <span class="mut">No está incluida la tasa de procesamiento de devolución, que depende de la categoría y del porcentaje de devoluciones de cada referencia: si Amazon te la cobra, tu beneficio es menor que este.</span>';
+    }
+    if(countryFilter!=='ALL' && P.ppc>0)
+      v+='<br><br>Estás filtrando por un solo mercado y el informe de publicidad no trae país: el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
+    /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en
+       meses de venta cero: convierte el informe en insuficiente. Los gastos
+       fijos sí se cuentan por los días pedidos, así que el margen sale más bajo
+       de lo real, y eso hay que decirlo en vez de dejar que parezca un dato. */
+    if(P.dataDays>0 && P.dataDays < P.periodDaysReal)
+      v+='<br><br><strong>El informe de pedidos cubre '+num(P.dataDays)+' días de los '+num(P.periodDaysReal)+' que estás mirando.</strong> Las ventas son las que hay; los gastos fijos, en cambio, se cuentan por los '+num(P.periodDaysReal)+' días completos, así que el margen que ves está por debajo del real. Descarga un informe más largo o mira un periodo más corto.';
+    const cv = Math.round(P.feeCoverPct||0);
+    if(cv<=0 && P.settleRows>0 && !P.settleMatched)
+      v+='<br><br><strong>Hay una liquidación cargada y no reconozco sus columnas de tarifas.</strong> El fichero plano de Amazon tiene dos formatos y este lector entiende el que trae «item-related-fee-type». Las comisiones siguen estimadas al 15%: prefiero decírtelo a enseñarte 0 € de comisión y llamarlo medido.';
+    else if(cv<=0) v+='<br><br>Estas cifras usan la comisión que tienes puesta en cada producto, no la que Amazon te cobró: no hay informe de liquidación cargado. Impórtalo y pasarán a ser dinero real contado. Y revisa ese porcentaje en Catálogo, porque el valor por defecto es 15% y en muchas categorías no lo es.';
+    else if(cv<100) v+='<br><br>La liquidación cargada cubre el <strong>'+cv+'%</strong> de lo facturado en este periodo. Ese trozo son comisiones reales; el resto sigue estimado al 15%. Amazon liquida cada 14 días, así que para cubrir un trimestre hacen falta unas seis liquidaciones.';
   } else v='Sin datos de ventas todavía.';
   document.getElementById('abcVerdict').innerHTML=v;
 }
@@ -469,7 +535,11 @@ function renderTesoreria(){
   const end = C[C.length-1]||{bal:0};
   const outPO = DB.pos.filter(p=>p.status!=='closed').reduce((a,p)=>a+
     (p.payments||[]).filter(x=>!x.paid).reduce((s,x)=>s+poAmount(p)*toNum(x.pct)/100,0),0);
-  const tied = DB.pos.filter(p=>p.status!=='closed').reduce((a,p)=>a+poAmount(p),0);
+  /* «En curso» es lo que todavía no ha llegado. Un pedido en estado `received`
+     ya está en el almacén y ya lo valora Inventario: contarlo también aquí
+     declaraba 10.000 € de capital para 5.000 € de género. */
+  const tied = DB.pos.filter(p=>p.status!=='closed' && p.status!=='received')
+                     .reduce((a,p)=>a+poAmount(p),0);
   document.getElementById('cashKpis').innerHTML =
     kpi('Caja hoy', fmt(toNum(cs.start),0),'saldo de partida','accent')+
     kpi('Caja mínima a 90 d', fmt(min.bal,0), 'día '+min.k+' · '+min.date.toLocaleDateString('es-ES'), min.bal<TARGET.cash?'neg':'pos')+
@@ -485,22 +555,29 @@ function renderTesoreria(){
   document.getElementById('cashChart').innerHTML =
     '<div class="zeroline" style="top:'+zeroPct.toFixed(1)+'%"></div>' +
     C.map(c=>{
-      const h = Math.max(1, Math.abs(c.bal)/range*100);
+      const h = Math.max(0.8, Math.abs(c.bal)/range*100);
       const col = c.bal<0 ? 'var(--stop)' : (c.bal<TARGET.cash ? 'var(--caution)' : 'var(--brand)');
-      const bottom = c.bal<0 ? (zeroPct===100?0:0) : 0;
-      return '<div class="cbar" style="height:'+h.toFixed(1)+'%;background:'+col+'" title="'+
-        c.date.toLocaleDateString('es-ES')+': '+fmt(c.bal,0)+(c.po?' · pago de pedido '+fmt(c.po,0):'')+'"></div>';
+      /* Positivo crece hacia arriba desde la línea de cero; negativo cuelga
+         hacia abajo. El signo tiene que verse en la forma, no solo en el color:
+         un descubierto no puede parecer un día con caja de sobra. */
+      const pos = c.bal>=0
+        ? 'bottom:'+(100-zeroPct).toFixed(1)+'%;height:'+h.toFixed(1)+'%'
+        : 'top:'+zeroPct.toFixed(1)+'%;height:'+h.toFixed(1)+'%';
+      return '<div class="cbar" title="'+
+        c.date.toLocaleDateString('es-ES')+': '+fmt(c.bal,0)+(c.po?' · pago de pedido '+fmt(c.po,0):'')+'">'+
+        '<div class="cfill'+(c.bal<0?' neg':'')+'" style="'+pos+';background:'+col+'"></div></div>';
     }).join('');
   document.getElementById('cashAxis').innerHTML =
     '<span>hoy</span><span>+30 d</span><span>+60 d</span><span>+90 d</span>';
 
   const neg = C.filter(c=>c.bal<TARGET.cash);
   let v;
-  if(!DB.pos.length && !DB.expenses.length){
-    v='<strong>Esta curva todavía no dice gran cosa.</strong> Está proyectando solo con las ventas y el ciclo de liquidación. '+
-      'Cobra sentido cuando cargas tus pedidos de compra con sus vencimientos en la pestaña Compras y tus gastos fijos aquí al lado: '+
-      'entonces verás el hueco real entre pagar la fábrica y cobrar de Amazon, que es donde se rompe la mayoría de vendedores en crecimiento.';
-  } else if(neg.length){
+  /* El aviso rojo va PRIMERO. Estaba detrás de «no hay pedidos ni gastos», así
+     que un usuario nuevo podía pasar noventa días por debajo del colchón, o
+     directamente en negativo, sin ver una sola línea roja aquí — mientras el
+     Panel, con los mismos datos, sí avisaba. Dos pantallas y dos veredictos
+     opuestos es peor que no tener veredicto. */
+  if(neg.length){
     v='<strong style="color:var(--stop)">Te quedas por debajo del colchón durante '+neg.length+' día'+(neg.length===1?'':'s')+', empezando el '+neg[0].date.toLocaleDateString('es-ES')+'.</strong> '+
       'Tres salidas por orden de preferencia: retrasar o fraccionar el próximo pedido de compra, negociar un plazo mayor con el proveedor, o buscar financiación. '+
       'La cuarta —reducir stock— parece la más fácil y es la más cara, porque romper cobertura activa la tarifa por bajo inventario y hunde el posicionamiento.';
@@ -508,8 +585,19 @@ function renderTesoreria(){
     v='<strong>La caja aguanta los 90 días por encima del colchón.</strong> Con '+fmt(end.bal-toNum(cs.start),0)+' de generación neta en el periodo, '+
       'tienes margen para un pedido adicional de hasta '+fmt(Math.max(0,min.bal-TARGET.cash),0)+' sin comprometer el mínimo de seguridad.';
   }
+  if(!DB.pos.length && !DB.expenses.length){
+    v+='<br><br>Y todavía le falta la mitad del cuadro: no has cargado ningún pedido de compra ni gastos fijos. '+
+       'Cárgalos en Compras y aquí al lado y verás el hueco real entre pagar la fábrica y cobrar de Amazon, '+
+       'que es donde se rompe la mayoría de vendedores en crecimiento.';
+  }
+  const M = C.meta||{};
+  if(M.fueraDeVentana>0)
+    v+='<br><br>Hay '+fmt(M.fueraDeVentana,0)+' de vencimientos que caen más allá de los 90 días: cuentan en «pagos comprometidos» y no en esta curva.';
   v+='<br><br><span class="mut">Supuestos: las ventas se proyectan con la media del periodo seleccionado y sin estacionalidad, '+
      'el cobro de Amazon se libera cada ciclo reteniendo la reserva, y el IVA se paga el día 20 de cada mes. '+
+     'La reposición de lo que vendes se descuenta a diario ('+fmt(M.dayCogsFlow||0)+'/día a coste puesto)'+
+     (M.diasCubiertos>=1 ? ', salvo los primeros '+num(M.diasCubiertos,0)+' días, que ya los cubre la mercancía que tienes pedida' : '')+'. '+
+     'El primer cobro de Amazon se sitúa a un ciclo completo desde hoy, que es el supuesto más prudente: si tu ciclo va por otro sitio, el mínimo cambia. '+
      'La estacionalidad de Q4 puede desviar esto sustancialmente: úsalo para detectar el problema, no para fijar el importe exacto.</span>';
   document.getElementById('cashVerdict').innerHTML=v;
 
@@ -627,7 +715,12 @@ function renderLotes(){
       ks.sort().map(sk=>{
         const b = B[sk];
         const p = DB.products.filter(x=>String(x.sku).toLowerCase()===sk)[0];
-        const dif = b.bought - b.sold - b.stock;
+        /* El cuadre se LEE del motor, no se recalcula aquí. Recalcularlo con
+           b.sold (ventas brutas) daba un número distinto del que el motor usa
+           para recortar la cola, y distinto del texto de al lado: exactamente
+           las devoluciones de diferencia. Un SKU que cuadraba perfecto llegaba
+           a mostrar «−12» junto a «cuadra exactamente». */
+        const dif = b.sobra - b.falta;
         let txt, cls;
         if(b.falta>0){ txt=num(b.falta)+' vendidas que ningún lote explica · van al coste base como stock de apertura'; cls='neg'; }
         else if(!b.stockKnown){ txt='no se ha visto el stock de este SKU: no se puede cuadrar'; cls='warn'; }
@@ -827,28 +920,44 @@ function renderInv(){
   const I = invStats();
   const value = I.reduce((a,r)=>a+r.value,0);
   const rupture = I.filter(r=>r.risk==='low'&&r.velocity>0), over = I.filter(r=>r.risk==='over'&&r.qty>0);
+  /* Cobertura de la cartera: stock total entre venta diaria total. No se
+     promedian porcentajes ni ratios por SKU; se dividen los totales. */
+  const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
+  const ventaDia   = I.reduce((a,r)=>a+r.velocity, 0);
+  const coberturaCartera = ventaDia>0 ? stockTotal/ventaDia : 0;
   document.getElementById('invKpis').innerHTML =
     kpi('Unidades en almacén', num(I.reduce((a,r)=>a+r.qty,0)), I.length+' referencias','accent')+
     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
     kpi('Bajo cobertura', num(rupture.length),'riesgo de tarifa por bajo inventario', rupture.length?'neg':'pos')+
     kpi('Sobrestock', num(over.length),'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
-    kpi('Cobertura media', num(I.length?I.reduce((a,r)=>a+Math.min(r.cover,365),0)/I.length:0,0)+' d','objetivo ~'+TARGET.cover+' d','')+
+    /* Cobertura de la CARTERA: unidades totales entre venta diaria total. La
+       media aritmética de las coberturas por SKU decía 119 d con cuatro
+       referencias entre 26 y 113 días y una en 429, y además metía en la media
+       el centinela de «venta cero» como si fueran 365 días de cobertura: una
+       sola referencia muerta subía el titular un 34 %. Un titular de 119 días
+       frente a un objetivo de 35 se lee «voy sobrado» con una referencia a 26
+       días y pidiendo 421 unidades en la fila de abajo. */
+    kpi('Cobertura de la cartera', num(coberturaCartera,0)+' d',
+        'stock total entre venta diaria · objetivo ~'+TARGET.cover+' d','')+
     kpi('Hay que reponer', num(I.filter(r=>r.need>0).length),'referencias por debajo del punto de pedido', I.filter(r=>r.need>0).length?'warn':'pos');
 
   tbl('invTable','<tr><th>SKU</th><th class="num">Stock</th><th class="num">Venta/día</th><th class="num">Cobertura</th>'+
-    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">Pedir</th><th>Estado</th></tr>'+
+    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">En camino</th><th class="num">Pedir</th><th>Estado</th></tr>'+
     (I.length? I.map(r=>
       '<tr><td class="name"><strong>'+esc(r.sku)+'</strong> <span class="pill '+(r.fbm?'info':'core')+'">'+(r.fbm?'FBM':'FBA')+'</span>'+
       (r.name && r.name!==r.sku ? '<br><span class="mut" style="font-size:11px">'+esc(r.name)+'</span>' : '')+'</td>'+
       '<td class="num">'+num(r.qty)+'</td><td class="num">'+num(r.velocity,1)+'</td>'+
       '<td class="num '+(r.cover<28?'neg':r.cover>154?'warn':'pos')+'" style="font-weight:600">'+(r.cover>900?'∞':num(r.cover,0)+' d')+'</td>'+
       '<td class="num mut">'+num(r.lead)+' d</td><td class="num mut">'+num(r.reorderPoint)+'</td>'+
+      '<td class="num '+(r.enCamino>0?'info':'mut')+'">'+(r.enCamino>0?num(r.enCamino):'—')+'</td>'+
       '<td class="num '+(r.need>0?'warn':'')+'" style="font-weight:600">'+(r.need>0?num(r.need):'—')+'</td>'+
       '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>':'<span class="pill stop">tarifa bajo inv.</span>')
              :r.risk==='over'?'<span class="pill warn">sobrestock</span>':'<span class="pill go">en banda</span>')+'</td></tr>').join('')
-      : '<tr><td colspan="8" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
+      : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
 
   let v='';
+  if(countryFilter!=='ALL')
+    v+='<strong>Esta pantalla ignora el filtro de país.</strong> El stock de FBA es europeo y no se puede trocear por país, así que las ventas tampoco: lo que ves es la cobertura del conjunto. Si dividiera las ventas y no el stock, la cobertura saldría cuatro veces mayor de lo que es.<br><br>';
   if(I.length){
     if(rupture.length) v+='<strong style="color:var(--stop)">'+rupture.length+' referencia'+(rupture.length===1?'':'s')+' por debajo de 28 días.</strong> '+
       'La tarifa por bajo inventario son entre 0,16 y 0,67 € por unidad en Alemania, Francia, Italia y España, y solo salta si la cobertura a 30 <em>y</em> a 90 días caen ambas bajo el umbral. Pero el coste real no es la tarifa: es perder posición en la página de resultados mientras estás sin stock, que tarda semanas en recuperarse. ';
@@ -878,13 +987,29 @@ const PO_STATES=[['draft','Borrador'],['ordered','Pedido'],['production','Produc
 function renderCompras(){
   const open = DB.pos.filter(p=>p.status!=='closed');
   const committed = open.reduce((a,p)=>a+(p.payments||[]).filter(x=>!x.paid).reduce((s,x)=>s+poAmount(p)*toNum(x.pct)/100,0),0);
+  /* Plazo medio real: el de los proveedores a los que compras, pesado por lo
+     que les compras. Sin pedidos no hay plazo medio que dar, y decirlo con un
+     «—» es más honesto que un cero que parece un dato. */
+  let plazoNum=0, plazoDen=0;
+  DB.pos.forEach(po=>{
+    const sup = DB.suppliers.filter(x=>x.id===po.supplierId)[0];
+    if(!sup) return;
+    const u = poUnits(po);
+    plazoNum += toNum(sup.lead)*u; plazoDen += u;
+  });
+  const plazoMedio = plazoDen>0 ? plazoNum/plazoDen : null;
   document.getElementById('poKpis').innerHTML =
     kpi('Pedidos abiertos', num(open.length), DB.pos.length+' en total','accent')+
     kpi('Valor en curso', fmt(open.reduce((a,p)=>a+poAmount(p),0),0),'mercancía comprometida','')+
     kpi('Pendiente de pagar', fmt(committed,0),'anticipos y saldos', committed>0?'warn':'pos')+
     kpi('Unidades entrantes', num(open.reduce((a,p)=>a+poUnits(p),0)),'llegando al almacén','')+
     kpi('Proveedores', num(DB.suppliers.length),'con ficha creada','')+
-    kpi('Plazo medio', num(DB.suppliers.length?DB.suppliers.reduce((a,s)=>a+toNum(s.lead),0)/DB.suppliers.length:0,0)+' d','desde pedido a almacén','');
+    /* Ponderado por las unidades que de verdad has comprado a cada uno. La
+       media simple de las fichas hacía que crear un proveedor rápido al que no
+       le has pedido nada bajara tu plazo de 33 a 23 días en pantalla, y con
+       cero proveedores enseñaba «0 d» como si fuera una medición. */
+    kpi('Plazo medio', plazoMedio===null ? '—' : num(plazoMedio,0)+' d',
+        plazoMedio===null ? 'sin pedidos que ponderar' : 'ponderado por unidades compradas','');
 
   document.getElementById('poList').innerHTML = DB.pos.length ? DB.pos.map(po=>{
     const sup=DB.suppliers.find(s=>s.id===po.supplierId);
@@ -1090,7 +1215,7 @@ function renderComp(){
     COUNTRIES.map(c=>{
       const x = DB.compliance[c.code]||{};
       const st = countryStats().find(s=>s.c.code===c.code)||{units:0};
-      const annualUnits = st.units*(365/(periodDays||30));
+      const annualUnits = st.units*(365/daysInPeriod());
       const perUnit = annualUnits>0 ? toNum(x.vatCost)/annualUnits : 0;
       const cb=(f,label)=>'<input type="checkbox" style="width:auto" '+(x[f]?'checked':'')+
         ' onchange="setComp(\''+c.code+'\',\''+f+'\',this.checked)" title="'+label+'">';
@@ -1156,6 +1281,105 @@ function closeModal(){ document.getElementById('modalBg').classList.remove('open
 /* =========================================================================
    17 · EXPORT / IMPORT / DEMO
    ========================================================================= */
+/* =========================================================================
+   EXPORTACIÓN · una por módulo
+
+   La copia de seguridad es un JSON pensado para volver al hub. Esto es otra
+   cosa: la tabla que estás viendo, tal cual, para abrirla en una hoja de
+   cálculo. Se exporta lo CALCULADO, no lo importado, porque lo importado ya lo
+   tienes en el fichero de Amazon.
+
+   Separador de punto y coma y coma decimal, que es lo que espera un Excel en
+   español; con coma de separador y coma decimal, las columnas se desplazan —el
+   mismo fallo del que se protege el importador.
+   ========================================================================= */
+function csvCell(v){
+  if(v==null) return '';
+  if(typeof v==='number') return String(v).replace('.', ',');
+  const s=String(v);
+  return /[";\n]/.test(s) ? '"'+s.split('"').join('""')+'"' : s;
+}
+function descargarCSV(nombre, cabeceras, filas){
+  if(!filas.length){ toast('No hay nada que exportar todavía en esta pantalla.'); return; }
+  const txt = [cabeceras.join(';')].concat(filas.map(f=>f.map(csvCell).join(';'))).join('\r\n');
+  /* BOM para que Excel reconozca el UTF-8 y no parta los acentos. */
+  const blob = new Blob(['\ufeff'+txt], {type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='aresstore-'+nombre+'-'+iso(today())+'.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  toast(filas.length+' filas exportadas a '+a.download);
+}
+function exportRentabilidad(){
+  const S = skuStats();
+  descargarCSV('rentabilidad',
+    ['SKU','Producto','Clase ABC','Unidades','Ventas con IVA','Ingreso neto','Coste de producto',
+     'Coste unitario','Beneficio','Margen %','% del beneficio','% acumulado'],
+    S.map(r=>[r.sku, r.name, r.abc, r.units, r2(r.revenue), r2(r.netRev), r2(r.cogs),
+              r2(r.unitCost), r2(r.profit), r2(r.margin), r2(r.share), r2(r.cum)]));
+}
+function exportInventario(){
+  const I = invStats();
+  const paises = COUNTRIES.map(c=>c.code);
+  descargarCSV('inventario',
+    ['SKU','Producto','Canal','Stock','Venta diaria','Cobertura (días)','Plazo (días)',
+     'Punto de pedido','En camino','Pedir','Estado','Coste unitario','Valor'].concat(paises),
+    I.map(r=>[r.sku, r.name, r.fbm?'FBM':'FBA', r.qty, r2(r.velocity),
+              r.cover>900?'':r2(r.cover), r.lead, r.reorderPoint, r.enCamino, r.need,
+              {low:'bajo inventario', over:'sobrestock', ok:'en banda'}[r.risk]||r.risk,
+              r2(r.unitCost), r2(r.value)]
+             .concat(paises.map(c=>(r.byCountry||{})[c]||0))));
+}
+function exportCatalogo(){
+  const filas=[];
+  /* Los lotes EN CRUDO, no los fundidos por día: al exportar interesa la
+     compra tal y como se cargó, con su fábrica, su flete y de qué pedido vino.
+     `mergedLots` es una vista para calcular y no lleva esos campos. */
+  DB.products.forEach(p=>{
+    (prodLots(p)||[]).forEach(l=>filas.push([p.sku, p.name, l.date, toNum(l.qty),
+      r2(toNum(l.unit)), r2(toNum(l.freight)), r2(lotCost(l)), l.ref||'']));
+  });
+  descargarCSV('lotes-de-coste',
+    ['SKU','Producto','Fecha','Unidades','Coste de fábrica','Flete por unidad','Coste puesto','Origen'],
+    filas);
+}
+function exportPublicidad(){
+  const A = adStats();
+  descargarCSV('publicidad',
+    ['Término de búsqueda','Campaña','Impresiones','Clics','Gasto','Ventas atribuidas','Pedidos','ACOS %'],
+    A.terms.map(t=>[t.term, t.campaign, t.impr, t.clicks, r2(t.spend), r2(t.sales), t.orders,
+                    t.sales>0 ? r2(t.spend/t.sales*100) : '']));
+}
+function exportCompras(){
+  const filas=[];
+  DB.pos.forEach(po=>{
+    const sup=(DB.suppliers.filter(s=>s.id===po.supplierId)[0]||{});
+    (po.items||[]).forEach(i=>filas.push([po.ref||po.id, sup.name||'', po.status||'', po.eta||'',
+      po.received||'', i.sku, i.qty, r2(i.unitCost), r2(toNum(i.qty)*toNum(i.unitCost)), r2(po.freight)]));
+  });
+  descargarCSV('compras',
+    ['Pedido','Proveedor','Estado','Llegada prevista','Recibido','SKU','Unidades',
+     'Coste de fábrica','Importe','Flete del pedido'], filas);
+}
+function exportTesoreria(){
+  const C = cashProjection();
+  descargarCSV('caja-90-dias',
+    ['Día','Fecha','Cobros','Pagos','Pago de pedido','Saldo'],
+    C.map(c=>[c.k, iso(c.date), r2(c.inflow), r2(c.outflow), r2(c.po), r2(c.bal)]));
+}
+function exportHistorico(){
+  const H = hist(), filas=[];
+  Object.keys(H.d).sort().forEach(k=>{
+    const s=H.d[k].s||{};
+    Object.keys(s).forEach(sk=>filas.push([k,'día',sk, s[sk][0], r2(s[sk][1]), r2(s[sk][2]||0)]));
+  });
+  Object.keys(H.m).sort().forEach(mk=>{
+    const s=H.m[mk].s||{};
+    Object.keys(s).forEach(sk=>filas.push([mk,'mes compactado',sk, s[sk][0], r2(s[sk][1]), r2(s[sk][2]||0)]));
+  });
+  descargarCSV('historico', ['Fecha','Detalle','SKU','Unidades','Ingreso','Impuesto'], filas);
+}
 function exportData(){
   const payload = Object.assign({}, DB, {app:'Aresstore Seller Hub', exported:new Date().toISOString()});
   const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
@@ -1176,6 +1400,26 @@ function importData(ev){
     try{
       const d=JSON.parse(r.result);
       if(!d || typeof d!=='object'){ toast('El archivo no tiene el formato esperado'); return; }
+      /* Antes valía cualquier JSON. Un objeto cualquiera pasaba el filtro,
+         reemplazaba la base entera y `saveDB()` lo dejaba escrito sin
+         preguntar: el histórico —lo único que no se puede reconstruir
+         descargando informes otra vez— desaparecía por soltar el fichero
+         equivocado. */
+      const esCopia = d.app==='Aresstore Seller Hub' ||
+                      (Array.isArray(d.products) && d.settings && d.imports);
+      if(!esCopia){
+        toast('Ese archivo no es una copia de seguridad del hub. No lo cargo: reemplazaría tus datos y tu histórico.');
+        ev.target.value=''; return;
+      }
+      const hs = (function(){ try{ return historyStats(); }catch(e){ return {span:0}; } })();
+      if(hs.span>0 && !confirm('Restaurar reemplaza TODO lo que tienes ahora, incluido el histórico ('+
+          hs.span+' días archivados desde el '+hs.first+').\n\n'+
+          'El histórico no se puede reconstruir descargando informes otra vez. ¿Continuar?')){
+        ev.target.value=''; return;
+      }
+      /* `app` y `exported` son del sobre, no del contenido: si se quedan
+         dentro, se guardan en la base y vuelven a salir en la copia siguiente. */
+      delete d.app; delete d.exported;
       DB = Object.assign(blankDB(), d);
       TARGET = Object.assign(TARGET, (DB.settings&&DB.settings.targets)||{});
       saveDB(); bootValues(); refreshAll(); toast('Datos restaurados');

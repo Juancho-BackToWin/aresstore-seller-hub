@@ -110,5 +110,74 @@ tsv('storage-fees.txt', storH, SKUS.map((s,i)=>['B0TEST'+i,'X00'+i,s[1],'FRA7','
  '450','grams','0.0015','cubic feet','Standard',ST[i],'0',(ST[i]*0.0015).toFixed(3),'2026-07','27.54',
  (ST[i]*0.0015*27.54).toFixed(2),'EUR','12','27.54','0','','No','No','8.2','weeks','0','0']));
 
+/* 9 · Settlement flat file V1 · el esquema que el lector entiende.
+   Solo en inglés: Amazon no lo traduce. Trae `item-related-fee-type`, que es
+   la columna de la que salen las comisiones reales del P&L. */
+const setH = ['settlement-id','settlement-start-date','settlement-end-date','deposit-date','total-amount',
+ 'currency','transaction-type','order-id','merchant-order-id','adjustment-id','shipment-id','marketplace-name',
+ 'shipment-fee-type','shipment-fee-amount','order-fee-type','order-fee-amount','fulfillment-id','posted-date',
+ 'posted-date-time','order-item-code','merchant-order-item-id','merchant-adjustment-item-id','sku',
+ 'quantity-purchased','price-type','price-amount','item-related-fee-type','item-related-fee-amount',
+ 'misc-fee-amount','other-fee-amount','other-fee-reason-description','promotion-id','promotion-type',
+ 'promotion-amount','direct-payment-type','direct-payment-amount','other-amount'];
+const setDesde = iso(ago(14)), setHasta = iso(ago(1));
+const setR = [];
+SKUS.forEach((s,i)=>{
+  const oid = '171-'+String(3000000+i).padStart(7,'0')+'-'+String(2000000+i).padStart(7,'0');
+  const precio = s[2]*10;
+  // una fila de ingreso, una de comisión y una de tarifa FBA por SKU
+  [['Principal', precio.toFixed(2), '', ''],
+   ['', '', 'Commission', (-precio*0.153).toFixed(2)],
+   ['', '', 'FBAPerUnitFulfillmentFee', (-3.2*10).toFixed(2)]].forEach(([pt,pa,ft,fa])=>{
+    setR.push(['9876543210', setDesde+' UTC', setHasta+' UTC', setHasta+' UTC','', 'EUR','Order',oid,'','','FBA-'+i,
+      'Amazon.es','','','','','FBA', iso(ago(2)), iso(ago(2))+' 10:12:00 UTC','1','','', s[0],'10',
+      pt, pa, ft, fa, '','','','','','','','','']);
+  });
+});
+tsv('settlement.txt', setH, setR);
+
+/* 10 · FBA Inventory Planning (salud del inventario). Solo en inglés. */
+const plaH = ['snapshot-date','sku','fnsku','asin','product-name','condition','available',
+ 'pending-removal-quantity','inv-age-0-to-90-days','inv-age-91-to-180-days','inv-age-181-to-270-days',
+ 'inv-age-271-to-365-days','inv-age-365-plus-days','currency','units-shipped-t7','units-shipped-t30',
+ 'units-shipped-t60','units-shipped-t90','alert','your-price','sales-price','recommended-action',
+ 'healthy-inventory-level','recommended-sales-price','recommended-sale-duration-days',
+ 'recommended-removal-quantity','estimated-cost-savings-of-recommended-actions','sell-through',
+ 'item-volume','volume-unit-measurement','storage-type','storage-volume','marketplace','product-group',
+ 'sales-rank','days-of-supply','estimated-excess-quantity','weeks-of-cover-t30','weeks-of-cover-t90'];
+tsv('inventory-planning.txt', plaH, SKUS.map((s,i)=>[iso(ago(1)), s[0], 'X00'+i, 'B0TEST'+i, s[1], 'New',
+ String(ST[i]), '0', String(Math.round(ST[i]*0.6)), String(Math.round(ST[i]*0.2)),
+ String(Math.round(ST[i]*0.1)), String(Math.round(ST[i]*0.07)), String(Math.round(ST[i]*0.03)), 'EUR',
+ '42','180','360','540','', s[2].toFixed(2), s[2].toFixed(2), '', String(Math.round(ST[i]*0.5)),
+ '','','0','0', (0.35+i*0.05).toFixed(2), '0.0015','cubic feet','Standard','2.4','Amazon.es','Sports',
+ String(1200+i*300), String(40+i*20), String(Math.max(0, Math.round(ST[i]*0.3))), '5.2','6.1']));
+
+/* 11 · FBA Reimbursements. Solo en inglés. */
+const reiH = ['approval-date','reimbursement-id','case-id','amazon-order-id','reason','sku','fnsku','asin',
+ 'product-name','condition','currency-unit','amount-per-unit','amount-total','quantity-reimbursed-cash',
+ 'quantity-reimbursed-inventory','quantity-reimbursed-total','original-reimbursement-id','original-reimbursement-type'];
+tsv('reimbursements.txt', reiH, SKUS.map((s,i)=>[iso(ago(6+i))+' PDT', 'R'+(500000+i), 'C'+(900000+i),
+ '171-'+String(4000000+i).padStart(7,'0')+'-'+String(3000000+i).padStart(7,'0'),
+ ['Lost_Warehouse','Damaged_Warehouse','Lost_Inbound','Fee_Correction'][i], s[0], 'X00'+i, 'B0TEST'+i, s[1],
+ 'Sellable','EUR', s[2].toFixed(2), (s[2]*(i+1)).toFixed(2), String(i+1), '0', String(i+1), '', 'REIMBURSEMENT']));
+
+/* 12 · VAT Transactions. Solo en inglés, y con las cabeceras en MAYÚSCULAS
+   y guiones bajos, que es como las sirve la biblioteca de documentos fiscales. */
+const vatH = ['UNIQUE_ACCOUNT_IDENTIFIER','ACTIVITY_PERIOD','SALES_CHANNEL','MARKETPLACE','PROGRAM',
+ 'TRANSACTION_EVENT_ID','ACTIVITY_TRANSACTION_ID','TRANSACTION_DEPART_DATE','TRANSACTION_ARRIVAL_DATE',
+ 'TRANSACTION_COMPLETE_DATE','TRANSACTION_TYPE','TRANSACTION_SELLER_VAT_NUMBER_COUNTRY','SELLER_SKU',
+ 'ASIN','ITEM_DESCRIPTION','QTY','TOTAL_ACTIVITY_VALUE_AMT_VAT_EXCL','TOTAL_ACTIVITY_VALUE_VAT_AMT',
+ 'TOTAL_ACTIVITY_VALUE_AMT_VAT_INCL','TRANSACTION_CURRENCY_CODE','PRICE_OF_ITEMS_VAT_RATE_PERCENT',
+ 'SALE_DEPART_COUNTRY','SALE_ARRIVAL_COUNTRY','ARRIVAL_POST_CODE','DEPARTURE_POST_CODE','TAXABLE_JURISDICTION'];
+const vatPais = [['DE',19],['FR',20],['IT',22],['ES',21]];
+tsv('vat-transactions.txt', vatH, SKUS.map((s,i)=>{
+  const [pais,tipo] = vatPais[i];
+  const sinIva = s[2]*20/(1+tipo/100);
+  return ['AZ'+i,'2026-07','Amazon.'+pais.toLowerCase(),'Amazon.'+pais.toLowerCase(),'PAN_EU',
+   'EV'+(700000+i),'AT'+(800000+i), iso(ago(20)), iso(ago(18)), iso(ago(18)),'SALE','ES', s[0], 'B0TEST'+i,
+   s[1],'20', sinIva.toFixed(2), (sinIva*tipo/100).toFixed(2), (s[2]*20).toFixed(2),'EUR', String(tipo),
+   'ES', pais, '10115','46001', pais];
+}));
+
 console.log('Fixtures creados en '+D+':');
 fs.readdirSync(D).forEach(f=>console.log('  '+f+'  '+fs.statSync(D+'/'+f).size+' bytes'));

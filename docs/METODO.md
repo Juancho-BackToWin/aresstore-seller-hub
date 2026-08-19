@@ -100,11 +100,17 @@ Lo primero no es un módulo nuevo. Es que la aplicación esté **montada y enlaz
 - Que los **accesos** funcionen: la app instalable en móvil y PC con su icono
   correcto, la autoactualización al desplegar, y el funcionamiento sin conexión.
 
-Hay un punto conocido y sin resolver aquí: el manifest y el `apple-touch-icon`
-van incrustados como `data:` URL mientras `build.sh` genera un
-`manifest.webmanifest` real que nadie enlaza. `pwa.test.js` falla por eso. En
-iPhone el icono de la pantalla de inicio puede no ser el bueno. Entra en esta
-fase.
+*Hecho el 18 de agosto de 2026.* El manifest y el `apple-touch-icon` iban
+incrustados como `data:` URL mientras `build.sh` generaba un
+`manifest.webmanifest` real que no enlazaba nadie —iOS ignora los
+`apple-touch-icon` en `data:`, así que el icono del iPhone no era el bueno—, y
+`pwa.test.js` llevaba fallando por eso desde antes de M0. Ahora se enlazan los
+ficheros reales, el manifest declara un `id` explícito para que la app ya
+instalada en móvil y PC se actualice en vez de duplicarse, y `pwa.test.js`
+levanta su propio servidor y corre dentro de `npm run test:all`.
+
+Lo que sigue abierto de esta fase está en la tabla de abajo: tres informes que
+se importan y todavía no alimentan ningún cálculo.
 
 ---
 
@@ -125,23 +131,43 @@ fase.
 
 ## Estado de las herramientas
 
-Se mantiene al día. Una herramienta solo pasa a **apta** después del paso 5.
+Se mantiene al día. Una herramienta solo pasa a **apta** después del paso 5, que
+es de Juancho y va al final.
 
-| Herramienta | Estado |
-|---|---|
-| Fontanería (navegación, importación, exportación, accesos, PWA) | por revisar |
-| Datos · importador de informes de Seller Central | por verificar una a una |
-| Histórico (M0) | construido y probado · sin verificar con datos reales |
-| Costes por lotes (M1.1) | construido y probado · sin verificar con datos reales |
-| Rentabilidad / P&L | incompleto · faltan M1.2, M1.3 y M1.4 |
-| Tesorería | construido · sin verificar |
-| Catálogo | construido · sin verificar |
-| Inventario | construido · falta M2 |
-| Compras | construido · falta M3 |
-| Publicidad | construido · falta M4 |
-| Cumplimiento | construido · sin verificar |
-| Validar producto / Comparador PanEU | construido · sin verificar |
-| Detectores de reembolso (M5) | no construido |
+Lo que dice cada estado, para que no haya que interpretarlo:
+
+- **maqueta** · se ve, no calcula nada con tus datos.
+- **registro manual** · funciona, pero lo que enseña lo has escrito tú: no se
+  alimenta de ningún informe.
+- **construido, sin probar** · hay código y no hay prueba automática que lo
+  sujete. Los números pueden ser correctos; no hay quien lo diga.
+- **verificado con datos sintéticos** · hay pruebas con la aritmética hecha a
+  mano y ha pasado una revisión adversarial. Sigue sin haber visto un dato real.
+- **apta** · paso 5 hecho, contrastada contra el negocio.
+
+Revisado el 18 de agosto de 2026 ejecutando cada pantalla, no leyéndola.
+
+| Herramienta | Estado | Qué falta |
+|---|---|---|
+| Entrada · importador de los doce informes | verificado con datos sintéticos | los 12 se reconocen en inglés y los 7 traducibles en español, uno a uno (`informes.test.js`). Tres se guardan y **todavía no alimentan ningún cálculo**: libro de inventario, tarifas de almacenamiento e IVA por país. La pantalla lo dice |
+| Salida · copia, restauración y exportaciones | verificado con datos sintéticos | ida y vuelta sin pérdida y siete exportaciones a CSV (`salida.test.js`) |
+| Accesos · PWA, icono, autoactualización, sin conexión | verificado con datos sintéticos | `pwa.test.js` en verde y dentro de `test:all`. El icono del iPhone ya es el bueno |
+| Histórico (M0) | verificado con datos sintéticos | su resolución depende de la costumbre de importar (P-3). Con una foto de stock semanal, la velocidad real se queda por debajo de la verdadera y la pantalla lo dice |
+| Costes por lotes (M1.1) | verificado con datos sintéticos | los lotes reales de Juancho (P-2) |
+| Rentabilidad / P&L | verificado con datos sintéticos | **M1.2** las 10 métricas que faltan de 21 · **M1.3** gastos indirectos con amortización diaria · **M1.4** IVA como línea propia |
+| Catálogo | verificado con datos sintéticos | nada bloqueante |
+| Tesorería | verificado con datos sintéticos | la fase del ciclo de cobro de Amazon se asume, y eso mueve el mínimo entre 1.424 € y 5.501 € en el ejemplo. Va en P-8 |
+| Inventario | verificado con datos sintéticos | **M2**: cobertura por país cuando haya informe multipaís, y previsión |
+| Compras | verificado con datos sintéticos | **M3**: cuándo lanzar el pedido para no romper stock. Necesita P-5 |
+| Publicidad | verificado con datos sintéticos | **M4**: ACOS de equilibrio. El gasto se prorratea y se dice que se prorratea |
+| Cumplimiento | registro manual | **M6**: diferenciales europeos. Hoy es una ficha que rellenas tú; no lee ningún informe, ni siquiera el de IVA por país, que se importa y se queda parado |
+| Validar producto · Comparador PanEU | construido, sin probar | calculadora independiente: **no usa tus datos importados**, todo se teclea. Su modelo de devoluciones es el más completo del hub y es el que se ha llevado al P&L |
+| Detectores de reembolso (M5) | no construido | el informe de reembolsos ya se importa y suma en el P&L; los detectores que buscan lo que Amazon te debe y no te ha pagado, no |
+
+**Ninguna es apta todavía.** Todas están verificadas contra aritmética hecha a
+mano y contra una revisión adversarial que buscaba el número creíble y falso —de
+la que salieron veintitantos—, pero ninguna ha visto un dato real. Eso es el
+paso 5 y es de Juancho.
 
 ---
 

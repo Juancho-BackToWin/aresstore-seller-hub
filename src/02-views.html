@@ -147,6 +147,7 @@
               <h2>Ventas por día</h2>
               <p class="desc" style="margin:0">Cada barra es un día. Las claras son días de los que todavía no tienes dato: el histórico empieza donde llegó tu primer informe de pedidos, no antes.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportHistorico()">Exportar a CSV</button></div>
             <div class="ph-actions"><button class="btn sm" onclick="rebuildHistory()" title="Vuelve a leer los informes cargados y rellena el histórico">Reconstruir desde lo importado</button></div>
           </div>
           <div class="cashchart" id="histChart"></div>
@@ -205,6 +206,7 @@
               <h2>Rentabilidad por SKU con clasificación ABC</h2>
               <p class="desc" style="margin:0">A = el 80% de tu beneficio. C = el que consume atención y no la devuelve. La columna que importa es la última: cuánto beneficio deja, no cuánto factura.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportRentabilidad()">Exportar a CSV</button></div>
           </div>
           <div class="tbl-wrap"><table class="grid" id="skuTable"></table></div>
           <div id="abcVerdict" class="assumptions" style="margin-top:16px"></div>
@@ -223,6 +225,7 @@
               <h2>Proyección de caja a 90 días</h2>
               <p class="desc" style="margin:0">Cobros de Amazon con su ciclo de liquidación, pagos a proveedor según los vencimientos de tus pedidos, IVA, publicidad y gastos fijos. Las barras rojas son días en que te quedas por debajo de tu caja de seguridad.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportTesoreria()">Exportar a CSV</button></div>
           </div>
           <div class="cashchart" id="cashChart"></div>
           <div class="cashaxis" id="cashAxis"></div>
@@ -270,6 +273,7 @@
               <h2>Lotes de coste</h2>
               <p class="desc" style="margin:0">Un coste único por SKU cuenta que el producto que vendiste en marzo te costó lo mismo que el que compraste en agosto. Con el flete moviéndose, eso falsea el margen justo donde decides si escalar. Un lote es una compra: fecha, unidades, coste de fábrica y flete repartido.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportCatalogo()">Exportar a CSV</button></div>
             <div class="ph-actions">
               <button class="btn sm" onclick="lotPasteModal()">Pegar lotes</button>
               <button class="btn sm primary" onclick="lotAddModal()">+ Lote</button>
@@ -294,6 +298,7 @@
               <h2>Cobertura y reposición</h2>
               <p class="desc" style="margin:0">Los días de cobertura salen de tu venta media real. Por debajo de 28 días saltan las tarifas por bajo inventario en Alemania, Francia, Italia y España; muy por encima empiezas a pagar recargos por sobrestock. Hay una banda estrecha en la que conviene estar.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportInventario()">Exportar a CSV</button></div>
           </div>
           <div class="tbl-wrap"><table class="grid" id="invTable"></table></div>
           <div id="invVerdict" class="assumptions" style="margin-top:16px"></div>
@@ -328,6 +333,7 @@
               <h2>Pedidos de compra</h2>
               <p class="desc" style="margin:0">Cada pedido arrastra su flete hasta el coste unitario y sus vencimientos hasta la proyección de caja. Ese enlace es lo que convierte una lista de pedidos en un sistema: el clásico 30% de anticipo y 70% contra documentos deja de ser un post-it y pasa a estar en la curva de tesorería.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportCompras()">Exportar a CSV</button></div>
             <div class="ph-actions"><button class="btn sm primary" onclick="addPO()">+ Pedido</button></div>
           </div>
           <div id="poList"></div>
@@ -353,6 +359,7 @@
               <h2>Términos de búsqueda que queman dinero</h2>
               <p class="desc" style="margin:0">Ordenados por gasto sin conversión. La regla operativa: negativiza todo término que haya gastado más que tu ticket medio sin una sola venta. Es la palanca de mayor retorno por minuto invertido de todo el PPC.</p>
             </div>
+            <div class="ph-actions"><button class="btn sm" onclick="exportPublicidad()">Exportar a CSV</button></div>
             <div class="ph-actions"><button class="btn sm" onclick="go('datos')">Importar informe</button></div>
           </div>
           <div class="tbl-wrap"><table class="grid" id="stTable"></table></div>

@@ -82,7 +82,17 @@ function iso(d){
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());
 }
 function addDays(d,k){ const x=new Date(d.getTime()); x.setDate(x.getDate()+k); return x; }
-function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+/* Días de calendario entre dos fechas, no milisegundos entre dos instantes.
+   `today()` lleva la hora del día y `parseDate()` devuelve medianoche, así que
+   restar en crudo daba un número que cambiaba a lo largo del día: a partir de
+   las 12:00, `round` bajaba un entero. Efectos medidos: el pago de proveedor
+   que vencía HOY salía en −1 y el filtro `k>=0` lo tiraba de la proyección de
+   caja (2.500 € de 10.000 desaparecidos), los demás vencimientos se adelantaban
+   un día, y la «historia acumulada» del histórico decía 8 días por la mañana y
+   9 por la tarde con los mismos datos. Es la misma familia que el fallo de
+   `iso()`: mezclar un instante con una fecha. */
+function startOfDay(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function daysBetween(a,b){ return Math.round((startOfDay(b)-startOfDay(a))/86400000); }
 function parseDate(s){
   if(!s) return null;
   s = String(s).trim();
@@ -279,6 +289,9 @@ const REPORTS = [
 
   {id:'ledger', label:'Libro mayor de inventario', en:'Inventory Ledger',
    path:'Informes › Logística de Amazon › Inventario', feeds:'Movimientos de stock por país',
+   /* Se guarda entero y todavía no alimenta ningún cálculo. Se dice en la
+      pantalla en vez de dejar que el «✓ reconocido» parezca otra cosa. */
+   guardaSinUsar:1,
    hdr:['eventtype','referenceid','fnsku'],
    fields:{
      _date   :{req:1, type:'date',   alias:[/^date/,/^fecha/]},
@@ -296,6 +309,7 @@ const REPORTS = [
 
   {id:'storage', label:'Tarifas mensuales de almacenamiento', en:'FBA Monthly Storage Fees',
    path:'Informes › Logística de Amazon › Pagos', feeds:'Coste real de almacenaje',
+   guardaSinUsar:1,
    hdr:['estimatedmonthlystoragefee'], onlyEn:true, fields:{}, sig:()=>false},
 
   {id:'planning', label:'Salud del inventario', en:'FBA Inventory Planning',
@@ -308,6 +322,7 @@ const REPORTS = [
 
   {id:'vat', label:'Transacciones sujetas a IVA', en:'VAT Transactions',
    path:'Informes › Biblioteca de documentos fiscales', feeds:'IVA por país',
+   guardaSinUsar:1,
    hdr:['transactiontype','salearrivalcountry'], onlyEn:true, fields:{}, sig:()=>false}
 ];
 
@@ -641,6 +656,43 @@ function findProd(sku){ return prodBySku()[String(sku||'').toLowerCase()] || nul
 function landed(p){ return p ? (toNum(p.cogs)+toNum(p.freight)) : 0; }
 function periodStart(){ return periodDays ? addDays(today(), -periodDays) : new Date(2000,0,1); }
 
+/* Días que dura el periodo que se está mirando.
+
+   `periodDays = 0` es el botón «Todo», y valer cero lo hacía falsy: cada
+   `periodDays||30` caía al literal 30. Con un informe de 120 días, «Todo»
+   comparaba cuatro meses de ventas contra UN mes de gastos fijos (+10,9 puntos
+   de margen), anualizaba ×12,17 lo que ya eran cuatro meses («Aporta al año
+   €66.635» donde eran €4.100) y multiplicaba por cuatro la velocidad de venta,
+   con lo que Inventario mandaba pedir 2.156 unidades donde tocaban 311. Ni un
+   dato cambiaba: solo el botón. */
+function daysInPeriod(){
+  if(periodDays) return periodDays;
+  const sp = salesSpan();
+  return sp.days || 30;
+}
+
+/* Días que el informe de pedidos cubre DE VERDAD dentro del periodo elegido.
+
+   No es lo mismo que `daysInPeriod()`: pedir «12 meses» con un informe de 120
+   días no convierte los otros 245 en días de venta cero, convierte el informe
+   en insuficiente. Dividir entre 365 hundía la velocidad a un tercio y hacía
+   desaparecer de Inventario la única referencia en rotura. La velocidad se
+   mide sobre los días observados; que el informe no llegue se dice, no se
+   promedia con ceros inventados. */
+function salesSpan(opt){
+  const rows = salesRows(opt);
+  let min=null, max=null;
+  rows.forEach(r=>{ if(!r.date) return;
+    if(!min || r.date<min) min=r.date;
+    if(!max || r.date>max) max=r.date; });
+  if(!min) return {from:null, to:null, days:0};
+  /* El extremo derecho es hoy, no la última venta: un SKU que dejó de venderse
+     hace un mes tiene ese mes de días observados con cero ventas, y contarlos
+     es justo lo que baja su velocidad. */
+  const hasta = today();
+  return {from:min, to:hasta, days: Math.max(1, daysBetween(min, hasta)+1)};
+}
+
 /* Ventas normalizadas desde el informe de pedidos.
    Sin argumentos se comporta como siempre: periodo y país de la interfaz.
    El histórico (M0) la llama con {from:null, country:'ALL'} porque archiva el
@@ -665,10 +717,27 @@ function salesRows(opt){
   }).filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
                (cf==='ALL' || r.country===cf));
 }
-/* Comisiones reales desde la liquidación */
+/* Comisiones reales desde la liquidación.
+
+   Dos cosas que hay que distinguir y antes no se distinguían:
+
+   · `rows` son las filas de liquidación que caen en el periodo. `matched` son
+     las que además traen una columna de tarifa que este lector entiende. La
+     diferencia importa porque el fichero plano de liquidación tiene dos
+     esquemas y solo el viejo lleva `item-related-fee-type`. Con el que Amazon
+     sirve hoy, `rows` sale alto y `matched` cero: las columnas están, pero se
+     llaman de otra manera. Contar filas para decidir si el dato está medido
+     hacía que la comisión saliera 0 € y el beneficio subiera un 23 %, con la
+     etiqueta «medido» encima.
+
+   · `desde`/`hasta` acotan lo que la liquidación cubre de verdad, y solo con
+     las filas entendidas. Amazon liquida cada 14 días: una liquidación suelta
+     cubre una quincena, no el trimestre que estés mirando en pantalla. Sin
+     esto, 14 días de comisiones se restaban a 90 días de ingresos. */
 function settlementFees(){
   const from = periodStart();
-  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0;
+  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0, matched=0;
+  let desde=null, hasta=null;
   imp('settlement').forEach(r=>{
     const d = parseDate(r.posteddate)||parseDate(r.settlementstartdate);
     if(!d || d<from) return;
@@ -676,6 +745,10 @@ function settlementFees(){
     rows++;
     const t=(r.itemrelatedfeetype||'')+' '+(r.orderfeetype||'')+' '+(r.shipmentfeetype||'');
     const amt = toNum(r.itemrelatedfeeamount)+toNum(r.orderfeeamount)+toNum(r.shipmentfeeamount);
+    if(!t.trim() && !amt) return;              // fila de un esquema que no leo
+    matched++;
+    if(!desde || d<desde) desde=d;
+    if(!hasta || d>hasta) hasta=d;
     const tl = t.toLowerCase();
     if(tl.indexOf('commission')>=0||tl.indexOf('referral')>=0) referral += amt;
     else if(tl.indexOf('fba')>=0||tl.indexOf('fulfil')>=0) fba += amt;
@@ -683,7 +756,8 @@ function settlementFees(){
     else other += amt;
     promo += toNum(r.promotionamount);
   });
-  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo, rows};
+  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo,
+          rows, matched, desde, hasta};
 }
 /* Gasto y desperdicio publicitario */
 function adStats(){
@@ -701,7 +775,39 @@ function adStats(){
     if(term) terms.push({term, campaign:gv(r,'_campaign','campaignname')||'', spend:sp, sales:sa, orders:or_, clicks:cl, impr:im});
   });
   terms.sort((a,b)=> (a.orders===0?1:0)-(b.orders===0?1:0) || b.spend-a.spend);
-  return {spend, sales, clicks, impr, waste, wasteTerms, terms, acos: sales>0?spend/sales*100:0};
+  /* El informe de términos de búsqueda no trae fecha por fila, pero sí trae su
+     propio rango en «Start Date» y «End Date». Sin usarlo, el gasto entero se
+     cargaba a cualquier periodo que estuvieras mirando: con ventas idénticas
+     día a día, el margen iba de −58,6 % a 30 días a −13,6 % con «Todo». El
+     mismo gasto, el mismo negocio, tres respuestas.
+
+     Ahora se prorratea a los días del periodo. Prorratear supone que gastaste
+     parejo, que es una suposición, así que la pantalla lo dice: es una cifra
+     ajustada, no medida. */
+  let d0=null, d1=null;
+  rows.forEach(r=>{
+    const a = parseDate(gv(r,'_from','startdate','fechadeinicio','start'));
+    const b = parseDate(gv(r,'_to','enddate','fechadefin','fechadefinalizacion','end')) || a;
+    if(a && (!d0 || a<d0)) d0=a;
+    if(b && (!d1 || b>d1)) d1=b;
+  });
+  const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
+  const factor = adDays ? daysInPeriod()/adDays : 1;
+  /* Cuánto del periodo cubre de verdad ese informe. Prorratear un informe de
+     junio sobre el mes de agosto da un número utilizable —mejor que cero, que
+     inflaría el margen— pero no es una medición de agosto, y la diferencia
+     tiene que verse en pantalla. */
+  let solape = 0;
+  if(d0 && d1){
+    const pi = periodStart(), pf = today();
+    const a = d0>pi ? d0 : pi, b = d1<pf ? d1 : pf;
+    solape = Math.max(0, daysBetween(a,b)+1);
+  }
+  return {spend: spend*factor, spendBruto: spend, adDays, factor,
+          desde:d0, hasta:d1, solape,
+          solapePct: daysInPeriod()>0 ? Math.min(100, solape/daysInPeriod()*100) : 0,
+          sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
+          acos: sales>0?spend/sales*100:0};
 }
 /* Cuenta de resultados del periodo. Cada línea sabe si está medida o estimada. */
 function pnl(){
@@ -718,8 +824,12 @@ function pnl(){
   const cost = costOfSales(S);
   const cogs = cost.cogs, cogsKnown = cost.known;
   const sf = settlementFees();
-  const measured = sf.rows>0;
-  let referral, fba, storage, otherFee;
+  /* Está medido lo que la liquidación explica, no lo que la liquidación pesa.
+     Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
+     columnas de tarifa no reconocemos salían 0 € de comisión sellados como
+     «medido», y el beneficio subía un 23 %. */
+  const measured = sf.matched>0;
+  let referral, fba, storage, otherFee, feeCoverPct;
   let ship=0, fbmUnits=0, fbaUnits=0;
   S.forEach(r=>{
     const p=pm[String(r.sku).toLowerCase()];
@@ -727,33 +837,141 @@ function pnl(){
     if(isFbm){ fbmUnits+=r.qty; ship += (p?toNum(p.fbmShip):4.5)*r.qty; }
     else fbaUnits+=r.qty;
   });
-  if(measured){ referral=sf.referral; fba=sf.fba; storage=sf.storage; otherFee=sf.other; }
-  else {
-    referral = grossInc*0.15;
-    let f=0; S.forEach(r=>{
-      const p=pm[String(r.sku).toLowerCase()];
+  /* Tarifas estimadas de un subconjunto de ventas. Se usa para el periodo
+     entero cuando no hay liquidación, y solo para el trozo que la liquidación
+     no cubre cuando sí la hay. */
+  /* La vista previa de tarifas, cuando está cargada, manda sobre el porcentaje
+     que hayas puesto a mano: es lo que Amazon dice que te va a cobrar por ese
+     SKU. Se importaba, se guardaba y no llegaba a ningún número del P&L, que
+     es justo el informe que hace falta para dejar de suponer el 15 %.
+
+     Del informe se saca el PORCENTAJE (comisión ÷ precio del informe), no el
+     importe por unidad: así se adapta al precio al que vendiste de verdad, que
+     con promociones no es el del informe. */
+  const tarifas = {};
+  imp('fees').forEach(r=>{
+    const sk = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase(); if(!sk) return;
+    const ref   = toNum(gv(r,'_referral','estimatedreferralfeeperunit'));
+    const precio= toNum(gv(r,'_price','yourprice','salesprice'));
+    const fbaUd = toNum(gv(r,'_fba','expectedfulfillmentfeeperunit'));
+    tarifas[sk] = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
+  });
+  let udsConTarifa=0;
+  const estFees = rows => {
+    let ref=0, f=0;
+    rows.forEach(r=>{
+      const k = String(r.sku).toLowerCase();
+      const p = pm[k], t = tarifas[k];
+      /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el
+         15 % por defecto. El 15 % es el último recurso, no el primero. */
+      const pct = (t && t.pct>0) ? t.pct
+                : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
+      if(t && t.pct>0) udsConTarifa += r.qty;
+      ref += r.revenue*pct;
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
-      if(!isFbm) f += (p?toNum(p.fba):3.2)*FUEL*r.qty;
+      if(!isFbm) f += (t && t.fba>0 ? t.fba : (p?toNum(p.fba):3.2)*FUEL)*r.qty;
     });
-    fba = f; storage = 0; otherFee = 0;
+    return {referral:ref, fba:f};
+  };
+  if(measured){
+    /* Amazon liquida cada 14 días, así que una liquidación cubre una quincena
+       y el periodo en pantalla puede ser un trimestre. Restar 14 días de
+       comisiones a 90 días de ingresos inflaba el beneficio un 20 % con la
+       etiqueta «medido» puesta. Lo que la liquidación cubre va medido; lo que
+       queda fuera se estima, y `feeCoverPct` dice cuánto es cada cosa. */
+    const d0=iso(sf.desde), d1=iso(sf.hasta);
+    const fuera=[], dentro=[]; let cubierto=0;
+    S.forEach(r=>{ const d=iso(r.date);
+      if(d>=d0 && d<=d1){ cubierto+=r.revenue; dentro.push(r); } else fuera.push(r); });
+    const est = estFees(fuera), estDentro = estFees(dentro);
+    /* Una categoría que sale exactamente a cero teniendo ventas cubiertas
+       detrás no es una medición de cero: es que ese concepto no venía en el
+       fichero. Cobrar 0 € de comisión sobre ventas reales no le pasa a nadie.
+       Se estima esa categoría y se deja de llamarla medida. */
+    const refMedido = sf.referral>0, fbaMedido = sf.fba>0;
+    referral = (refMedido ? sf.referral : estDentro.referral) + est.referral;
+    fba      = (fbaMedido ? sf.fba      : estDentro.fba)      + est.fba;
+    storage  = sf.storage; otherFee = sf.other;
+    feeCoverPct = grossInc>0 ? cubierto/grossInc*100 : 100;
+    if(!refMedido) feeCoverPct = 0;   // sin comisión medida, no hay nada medido que presumir
+  } else {
+    const est = estFees(S);
+    referral = est.referral; fba = est.fba; storage = 0; otherFee = 0;
+    feeCoverPct = 0;
   }
   const ads = adStats();
-  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*(periodDays||30);
+  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
   const retRows = imp('returns').filter(r=>{ const d=parseDate(gv(r,'_date','returndate')); return d && d>=periodStart(); });
   const retUnits = retRows.reduce((a,r)=>a+(toNum(gv(r,'_qty','quantity'))||1),0);
   const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
                             .reduce((a,r)=>a+toNum(r.amounttotal),0);
-  const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * ((periodDays||30)/30);
-  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb;
+  const fixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0) * (daysInPeriod()/30);
+
+  /* Devoluciones · lo que cuestan de verdad.
+
+     Hasta ahora se contaban (`retUnits`, `retRate`) y no restaban nada: un
+     producto con el 100 % de devoluciones daba exactamente el mismo beneficio
+     que uno con cero. El motor unitario de Validar producto sí modela la
+     mecánica; la cuenta de resultados no la usaba.
+
+     Por unidad devuelta:
+       · se devuelve el ingreso y su IVA;
+       · Amazon reintegra la comisión MENOS la tasa de gestión del reembolso,
+         que es mín(5 €, 20 % de la comisión);
+       · la tarifa de logística NO se devuelve, así que se queda cobrada;
+       · el coste de producto se recupera solo si la unidad vuelve vendible.
+         Sin saber en qué estado volvió, se cuenta como NO recuperada, que es
+         el supuesto que no infla el beneficio. */
+  const ventaSku = {};
+  S.forEach(r=>{ const k=String(r.sku).toLowerCase();
+    if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0};
+    ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty; });
+  /* `cost.bySku` viene con el SKU tal cual lo escribe el informe; aquí se
+     compara en minúsculas, así que hace falta el índice. */
+  const costeSku = {};
+  Object.keys(cost.bySku||{}).forEach(k=>{ costeSku[k.toLowerCase()] = cost.bySku[k]; });
+  let retIngreso=0, retComision=0, retCoste=0, retVendibles=0, retSinEstado=0;
+  retRows.forEach(r=>{
+    const k = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase();
+    const q = toNum(gv(r,'_qty','quantity'))||1;
+    const v = ventaSku[k];
+    if(!v || !v.units) return;                 // no sé a qué venta corresponde
+    const p = pm[k];
+    const netUd   = (v.rev - v.tax)/v.units;
+    const grossUd = v.rev/v.units;
+    const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
+    const comUd = grossUd*pct;
+    retIngreso  += q*netUd;
+    retComision += q*(comUd - Math.min(5, 0.20*comUd));
+    const disp = String(gv(r,'_disp','detaileddisposition','disposicion','estado')||'').trim().toLowerCase();
+    if(!disp) retSinEstado += q;
+    if(disp==='sellable' || disp==='vendible'){
+      retVendibles += q;
+      const cb = costeSku[k];
+      if(cb && cb.units) retCoste += q*(cb.cogs/cb.units);
+    }
+  });
+  const returnsCost = retIngreso - retComision - retCoste;
+
+  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+    feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+    feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
+    returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
+    periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
-    margin: net>0 ? profit/net*100 : 0,
+    /* Sin ingreso no hay margen que calcular, y devolver 0 hacía que una
+       pérdida de 900 € con cero ventas se presentara como «Margen neto 0,0 %».
+       `null` es lo que hay: la pantalla escribe «—». */
+    margin: net>0 ? profit/net*100 : null,
     tacos: grossInc>0 ? ppc/grossInc*100 : 0,
     roi: cogs>0 ? profit/cogs*100 : 0,
     avgPrice: units>0 ? grossInc/units : 0,
-    adSales: ads.sales, adWaste: ads.waste, adWasteTerms: ads.wasteTerms
+    adSales: ads.sales, adWaste: ads.waste, adWasteTerms: ads.wasteTerms,
+    adDays: ads.adDays, adFactor: ads.factor, adSpendBruto: ads.spendBruto,
+    adSolapePct: ads.solapePct, adDesde: ads.desde, adHasta: ads.hasta
   };
 }
 /* Rentabilidad por SKU + clasificación ABC */
@@ -764,13 +982,19 @@ function skuStats(){
   const m={};
   S.forEach(r=>{
     const k=String(r.sku);
-    if(!m[k]) m[k]={sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k, units:0, revenue:0, countries:{}};
-    m[k].units+=r.qty; m[k].revenue+=r.revenue;
+    if(!m[k]) m[k]={sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k, units:0, revenue:0, tax:0, countries:{}};
+    m[k].units+=r.qty; m[k].revenue+=r.revenue; m[k].tax+=r.tax;
     if(r.country) m[k].countries[r.country]=(m[k].countries[r.country]||0)+r.qty;
   });
   const rows = Object.keys(m).map(k=>{
     const x=m[k], p=pm[k.toLowerCase()];
-    const netRev = x.revenue/1.21;
+    /* El IVA que se restó es el que traía cada pedido, no un 21 % clavado. Con
+       el 21 % fijo, dos SKU económicamente idénticos —uno vendido en Alemania
+       al 19 % y otro en España al 21 %— salían con un 85 % de diferencia de
+       beneficio, y el alemán, que era el mejor de los dos, se etiquetaba «C»
+       mientras el español se llevaba la «A». Es la pantalla con la que se
+       decide qué producto se empuja. */
+    const netRev = x.revenue - x.tax;
     /* El coste sale del mismo cálculo que el P&L, no de una fórmula paralela.
        Dos maneras de calcular lo mismo es como los números dejan de cuadrar
        entre pantallas, que es precisamente la queja que tiene la competencia. */
@@ -785,17 +1009,33 @@ function skuStats(){
   let cum=0;
   rows.forEach(r=>{
     r.share = r.profit>0 ? r.profit/totPos*100 : 0;
-    if(r.profit>0){ cum+=r.share; r.cum=cum; r.abc = cum<=80?'A':(cum<=95?'B':'C'); }
+    if(r.profit>0){
+      /* La clase se decide por lo acumulado ANTES de este producto, que es lo
+         que hace Pareto: «A» son los que hacen falta para llegar al 80 %,
+         incluido el que lo cruza. Mirando el acumulado DESPUÉS, el producto que
+         cruzaba el 80 % nunca entraba en A, y con un solo producto rentable
+         `cum` valía 100 y salía «C»: el que sostiene el negocio con la píldora
+         de los residuales, y el veredicto remitiendo a una categoría A vacía. */
+      const antes = cum;
+      cum += r.share; r.cum = cum;
+      r.abc = antes<80 ? 'A' : (antes<95 ? 'B' : 'C');
+    }
     else { r.cum=100; r.abc='D'; }
   });
   return rows;
 }
 /* Inventario consolidado: stock, cobertura y riesgo de tarifa */
 function invStats(){
-  const S = salesRows(), pm = prodBySku();
+  /* El stock de FBA es europeo y no se puede trocear por el desplegable de
+     país, así que las ventas tampoco. Con el filtro puesto, las ventas se
+     dividían y el stock no: la cobertura salía ×4 y la única referencia en
+     rotura desaparecía de la pantalla junto con las 421 unidades que había que
+     pedir. Aquí se mira siempre el conjunto, y la pantalla lo dice. */
+  const S = salesRows({country:'ALL'}), pm = prodBySku();
   const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
-  const days = periodDays||30;
-  const stock={}, byCountry={};
+  /* Días OBSERVADOS, no días pedidos: ver salesSpan(). */
+  const days = Math.min(daysInPeriod(), salesSpan({country:'ALL'}).days || daysInPeriod());
+  const stock={}, byCountry={}, mcTotal={};
   imp('inventory').forEach(r=>{
     const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
     stock[k]=(stock[k]||0)+toNum(gv(r,'_qty','afnfulfillablequantity'));
@@ -803,9 +1043,16 @@ function invStats(){
   imp('multicountry').forEach(r=>{
     const k=gv(r,'_sku','sellersku','sku'), c=countryOf(gv(r,'_country','country')); if(!k) return;
     if(!byCountry[k]) byCountry[k]={};
-    if(c) byCountry[k][c]=(byCountry[k][c]||0)+toNum(gv(r,'_qty','quantityforlocalfulfillment'));
-    if(!stock[k]) stock[k]=0;
+    const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
+    if(c) byCountry[k][c]=(byCountry[k][c]||0)+q;
+    mcTotal[k]=(mcTotal[k]||0)+q;
   });
+  /* Un SKU que solo aparece en el informe multipaís valía CERO unidades aquí y
+     en el histórico, mientras la tabla de países de la misma pantalla enseñaba
+     sus 1.400. Los lotes de coste ya hacían este respaldo; Inventario se quedó
+     fuera de aquella corrección. Solo cuando el SKU no viene en el informe de
+     inventario: sumar los dos contaría el mismo stock dos veces. */
+  Object.keys(mcTotal).forEach(k=>{ if(!(k in stock)) stock[k]=mcTotal[k]; });
   if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku) stock[r.sku]=toNum(r.available); });
   const plan={}; imp('planning').forEach(r=>{ if(r.sku) plan[r.sku]=r; });
   const keys = Array.from(new Set(Object.keys(stock).concat(Object.keys(sold)).concat(DB.products.map(p=>String(p.sku)))));
@@ -817,9 +1064,15 @@ function invStats(){
     const cover = velocity>0 ? qty/velocity : (qty>0?999:0);
     const lead = p&&p.supplierId ? (DB.suppliers.find(s=>s.id===p.supplierId)||{}).lead||45 : 45;
     const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
+    /* Lo que ya está en un barco cuenta. Sin esto, el ejemplo mandaba pedir
+       421 unidades más de una referencia que tenía 900 llegando, y encima la
+       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa. */
+    const enCamino = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received')
+      .reduce((a,po)=>a+(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
+                                       .reduce((b,i)=>b+toNum(i.qty),0), 0);
     const pl = plan[k]||{};
-    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead),
-      reorderPoint, need: Math.max(0, reorderPoint-qty),
+    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead), enCamino,
+      reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
       byCountry: fbm ? {} : (byCountry[k]||{}),
       excess: toNum(pl.estimatedexcessquantity),
       aged: toNum(pl.invage271to365days)+toNum(pl.invage365plusdays),
@@ -852,16 +1105,32 @@ function countryStats(){
      mercado empujar. */
   const C = costOfSales(rows);
   const m={};
-  rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0}; m[c].units+=r.qty; m[c].rev+=r.revenue; });
-  const scale = 365/(periodDays||30);
-  return COUNTRIES.map(c=>{
-    const x = m[c.code]||{units:0,rev:0};
-    const conf = DB.compliance[c.code]||{};
+  rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0,tax:0};
+    m[c].units+=r.qty; m[c].rev+=r.revenue; m[c].tax+=r.tax; });
+  const scale = 365/daysInPeriod();
+  /* Los mercados que no están en COUNTRIES —el Reino Unido, sin ir más lejos—
+     contaban en el P&L y en la ABC y desaparecían de esta tabla: en un caso
+     medido, un 33 % de la facturación se evaporaba sin que nada lo dijera.
+     Ahora se agrupan en una fila «otros» en vez de no existir. */
+  const otros = Object.keys(m).filter(k=>!COUNTRIES.some(c=>c.code===k))
+                              .map(k=>m[k]).filter(x=>x.units>0);
+  const listado = COUNTRIES.slice();
+  if(otros.length) listado.push({code:'··', name:'Otros mercados', vat:0, storage:false, vatCost:0, cur:'EUR', otros:true});
+  return listado.map(c=>{
+    const x = c.otros
+      ? otros.reduce((a,o)=>({units:a.units+o.units, rev:a.rev+o.rev, tax:a.tax+o.tax}), {units:0,rev:0,tax:0})
+      : (m[c.code]||{units:0,rev:0,tax:0});
+    const conf = c.otros ? {} : (DB.compliance[c.code]||{});
     const vatCost = conf.active ? toNum(conf.vatCost) : 0;
-    const netRev = x.rev/(1+c.vat/100);
-    const cogs = (C.byCountry[c.code]||{cogs:0}).cogs;
+    /* IVA realmente cobrado, no el nominal del país: una venta a Alemania
+       facturada con IVA español existe, y con el nominal salían 50 € de
+       ingreso neto inventados por mercado. */
+    const netRev = x.rev - x.tax;
+    const cogs = c.otros
+      ? otros.reduce((a,o)=>a+((C.byCountry[o.code]||{cogs:0}).cogs||0), 0)
+      : (C.byCountry[c.code]||{cogs:0}).cogs;
     const gross = netRev - x.rev*feeRate - cogs;
-    const vatShare = vatCost*((periodDays||30)/365);
+    const vatShare = vatCost*(daysInPeriod()/365);
     const profit = gross - vatShare;
     return {c, units:x.units, rev:x.rev, netRev, profit, annual:profit*scale,
             margin: netRev>0?profit/netRev*100:0, active:!!conf.active,
@@ -873,20 +1142,48 @@ function cashProjection(){
   const cs = DB.settings.cash, P = pnl();
   const days = 90;
   const start = today();
-  const dayRev  = (periodDays? P.grossInc/(periodDays||30) : 0);
+  const dayRev  = P.grossInc/daysInPeriod();
   const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
-  const dayPpc  = (P.ppc/(periodDays||30)) || cs.ppcDaily || 0;
-  const dayCogsFlow = 0;                       // el coste sale por los pedidos, no a diario
+  const dayPpc  = (P.ppc/daysInPeriod()) || cs.ppcDaily || 0;
+
+  /* Reponer lo que vendes también cuesta dinero.
+
+     Aquí había un `dayCogsFlow = 0` con el comentario «el coste sale por los
+     pedidos, no a diario». Solo es verdad si has cargado los pedidos, y la
+     curva es justo lo que miras ANTES de cargarlos. Resultado medido con los
+     datos de ejemplo: la pantalla decía «caja mínima €1.424, aguanta los 90
+     días» y recomendaba un pedido adicional de €7.000, cuando reponiendo lo
+     que vende se queda en −€232 y toca el descubierto el mismo día que llamaba
+     mínimo. Vender noventa días sin volver a comprar género no es un escenario
+     prudente: es otro negocio.
+
+     Para no cobrarlo dos veces, la mercancía que ya has pedido y aún no ha
+     llegado cubre sus días: durante esos días no se carga reposición, porque
+     ya la estás pagando en los vencimientos del pedido. */
+  const dayUnits    = P.units/daysInPeriod();
+  const dayCogsFlow = P.cogs/daysInPeriod();
+  const unidsEnCurso = DB.pos.filter(po=>po.status!=='closed')
+                             .reduce((a,po)=>a+poUnits(po), 0);
+  const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
+
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
-  // Vencimientos de pedidos de compra pendientes
+  /* Vencimientos de pedidos de compra pendientes.
+
+     Lo vencido y sin pagar no es dinero que ya no vayas a desembolsar: es el
+     que pagas mañana. Antes el filtro `k>=0` lo tiraba de la curva mientras el
+     KPI «Pagos comprometidos» seguía contándolo, así que la pantalla enseñaba
+     una deuda que la proyección no gastaba nunca. Ahora cae en el día 0. */
   const poFlows = {};
+  let fueraDeVentana = 0;
   DB.pos.forEach(po=>{
     if(po.status==='closed') return;
     (po.payments||[]).forEach(pay=>{
       if(pay.paid) return;
       const d = parseDate(pay.dueDate); if(!d) return;
-      const k = daysBetween(start,d);
-      if(k>=0 && k<days) poFlows[k] = (poFlows[k]||0) + poAmount(po)*(toNum(pay.pct)/100);
+      const importe = poAmount(po)*(toNum(pay.pct)/100);
+      const k = Math.max(0, daysBetween(start,d));
+      if(k<days) poFlows[k] = (poFlows[k]||0) + importe;
+      else fueraDeVentana += importe;      // vence más allá de los 90 días
     });
   });
   let bal = toNum(cs.start), pending = 0;
@@ -899,13 +1196,15 @@ function cashProjection(){
       inflow = pending*(1 - toNum(cs.reserve)/100);
       pending -= inflow;
     }
-    outflow += dayPpc + dayCogsFlow;
+    outflow += dayPpc;
+    if(k >= diasCubiertos) outflow += dayCogsFlow;   // ver «reponer lo que vendes»
     if(d.getDate()===1) outflow += monthlyFixed;
     if(d.getDate()===20) outflow += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
     if(poFlows[k]) outflow += poFlows[k];
     bal += inflow - outflow;
     out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0});
   }
+  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana};
   return out;
 }
 function poAmount(po){

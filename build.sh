@@ -26,9 +26,13 @@ h=h.split('{{VERSION}}').join('${STAMP}');
 fs.writeFileSync('index.html',h);
 "
 
-# 3 · manifest
+# 3 · manifest. El "id" fija la identidad de la app instalada: sin el, la
+#     identidad la marca el start_url resuelto, y cualquier cambio futuro ahi
+#     haria que el navegador tratase esto como una app NUEVA en vez de una
+#     actualizacion. Hay una instalada en movil y PC.
 cat > manifest.webmanifest <<JSON
 {
+  "id": "./",
   "name": "Aresstore Seller Hub",
   "short_name": "Aresstore",
   "description": "Gestion del seller de Amazon: rentabilidad, tesoreria, inventario, compras y cumplimiento. FBA y FBM.",

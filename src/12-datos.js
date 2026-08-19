@@ -798,6 +798,17 @@ function adStats(){
   });
   const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
   const factor = adDays ? daysInPeriod()/adDays : 1;
+  /* Y si el informe NO trae su rango, el prorrateo no se puede hacer: `factor`
+     se queda en 1 y el gasto entero se carga al periodo que estés mirando, sea
+     cual sea. Es el fallo original entero, sobreviviendo por la puerta de
+     atrás. Mirando 7 días sobra gasto —conservador—, pero mirando un año
+     falta, y ahí el beneficio se infla sin que nada chirríe: el aviso de
+     solape estaba detrás de `adDays>0`, así que no aparecía, y la etiqueta
+     que se pintaba era «estimado a diario», que describe otro camino distinto
+     del código.
+
+     No se puede inventar la duración. Lo que sí se puede es no callarla. */
+  const spanUnknown = spend>0 && !(d0&&d1);
   /* Cuánto del periodo cubre de verdad ese informe. Prorratear un informe de
      junio sobre el mes de agosto da un número utilizable —mejor que cero, que
      inflaría el margen— pero no es una medición de agosto, y la diferencia
@@ -808,7 +819,7 @@ function adStats(){
     const a = d0>pi ? d0 : pi, b = d1<pf ? d1 : pf;
     solape = Math.max(0, daysBetween(a,b)+1);
   }
-  return {spend: spend*factor, spendBruto: spend, adDays, factor,
+  return {spend: spend*factor, spendBruto: spend, adDays, factor, spanUnknown,
           desde:d0, hasta:d1, solape,
           solapePct: daysInPeriod()>0 ? Math.min(100, solape/daysInPeriod()*100) : 0,
           sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
@@ -895,11 +906,12 @@ function pnl(){
      Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
      columnas de tarifa no reconocemos salían 0 € de comisión sellados como
      «medido», y el beneficio subía un 23 %. */
+  const ads = adStats();
   /* Y no basta con que la liquidación se entienda: si la BASE de ingreso está
      deducida en vez de leída, el margen que sale encima no está medido por
      mucho que las comisiones sí lo estén. La etiqueta la fija el eslabón más
      débil, no el más fuerte. */
-  const measured = sf.matched>0 && tb.known;
+  const measured = sf.matched>0 && tb.known && !ads.spanUnknown;
   let referral, fba, storage, otherFee, feeCoverPct;
   let ship=0, fbmUnits=0, fbaUnits=0;
   S.forEach(r=>{
@@ -928,15 +940,27 @@ function pnl(){
     tarifas[sk] = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
   });
   let udsConTarifa=0;
+  /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el 15 %
+     por defecto. El 15 % es el último recurso, no el primero.
+
+     Vive aquí, en UNA función, porque lo usan dos sitios: la comisión que se
+     cobra en la venta y la que Amazon reintegra en la devolución. Estaban
+     duplicados y el de las devoluciones se saltaba el informe de tarifas, así
+     que cobraba la venta al tipo real y reintegraba al 15 %. Con una categoría
+     al 8 %, cada devolución te devolvía un 15 % que nunca pagaste. Dos copias
+     de la misma regla siempre acaban divergiendo; es la misma lección que
+     `iso()`. */
+  const refPctOf = k => {
+    const p = pm[k], t = tarifas[k];
+    return (t && t.pct>0) ? t.pct
+         : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
+  };
   const estFees = rows => {
     let ref=0, f=0;
     rows.forEach(r=>{
       const k = String(r.sku).toLowerCase();
       const p = pm[k], t = tarifas[k];
-      /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el
-         15 % por defecto. El 15 % es el último recurso, no el primero. */
-      const pct = (t && t.pct>0) ? t.pct
-                : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
+      const pct = refPctOf(k);
       if(t && t.pct>0) udsConTarifa += r.qty;
       ref += r.revenue*pct;
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
@@ -970,8 +994,15 @@ function pnl(){
     referral = est.referral; fba = est.fba; storage = 0; otherFee = 0;
     feeCoverPct = 0;
   }
-  const ads = adStats();
   const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
+  /* De dónde sale ese gasto, que no es lo mismo y la pantalla lo tenía todo
+     bajo la misma etiqueta:
+       informe            · con su rango, prorrateado a los días del periodo
+       informe-sin-fechas · el informe no dice qué periodo cubre: NO prorrateado
+       diario             · no hay informe, se usa el gasto diario de ajustes
+       ninguno            · no hay ni informe ni gasto diario: publicidad = 0 */
+  const ppcSource = ads.spend>0 ? (ads.spanUnknown ? 'informe-sin-fechas' : 'informe')
+                  : (ppc>0 ? 'diario' : 'ninguno');
   const retRows = imp('returns').filter(r=>{ const d=parseDate(gv(r,'_date','returndate')); return d && d>=periodStart(); });
   const retUnits = retRows.reduce((a,r)=>a+(toNum(gv(r,'_qty','quantity'))||1),0);
   const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
@@ -997,21 +1028,44 @@ function pnl(){
   S.forEach(r=>{ const k=String(r.sku).toLowerCase();
     if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0};
     ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty; });
+
+  /* El informe de devoluciones NO trae país. Con el desplegable en España se
+     estaban restando las devoluciones de los nueve mercados contra las ventas
+     de uno: el país que miras carga con lo que devuelven todos. La pantalla ya
+     avisa de este mismo defecto para la publicidad y en devoluciones callaba.
+
+     No se puede saber de qué mercado vino cada devolución, pero sí en qué
+     proporción vende ese SKU en el mercado que estás mirando. Se reparte por
+     esa proporción y se dice que es un reparto, no una medición. Con el
+     filtro en «todos» la proporción es 1 y no cambia nada. */
+  const cuotaPais = {};
+  if(countryFilter !== 'ALL'){
+    const todo = {};
+    salesRows({country:'ALL'}).forEach(r=>{ const k=String(r.sku).toLowerCase();
+      todo[k] = (todo[k]||0) + r.qty; });
+    Object.keys(ventaSku).forEach(k=>{
+      cuotaPais[k] = todo[k]>0 ? ventaSku[k].units/todo[k] : 1; });
+  }
+  const cuotaDe = k => countryFilter==='ALL' ? 1 : (cuotaPais[k]!=null ? cuotaPais[k] : 1);
   /* `cost.bySku` viene con el SKU tal cual lo escribe el informe; aquí se
      compara en minúsculas, así que hace falta el índice. */
   const costeSku = {};
   Object.keys(cost.bySku||{}).forEach(k=>{ costeSku[k.toLowerCase()] = cost.bySku[k]; });
   let retIngreso=0, retComision=0, retCoste=0, retVendibles=0, retSinEstado=0;
+  /* Unidades que se cuentan pero NO se cobran, porque su SKU no vendió en el
+     periodo. Antes el rótulo decía «N ud» sobre un importe de menos unidades. */
+  let retDescartadas=0, retImputadas=0;
   retRows.forEach(r=>{
     const k = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase();
-    const q = toNum(gv(r,'_qty','quantity'))||1;
+    const qBruto = toNum(gv(r,'_qty','quantity'))||1;
     const v = ventaSku[k];
-    if(!v || !v.units) return;                 // no sé a qué venta corresponde
+    if(!v || !v.units){ retDescartadas += qBruto; return; }  // no sé a qué venta corresponde
+    const q = qBruto * cuotaDe(k);
     const p = pm[k];
     const netUd   = (v.rev - v.tax)/v.units;
     const grossUd = v.rev/v.units;
-    const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
-    const comUd = grossUd*pct;
+    const comUd = grossUd*refPctOf(k);
+    retImputadas += q;
     retIngreso  += q*netUd;
     retComision += q*(comUd - Math.min(5, 0.20*comUd));
     const disp = String(gv(r,'_disp','detaileddisposition','disposicion','estado')||'').trim().toLowerCase();
@@ -1028,9 +1082,11 @@ function pnl(){
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
+    ppcSource, adSpanUnknown: ads.spanUnknown,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
+    retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
@@ -1231,11 +1287,36 @@ function cashProjection(){
 
      Para no cobrarlo dos veces, la mercancía que ya has pedido y aún no ha
      llegado cubre sus días: durante esos días no se carga reposición, porque
-     ya la estás pagando en los vencimientos del pedido. */
+     ya la estás pagando en los vencimientos del pedido.
+
+     Dos cosas que este filtro daba por buenas y no lo son:
+
+     · Un pedido RECIBIDO ya no está en camino, está en la estantería, y su
+       coste ya viajó al lote y de ahí al coste de ventas. Contarlo otra vez
+       como «mercancía que cubre días futuros» es contarlo dos veces. Medido:
+       un pedido recibido y pagado de 600 unidades de OTRO SKU regalaba 60 días
+       sin cargo de reposición y dejaba la caja final en 70.250 € en vez de
+       46.250 €. Veinticuatro mil euros en la curva que decide si pides
+       financiación. El resto del fichero ya excluye `received` por este mismo
+       motivo (ver `enCamino`): esta línea era la que se había quedado fuera de
+       la convención.
+
+     · Un BORRADOR no es un pedido. No lo has enviado, el proveedor no lo ha
+       visto y no hay nada viajando. Cubrir días con él es cubrirlos con una
+       intención.
+
+     Y el crédito es POR SKU, no entre SKU: 600 unidades de un producto no
+     reponen las ventas de otro. Se cuenta solo lo pedido de los SKU que de
+     verdad se están vendiendo en el periodo. */
   const dayUnits    = P.units/daysInPeriod();
   const dayCogsFlow = P.cogs/daysInPeriod();
-  const unidsEnCurso = DB.pos.filter(po=>po.status!=='closed')
-                             .reduce((a,po)=>a+poUnits(po), 0);
+  const skusVendidos = {};
+  salesRows().forEach(r=>{ if(r.sku) skusVendidos[String(r.sku).toLowerCase()] = 1; });
+  const unidsEnCurso = DB.pos
+    .filter(po => po.status!=='closed' && po.status!=='received' && po.status!=='draft')
+    .reduce((a,po) => a + (po.items||[])
+      .filter(i => skusVendidos[String(i.sku).toLowerCase()])
+      .reduce((b,i) => b + toNum(i.qty), 0), 0);
   const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
 
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);

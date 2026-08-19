@@ -449,14 +449,18 @@ function renderRent(){
     line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
     (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
-        num(P.retUnits)+' ud · ingreso devuelto menos comisión reintegrada'+
+        num(P.retImputadas,1)+' ud imputadas de '+num(P.retUnits)+
+        (P.retRepartidas?' · repartidas por la cuota de ventas de este mercado':'')+
+        ' · ingreso devuelto menos comisión reintegrada'+
         (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
     line('Coste de producto',P.cogs,'',true)+
-    line('Publicidad',P.ppc, P.adDays
-        ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
-        : (P.ppc>0?'estimado a diario':''), true)+
+    line('Publicidad',P.ppc,
+        P.ppcSource==='informe' ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
+      : P.ppcSource==='informe-sin-fechas' ? 'el informe no dice qué periodo cubre · cargado ENTERO, sin prorratear'
+      : P.ppcSource==='diario' ? 'estimado a diario'
+      : '', true)+
     line('Gastos fijos',P.fixed,'prorrateados',true)+
     line('Reembolsos recuperados',P.reimb)+
     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
@@ -495,6 +499,13 @@ function renderRent(){
        propio rango. Cargar su gasto entero contra cualquier periodo hacía que
        el margen fuese de −58,6 % a 30 días y de −13,6 % con «Todo», con las
        mismas ventas todos los días. Se prorratea, y se dice que se prorratea. */
+    /* El aviso de solape vivía detrás de `adDays>0`, así que el caso peor —el
+       informe que no dice qué periodo cubre— era justo el único mudo. */
+    if(P.adSpanUnknown)
+      v+='<br><br><strong>El informe de publicidad no trae su rango de fechas</strong>, así que no se puede '+
+         'prorratear: los '+fmt(P.ppc,0)+' de gasto se están cargando ENTEROS al periodo que estés mirando, '+
+         'sea de una semana o de un año. Mirando un periodo largo, el beneficio que ves está por encima del real. '+
+         'Descarga el informe de términos de búsqueda con las columnas de fecha de inicio y fin.';
     if(P.adDays>0 && Math.round(P.adSolapePct)<100)
       v+='<br><br>El informe de publicidad cubre '+num(P.adDays)+' días'+
          (P.adDesde?' ('+P.adDesde.toLocaleDateString('es-ES')+' a '+P.adHasta.toLocaleDateString('es-ES')+')':'')+
@@ -503,6 +514,10 @@ function renderRent(){
          (Math.round(P.adSolapePct)===0 ? 'Con cero solape, descárgate el informe del periodo que quieres analizar antes de fiarte del TACOS.' : '');
     if(P.retUnits>0){
       v+='<br><br>Las '+num(P.retUnits)+' devoluciones del periodo cuestan '+fmt(P.returnsCost,0)+': se devuelve el ingreso, Amazon reintegra la comisión menos la tasa de gestión del reembolso, y la tarifa de logística no vuelve.';
+      if(P.retDescartadas>0)
+        v+=' De ellas, '+num(P.retDescartadas)+' son de referencias que no han vendido nada en este periodo, así que no se les puede poner precio y no se cobran: el coste real de las devoluciones es mayor que este.';
+      if(P.retRepartidas)
+        v+=' <strong>El informe de devoluciones no trae país.</strong> Estás mirando un solo mercado, así que las devoluciones se reparten por la cuota de ventas de ese mercado en cada referencia. Es un reparto, no una medición: si este país devuelve más o menos que la media, el número se desvía.';
       if(P.retSinEstado>0)
         v+=' De ellas, '+num(P.retSinEstado)+' vienen sin estado en el informe, así que doy por perdido su coste de producto: si volvieron vendibles, tu beneficio real es algo mayor que este.';
       v+=' <span class="mut">No está incluida la tasa de procesamiento de devolución, que depende de la categoría y del porcentaje de devoluciones de cada referencia: si Amazon te la cobra, tu beneficio es menor que este.</span>';

@@ -428,6 +428,73 @@ const js = body => '(()=>{' + LAB + body + '})()';
     near(dev.vendCoste, 830) && dev.vendUd===10,
     dev.vendCoste.toFixed(2)+' € = 880 − 10 × 5,00 de coste recuperado');
 
+  console.log('\n=== PNL-P · UN INFORME DE PUBLICIDAD SIN FECHAS NO SE PUEDE PRORRATEAR ===');
+  /* El informe de términos de búsqueda trae su propio rango en «Start Date» y
+     «End Date», y el gasto se prorratea a los días del periodo. Si NO trae ese
+     rango, el prorrateo es imposible y el gasto entero se cargaba al periodo
+     que estuvieras mirando, fuera de una semana o de un año.
+
+     Mirando poco sobra gasto, que es conservador. Mirando mucho FALTA, y ahí
+     el beneficio se infla. Y era mudo por partida doble: el aviso de solape
+     vivía detrás de `adDays>0` y la etiqueta decía «estimado a diario», que
+     describe otro camino distinto del código.
+
+     Aritmética: 1.200 € de gasto declarado, sin fechas.
+       a 30 días  → 1.200 €      (no hay nada que prorratear)
+       a 365 días → 1.200 €      ← el mismo gasto para doce veces más ventas
+     Lo que se exige aquí no es un número distinto —no se puede inventar la
+     duración— sino que el hub DIGA que no la sabe y deje de llamarlo medido. */
+  const sinFechas = await page.evaluate(js(`
+    DB.imports.orders = {rows:[venta(dia(5),100)], count:1, file:'o'};
+    DB.imports.searchterm = {count:1, file:'st', rows:[
+      {customersearchterm:'pulsera', campaignname:'C1', spend:'1200', sales:'3000',
+       orders:'20', clicks:'400', impressions:'9000'}
+    ]};
+    periodDays = 30;  const a = pnl();
+    periodDays = 365; const b = pnl();
+    periodDays = 30;
+    return {ppc30:a.ppc, ppc365:b.ppc, src:a.ppcSource, span:a.adSpanUnknown, med:a.measured};
+  `));
+  check('el gasto no se prorratea, porque no hay con qué',
+    near(sinFechas.ppc30, 1200, 1) && near(sinFechas.ppc365, 1200, 1),
+    sinFechas.ppc30.toFixed(0)+' € a 30 días y '+sinFechas.ppc365.toFixed(0)+' € a 365');
+  check('pero el hub dice que no sabe qué periodo cubre',
+    sinFechas.span===true && sinFechas.src==='informe-sin-fechas',
+    sinFechas.src);
+  check('y por eso el margen deja de estar medido', sinFechas.med===false, 'measured='+sinFechas.med);
+
+  console.log('\n=== PNL-Q · LA COMISIÓN QUE SE REINTEGRA ES LA QUE SE COBRÓ ===');
+  /* La venta se carga con el tipo del informe de vista previa de tarifas
+     cuando lo hay. La devolución reintegraba con el tipo del producto o con el
+     15 % por defecto, saltándose ese informe. Con una categoría al 8 %, cada
+     devolución devolvía un 15 % que nunca se pagó.
+
+     Aritmética: 100 uds a 100 €, tarifa real del 8 %, 10 devoluciones.
+       comisión cobrada en la venta  = 10.000 × 0,08          = 800,00 €
+       por unidad devuelta           = 100 × 0,08             =   8,00 €
+       tasa de gestión               = mín(5 €, 20 % de 8) = 1,60 €
+       reintegro por unidad          = 8,00 − 1,60            =   6,40 €
+       reintegro de 10 unidades                               =  64,00 €
+     Con el 15 %: 15 − mín(5, 3) = 12 €/ud → 120 €. 56 € de más, inventados. */
+  const reint = await page.evaluate(js(`
+    DB.imports.orders = {rows:[venta(dia(10),100)], count:1, file:'o'};
+    DB.imports.fees = {count:1, file:'f', rows:[
+      {sku:'TEST-1', yourprice:'100', estimatedreferralfeeperunit:'8',
+       expectedfulfillmentfeeperunit:'3.00'}
+    ]};
+    DB.imports.returns = {count:1, file:'r', rows:[
+      {orderid:'o1', returndate:dia(5), sku:'TEST-1', quantity:'10', detaileddisposition:''}
+    ]};
+    periodDays = 30;
+    const p = pnl();
+    return {ref:p.referral, retCom:p.retComision, retIng:p.retIngreso, cost:p.returnsCost};
+  `));
+  console.log('     comisión de la venta ' + reint.ref.toFixed(2) +
+              ' €  ·  reintegro de las 10 devoluciones ' + reint.retCom.toFixed(2) + ' €');
+  check('la venta se cobra al 8 % del informe de tarifas', near(reint.ref, 800, 1), reint.ref.toFixed(2)+' €');
+  check('y la devolución reintegra 64 €, no 120 €', near(reint.retCom, 64, 1),
+    reint.retCom.toFixed(2)+' € = 10 × (8,00 − 1,60)');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

@@ -1,0 +1,1614 @@
+From 7bbee0201d4b49f6dee5c5e8205c692462b13337 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 19 Aug 2026 09:46:19 +0000
+Subject: [PATCH 1/5] La base del margen era el ingreso CON IVA cuando faltaba
+ la columna
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+El informe de pedidos trae el impuesto como columna opcional (_tax req:0).
+Cuando no venia, tax valia 0 y el «ingreso neto» pasaba a ser el bruto, sin
+un solo aviso. No es solo que inflara el margen 4,5 puntos: invertia el orden
+entre mercados. Amazon cobra la comision sobre el precio con IVA, asi que el
+pais de tipo mas alto es genuinamente el peor; sin la columna salia el mejor.
+Medido con tres mercados: DE > ES > SE se convertia en SE > ES > DE.
+
+tests/pnl.test.js fija itemtax:'0' en su laboratorio, asi que las 400 y pico
+comprobaciones de rentabilidad corrian sobre un negocio sin IVA y eran
+estructuralmente incapaces de verlo. Por eso lo primero es la suite.
+
+- tests/iva.test.js: IVA como eje de prueba y no como constante. Nacio con los
+  cuatro casos en rojo. Registrada en test:all.
+- taxBasis() en 12-datos.js: donde falta la columna, el IVA se deduce del tipo
+  del pais y la base queda etiquetada estimada. Salvaguarda de tipo efectivo
+  observado para no restarlo dos veces si un informe viniera ya neto, que es el
+  mismo fallo con el signo cambiado.
+- measured degrada: una base deducida no puede sellar el margen como medido por
+  muy reales que sean las comisiones. La etiqueta la fija el eslabon mas debil.
+- Pantalla: el margen dice que el IVA esta deducido y la cascada rotula
+  «IVA (deducido)».
+
+test:all 344 comprobaciones, exit 0, sin regresiones (eran 326).
+---
+ package.json      |   5 +-
+ src/12-datos.js   |  76 ++++++++++++++-
+ src/13-render.js  |   7 +-
+ tests/iva.test.js | 232 ++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 314 insertions(+), 6 deletions(-)
+ create mode 100644 tests/iva.test.js
+
+diff --git a/package.json b/package.json
+index 7c6bbc5..7a30770 100644
+--- a/package.json
++++ b/package.json
+@@ -10,13 +10,14 @@
+     "test:es": "node tests/es.test.js",
+     "test:pwa": "node tests/pwa.test.js",
+     "test:m0": "node tests/m0.test.js",
+-    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pnl && npm run test:caja && npm run test:inv && npm run test:informes && npm run test:salida && npm run test:pwa",
++    "test:all": "npm run test && npm run test:es && npm run test:m0 && npm run test:m11 && npm run test:pnl && npm run test:caja && npm run test:inv && npm run test:informes && npm run test:salida && npm run test:iva && npm run test:pwa",
+     "test:m11": "node tests/m11.test.js",
+     "test:pnl": "node tests/pnl.test.js",
+     "test:caja": "node tests/caja.test.js",
+     "test:inv": "node tests/inventario.test.js",
+     "test:informes": "node tests/informes.test.js",
+-    "test:salida": "node tests/salida.test.js"
++    "test:salida": "node tests/salida.test.js",
++    "test:iva": "node tests/iva.test.js"
+   },
+   "devDependencies": {
+     "playwright": "^1.62.1"
+diff --git a/src/12-datos.js b/src/12-datos.js
+index 3259a71..bd16430 100644
+--- a/src/12-datos.js
++++ b/src/12-datos.js
+@@ -710,6 +710,11 @@ function salesRows(opt){
+       qty: toNum(gv(r,'_qty','quantity')),
+       revenue: toNum(gv(r,'_amount','itemprice')),
+       tax: toNum(gv(r,'_tax','itemtax')),
++      /* La columna de impuesto es OPCIONAL en este informe (`_tax` req:0), así
++         que hay que distinguir «el IVA es cero» de «no me han dicho el IVA».
++         Confundirlos era el fallo más caro del hub: ver taxBasis(). */
++      taxSeen: (()=>{ const v = gv(r,'_tax','itemtax');
++                      return v !== undefined && v !== null && String(v).trim() !== ''; })(),
+       country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
+       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
+       cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0
+@@ -809,12 +814,74 @@ function adStats(){
+           sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
+           acos: sales>0?spend/sales*100:0};
+ }
++/* IVA · la base sobre la que se calcula TODO margen.
++
++   El informe de pedidos trae la columna de impuesto como opcional. Cuando
++   faltaba, `tax` valía 0 y el «ingreso neto» pasaba a ser el ingreso CON IVA,
++   sin un solo aviso. No es solo que inflara el margen 4,5 puntos: **invertía
++   el orden entre mercados**. Amazon cobra la comisión sobre el precio con
++   IVA, así que el país de tipo más alto es genuinamente el peor; sin la
++   columna salía el mejor. Medido en tests/iva.test.js con tres mercados:
++   DE > ES > SE se convertía en SE > ES > DE, exactamente del revés, que es
++   justo la decisión para la que existe el comparador PanEU.
++
++   Ahora, donde falta la columna, el IVA se DEDUCE del tipo del país y todo lo
++   que dependa de la base queda etiquetado como estimado. Nunca medido.
++
++   La salvaguarda del tipo efectivo observado evita el error simétrico: si en
++   las filas que SÍ traen columna el IVA efectivo de ese mercado es ~0, es que
++   sus precios vienen ya netos y no hay nada que deducir. Sin esto, un informe
++   neto se quedaría sin IVA dos veces y el margen saldría hundido en vez de
++   inflado — el mismo tipo de fallo, con el signo cambiado. */
++function taxBasis(S){
++  const nominal = {};
++  COUNTRIES.forEach(c => { nominal[c.code] = c.vat; });
++
++  const obs = {};
++  S.forEach(r => {
++    if(!r.taxSeen || !r.country) return;
++    const o = obs[r.country] || (obs[r.country] = {rev:0, tax:0});
++    o.rev += r.revenue; o.tax += r.tax;
++  });
++  /* Tipo a aplicar a un mercado: el que se observa si hay muestra, y si no el
++     nominal del país. `tax/(rev-tax)` porque el IVA se expresa sobre la base. */
++  const rateFor = c => {
++    const o = obs[c];
++    if(o && o.rev > 0){ const base = o.rev - o.tax; return base > 0 ? o.tax/base*100 : 0; }
++    return nominal[c] != null ? nominal[c] : null;
++  };
++
++  let observed = 0, estimated = 0, revSeen = 0, revEst = 0, revBlind = 0;
++  const paises = {};
++  S.forEach(r => {
++    if(r.taxSeen){ observed += r.tax; revSeen += r.revenue; return; }
++    const pct = r.country != null ? rateFor(r.country) : null;
++    if(pct == null){ revBlind += r.revenue; return; }   /* sin país: no deducible */
++    estimated += r.revenue - r.revenue/(1 + pct/100);
++    revEst += r.revenue;
++    if(r.country) paises[r.country] = pct;
++  });
++
++  const rev = revSeen + revEst + revBlind;
++  return {
++    tax: observed + estimated,
++    observed, estimated,
++    revSeen, revEst, revBlind, rev,
++    paisesDeducidos: paises,
++    coverPct: rev > 0 ? revSeen/rev*100 : 100,
++    known: revEst === 0 && revBlind === 0,   /* toda la base viene del informe */
++    blind: revBlind > 0,                      /* hay ingreso sin país: ni deducible */
++    quality: revEst === 0 && revBlind === 0 ? 'medida' : (revBlind > 0 ? 'desconocida' : 'estimada')
++  };
++}
++
+ /* Cuenta de resultados del periodo. Cada línea sabe si está medida o estimada. */
+ function pnl(){
+   const S = salesRows();
+   const grossInc = S.reduce((a,r)=>a+r.revenue,0);
+   const units    = S.reduce((a,r)=>a+r.qty,0);
+-  const tax      = S.reduce((a,r)=>a+r.tax,0);
++  const tb       = taxBasis(S);
++  const tax      = tb.tax;
+   const net      = grossInc - tax;
+   const pm       = prodBySku();
+   /* M1.1 · el coste ya no es una constante por SKU: cada venta se costea con
+@@ -828,7 +895,11 @@ function pnl(){
+      Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
+      columnas de tarifa no reconocemos salían 0 € de comisión sellados como
+      «medido», y el beneficio subía un 23 %. */
+-  const measured = sf.matched>0;
++  /* Y no basta con que la liquidación se entienda: si la BASE de ingreso está
++     deducida en vez de leída, el margen que sale encima no está medido por
++     mucho que las comisiones sí lo estén. La etiqueta la fija el eslabón más
++     débil, no el más fuerte. */
++  const measured = sf.matched>0 && tb.known;
+   let referral, fba, storage, otherFee, feeCoverPct;
+   let ship=0, fbmUnits=0, fbaUnits=0;
+   S.forEach(r=>{
+@@ -956,6 +1027,7 @@ function pnl(){
+   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost;
+   return {
+     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
++    taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
+     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
+     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
+diff --git a/src/13-render.js b/src/13-render.js
+index efb2b86..b717c30 100644
+--- a/src/13-render.js
++++ b/src/13-render.js
+@@ -425,7 +425,10 @@ function renderRent(){
+     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
+     kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
+     kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+-        P.margin===null?'sin ingreso en el periodo':'sobre ingreso sin IVA',
++        P.margin===null ? 'sin ingreso en el periodo'
++        : (P.baseQuality==='medida' ? 'sobre ingreso sin IVA'
++          : P.baseQuality==='estimada' ? 'sobre ingreso sin IVA · IVA DEDUCIDO del tipo de cada país, no leído del informe'
++          : 'sobre ingreso sin IVA · hay ventas sin país: su IVA no se puede deducir'),
+         P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
+     kpi('Coste de producto', fmt(P.cogs,0),
+         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
+@@ -458,7 +461,7 @@ function renderRent(){
+     line('Reembolsos recuperados',P.reimb)+
+     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
+ 
+-  const rows=[['IVA',P.tax,'#9aa8ac'],['Comisión Amazon',P.referral,'#c2410c'],['Tarifas FBA',P.fba,'#ea580c'],
++  const rows=[['IVA'+(P.baseQuality==='medida'?'':' (deducido)'),P.tax,'#9aa8ac'],['Comisión Amazon',P.referral,'#c2410c'],['Tarifas FBA',P.fba,'#ea580c'],
+     ['Envío propio (FBM)',P.ship,'#b45309'],
+     ['Almacenaje y otras',P.storage+P.otherFee,'#64748b'],['Coste de producto',P.cogs,'#7c3aed'],
+     ['Publicidad',P.ppc,'#0284c7'],['Gastos fijos',P.fixed,'#475569'],
+diff --git a/tests/iva.test.js b/tests/iva.test.js
+new file mode 100644
+index 0000000..81c993f
+--- /dev/null
++++ b/tests/iva.test.js
+@@ -0,0 +1,232 @@
++/* =========================================================================
++   IVA · la base sobre la que se calcula TODO margen
++
++   Por qué existe esta suite. `tests/pnl.test.js` fija `itemtax:'0'` en su
++   laboratorio, así que las 400 y pico comprobaciones de rentabilidad corren
++   sobre un negocio sin IVA y son estructuralmente incapaces de ver el fallo
++   más caro que tiene el hub: cuando el informe de pedidos no trae la columna
++   de impuesto, `_tax` vale 0 (está declarado `req:0` en 12-datos.js) y el
++   «ingreso neto» pasa a ser el ingreso CON IVA, sin un solo aviso.
++
++   Una suite en verde que no puede fallar por el motivo correcto da la misma
++   falsa tranquilidad que un margen inflado. Esto convierte el IVA en un eje
++   de prueba en vez de en una constante.
++
++   Escrita el 19-ago-2026 con los cuatro casos en ROJO, que es como debe
++   nacer una prueba que persigue un fallo real: primero se demuestra que el
++   fallo existe y cuánto cuesta, después se arregla. `taxBasis()` en
++   12-datos.js es el arreglo; estos casos son la demostración de que hacía
++   falta y el seguro de que no vuelve.
++
++   Cada caso lleva la aritmética a mano en el comentario.
++   ========================================================================= */
++const { chromium } = require('playwright');
++const path = require('path');
++
++let fails = 0;
++const check = (label, cond, extra) => {
++  if(!cond) fails++;
++  console.log('  ' + (cond?'OK   ':'FALLO') + ' ' + label + (extra!==undefined ? '  → ' + extra : ''));
++};
++const near = (a,b,t)=> Math.abs(a-b) < (t==null?0.01:t);
++
++/* Laboratorio. Un solo producto, precio NETO 100 € por unidad, coste 5 €,
++   tarifa FBA 3 €, comisión 15 %. El precio con IVA cambia según el país,
++   que es justo lo que se quiere ejercitar.
++
++   `venta(dia, uds, {pais, vat, conIva})`:
++     - `conIva:true`  → la fila trae `itemtax`, como el informe en inglés.
++     - `conIva:false` → la fila NO trae la clave, que es exactamente lo que
++       ocurre con un informe cuya columna de impuesto no existe o no casa
++       con ningún alias. */
++const LAB = `
++  DB = blankDB();
++  DB.products = [{id:'t1', sku:'TEST-1', name:'Producto', cogs:5, freight:0,
++                  fba:3, referral:15, price:100, channel:'FBA', lots:[]}];
++  const hoy = new Date();
++  const dia = k => { const d=new Date(hoy); d.setDate(d.getDate()-k);
++    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
++  const venta = (d,q,o)=>{
++    o = o || {};
++    const neto  = o.neto==null ? 100 : o.neto;
++    const vat   = o.vat==null  ? 21  : o.vat;
++    const pais  = o.pais || 'ES';
++    const bruto = neto * (1 + vat/100);
++    const row = {amazonorderid:'o'+pais+d+q, purchasedate:d+'T10:00:00+00:00',
++      fulfillmentchannel:'Amazon', saleschannel:'Amazon.'+pais.toLowerCase(),
++      sku:'TEST-1', asin:'B0X', itemstatus:'Shipped', quantity:String(q),
++      itemprice:(bruto*q).toFixed(2), shipcountry:pais};
++    if(o.conIva !== false) row.itemtax = ((bruto-neto)*q).toFixed(2);
++    return row;
++  };
++`;
++const js = body => '(()=>{' + LAB + body + '})()';
++
++(async () => {
++  const browser = await chromium.launch({executablePath:'/opt/pw-browsers/chromium'});
++  const ctx = await browser.newContext({viewport:{width:1440,height:1000}, timezoneId:'Europe/Madrid'});
++  const page = await ctx.newPage();
++  const errors = [];
++  page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
++  page.on('console', m => { const t=m.text();
++    if(m.type()==='error' && t.indexOf('ERR_')<0 && t.indexOf('Failed to load resource')<0) errors.push('CONSOLE: '+t); });
++  page.on('dialog', d => d.accept());
++  await page.goto('file://' + path.resolve(__dirname,'..','index.html'));
++  await page.waitForTimeout(700);
++
++  /* =====================================================================
++     IVA-A · CONTROL: con la columna de impuesto, la base es la correcta
++     =====================================================================
++     100 unidades en España, precio neto 100 €, IVA 21 %.
++       itemprice  = 121,00 × 100 = 12.100,00 €
++       itemtax    =  21,00 × 100 =  2.100,00 €
++       ingreso neto            = 12.100 − 2.100 = 10.000,00 €
++       comisión 15 % del bruto CON IVA          =  1.815,00 €   (12.100 × 0,15)
++       tarifa FBA 3,00 × 1,015 × 100            =    304,50 €
++       coste de producto 5,00 × 100             =    500,00 €
++       beneficio = 10.000 − 1.815 − 304,50 − 500 = 7.380,50 €
++       margen    = 7.380,50 / 10.000            =     73,81 %                */
++  console.log('\n=== IVA-A · CONTROL: LA COLUMNA ESTÁ Y LA BASE ES LA BUENA ===');
++  const A = await page.evaluate(js(`
++    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21})], count:1, file:'o'};
++    periodDays = 30;
++    const p = pnl();
++    return {gross:p.grossInc, tax:p.tax, net:p.net, ref:p.referral, fba:p.fba,
++            cogs:p.cogs, profit:p.profit, margin:p.margin};
++  `));
++  check('ingreso bruto 12.100 €',        near(A.gross, 12100),  A.gross);
++  check('impuesto leído 2.100 €',        near(A.tax,    2100),  A.tax);
++  check('ingreso NETO 10.000 €',         near(A.net,   10000),  A.net);
++  check('comisión 1.815 € (15 % del bruto con IVA)', near(A.ref, 1815, 0.5), A.ref);
++  check('tarifa FBA 304,50 €',           near(A.fba,   304.5, 0.5), A.fba);
++  check('beneficio 7.380,50 €',          near(A.profit, 7380.5, 1), A.profit);
++  check('margen 73,81 %',                near(A.margin, 73.81, 0.1), A.margin);
++
++  /* =====================================================================
++     IVA-B · SIN LA COLUMNA: el IVA se deduce y la base se etiqueta
++     =====================================================================
++     Idéntico al anterior, pero la fila no trae `itemtax`.
++       impuesto leído          =      0,00 €   ← el hub no sabe que hay IVA
++       «ingreso neto»          = 12.100,00 €   ← es el bruto disfrazado
++       beneficio = 12.100 − 1.815 − 304,50 − 500 = 9.480,50 €
++       margen    = 9.480,50 / 12.100            =     78,35 %
++
++     Eso era ANTES de taxBasis(): 2.100 € de beneficio ficticio y 4,5 puntos
++     de margen, con el mismo aspecto de dato bueno que el caso A.
++
++     DECISIÓN (Juancho, 19-ago-2026): el hub DEDUCE el IVA del tipo del país
++     y etiqueta la base como estimada. Así que el margen debe volver a 73,81 %
++     —el mismo que con la columna, porque el tipo español es exactamente el
++     21 % que se deduce— y `baseQuality` debe decir «estimada».             */
++  console.log('\n=== IVA-B · SIN COLUMNA DE IMPUESTO ===');
++  const B = await page.evaluate(js(`
++    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21, conIva:false})], count:1, file:'o'};
++    periodDays = 30;
++    const p = pnl();
++    return {gross:p.grossInc, tax:p.tax, net:p.net, profit:p.profit, margin:p.margin,
++            taxKnown: p.taxKnown, base: p.baseQuality};
++  `));
++  check('deduce los 2.100 € de IVA que el informe no traía', near(B.tax, 2100, 1), B.tax);
++  check('el ingreso neto vuelve a 10.000 €',  near(B.net, 10000, 1), B.net);
++  check('el beneficio vuelve a 7.380,50 €',   near(B.profit, 7380.5, 1), B.profit);
++  check('el margen vuelve a 73,81 %',         near(B.margin, 73.81, 0.1), B.margin);
++  check('y NO se presenta como base medida',  B.taxKnown === false, 'taxKnown=' + B.taxKnown);
++  check('la base queda etiquetada «estimada»', B.base === 'estimada', B.base);
++  console.log('     ── diferencia con el caso A: ' + (B.profit-A.profit).toFixed(2) +
++              ' € y ' + (B.margin-A.margin).toFixed(2) + ' puntos');
++
++  /* =====================================================================
++     IVA-C · LA INVERSIÓN: informes mixtos entre dos mercados
++     =====================================================================
++     Es el caso realista: el informe de un marketplace trae la columna y el de
++     otro no. Mismo negocio real en los dos, 100 unidades a 100 € netos.
++
++       ESPAÑA, IVA 21 %, SIN columna:
++         bruto 12.100 · «neto» 12.100 · comisión 1.815 · FBA 304,50 · coste 500
++         beneficio 9.480,50 · margen 78,35 %
++
++       ALEMANIA, IVA 19 %, CON columna:
++         bruto 11.900 · neto 10.000 · comisión 1.785 · FBA 304,50 · coste 500
++         beneficio 7.410,50 · margen 74,11 %
++
++     Verdad del negocio: los dos ganan lo mismo antes de comisión, pero Amazon
++     cobra la comisión sobre el precio CON IVA, así que el país de IVA más alto
++     es genuinamente el peor. ALEMANIA GANA por 0,30 puntos (74,11 vs 73,81).
++
++     Lo que enseña el hub: España 78,35 % contra Alemania 74,11 %. España gana
++     por 4,24 puntos. El orden está invertido y la distancia es catorce veces
++     la real. Es exactamente la decisión para la que existe el comparador
++     PanEU.                                                                 */
++  console.log('\n=== IVA-C · INFORMES MIXTOS: EL ORDEN ENTRE PAÍSES SE MANTIENE ===');
++  const C = await page.evaluate(js(`
++    const mk = (pais,vat,conIva)=>{
++      DB.imports.orders = {rows:[venta(dia(5),100,{pais:pais, vat:vat, conIva:conIva})], count:1, file:'o'};
++      periodDays = 30; country = pais;
++      const p = pnl();
++      return {net:p.net, profit:p.profit, margin:p.margin};
++    };
++    const esSin  = mk('ES',21,false);
++    const deCon  = mk('DE',19,true);
++    const esCon  = mk('ES',21,true);
++    country = 'ALL';
++    return {esSin, deCon, esCon};
++  `));
++  console.log('     España  sin columna → margen ' + (C.esSin.margin||0).toFixed(2) + ' %');
++  console.log('     Alemania con columna → margen ' + (C.deCon.margin||0).toFixed(2) + ' %');
++  console.log('     España  con columna → margen ' + (C.esCon.margin||0).toFixed(2) + ' %  (la verdad)');
++  check('con la columna, Alemania sale mejor que España, que es la realidad',
++        C.deCon.margin > C.esCon.margin,
++        'DE ' + (C.deCon.margin||0).toFixed(2) + ' % vs ES ' + (C.esCon.margin||0).toFixed(2) + ' %');
++  check('sigue saliendo mejor Alemania aunque el informe de España venga sin columna',
++        C.deCon.margin > C.esSin.margin,
++        'DE ' + (C.deCon.margin||0).toFixed(2) + ' % vs ES ' + (C.esSin.margin||0).toFixed(2) + ' %');
++
++  /* =====================================================================
++     IVA-D · EL SESGO NO ERA CONSTANTE, ASÍ QUE NO SE PODÍA IGNORAR
++     =====================================================================
++     Alguien podría decir: «si a todos les falta la columna, el error es el
++     mismo y la comparación sigue valiendo». No es cierto, porque el sesgo
++     depende del tipo de IVA de cada país.
++
++       ES (21 %): 78,35 % frente a 73,81 % reales → +4,54 puntos
++       DE (19 %): 78,24 % frente a 74,11 % reales → +4,13 puntos
++       SE (25 %): 78,55 % frente a 73,23 % reales → +5,32 puntos
++
++     Con la columna, Suecia es el peor de los tres. Sin ella salía el MEJOR:
++     el sesgo premiaba justamente al país que peor está. Con taxBasis() los
++     dos órdenes coinciden, que es la única forma de que el comparador PanEU
++     sirva para decidir.                                                    */
++  console.log('\n=== IVA-D · SIN COLUMNA EN NINGUNO: EL SESGO YA NO PREMIA AL PEOR PAÍS ===');
++  const D = await page.evaluate(js(`
++    const mk = (pais,vat,conIva)=>{
++      DB.imports.orders = {rows:[venta(dia(5),100,{pais:pais, vat:vat, conIva:conIva})], count:1, file:'o'};
++      periodDays = 30; country = pais;
++      return pnl().margin;
++    };
++    const r = {
++      esCon:mk('ES',21,true),  esSin:mk('ES',21,false),
++      deCon:mk('DE',19,true),  deSin:mk('DE',19,false),
++      seCon:mk('SE',25,true),  seSin:mk('SE',25,false)
++    };
++    country = 'ALL';
++    return r;
++  `));
++  const ord = o => Object.entries(o).sort((a,b)=>b[1]-a[1]).map(x=>x[0]).join(' > ');
++  const conCol = {ES:D.esCon, DE:D.deCon, SE:D.seCon};
++  const sinCol = {ES:D.esSin, DE:D.deSin, SE:D.seSin};
++  console.log('     con columna → ' + ord(conCol) + '   (' + Object.values(conCol).map(v=>(v||0).toFixed(2)).join(' / ') + ')');
++  console.log('     sin columna → ' + ord(sinCol) + '   (' + Object.values(sinCol).map(v=>(v||0).toFixed(2)).join(' / ') + ')');
++  check('con la columna, Suecia (IVA 25 %) es el peor de los tres',
++        D.seCon < D.esCon && D.seCon < D.deCon, (D.seCon||0).toFixed(2) + ' %');
++  check('sigue siendo el peor sin la columna (antes salía el mejor)',
++        D.seSin < D.esSin && D.seSin < D.deSin, (D.seSin||0).toFixed(2) + ' %');
++  check('el orden es el mismo con y sin columna', ord(conCol) === ord(sinCol),
++        '«' + ord(conCol) + '» frente a «' + ord(sinCol) + '»');
++
++  console.log('\nERRORES JS: ' + errors.length);
++  errors.forEach(e => console.log('   ' + e));
++  await browser.close();
++  console.log(fails ? '\n######## ' + fails + ' fallos ########'
++                    : '\n✓ todo correcto');
++  process.exit(fails ? 1 : 0);
++})();
+-- 
+2.43.0
+
+
+From 898e8533be4d6bdd6260507c1a5130286e974841 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 19 Aug 2026 11:45:44 +0000
+Subject: [PATCH 2/5] La caja regalaba stock, la publicidad no se prorrateaba y
+ las devoluciones no tenian pais
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cuatro numeros creibles y falsos, los que mas dinero mueven de los que
+quedaban en pie despues del merge.
+
+CAJA · unidsEnCurso daba credito de dias a cualquier pedido que no estuviera
+cerrado. Un pedido RECIBIDO ya esta en la estanteria y su coste ya viajo al
+lote: contarlo otra vez es contarlo dos veces. Un BORRADOR no es un pedido. Y
+600 unidades de un SKU no reponen las ventas de otro. Medido: la salida de 90
+dias pasaba de 36.000 a 12.000 EUR con un pedido recibido de otro producto.
+El propio fichero ya excluia `received` en `enCamino` con un comentario que lo
+explica; esta linea se habia quedado fuera de su propia convencion.
+
+PUBLICIDAD · si el informe de terminos de busqueda no trae su rango de fechas,
+el prorrateo es imposible y el gasto entero se cargaba al periodo que miraras,
+de una semana o de un ano. Era mudo por partida doble: el aviso vivia detras de
+`adDays>0` y la etiqueta decia «estimado a diario», que describe otro camino.
+Ahora hay `ppcSource` con cuatro estados, aviso propio, y el margen deja de
+estar medido.
+
+DEVOLUCIONES · el informe no trae pais, asi que con el desplegable en Espana se
+restaban las devoluciones de los nueve mercados contra las ventas de uno. Se
+reparten por la cuota de ventas del SKU en ese mercado y la pantalla dice que
+es un reparto. Ademas se separan las unidades imputadas de las contadas: las de
+referencias sin ventas en el periodo no se pueden valorar y ya no inflan el
+rotulo.
+
+COMISION REINTEGRADA · la venta se cobraba al tipo del informe de tarifas y la
+devolucion reintegraba al 15 % por defecto. Con una categoria al 8 %, cada
+devolucion devolvia un 15 % que nunca se pago. Una sola funcion `refPctOf` para
+los dos sitios; dos copias de la misma regla siempre divergen.
+
+Pruebas: CAJA-G (36.000 vs 12.000 y los tres casos falsos), PNL-P (mismo gasto
+a 30 y a 365 dias, etiquetado) y PNL-Q (800 EUR de comision, 64 EUR de
+reintegro), con la aritmetica a mano en el comentario.
+
+test:all 353 comprobaciones, exit 0, sin regresiones.
+---
+ src/12-datos.js    | 109 +++++++++++++++++++++++++++++++++++++++------
+ src/13-render.js   |  23 ++++++++--
+ tests/caja.test.js |  50 +++++++++++++++++++++
+ tests/pnl.test.js  |  67 ++++++++++++++++++++++++++++
+ 4 files changed, 231 insertions(+), 18 deletions(-)
+
+diff --git a/src/12-datos.js b/src/12-datos.js
+index bd16430..6910636 100644
+--- a/src/12-datos.js
++++ b/src/12-datos.js
+@@ -798,6 +798,17 @@ function adStats(){
+   });
+   const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
+   const factor = adDays ? daysInPeriod()/adDays : 1;
++  /* Y si el informe NO trae su rango, el prorrateo no se puede hacer: `factor`
++     se queda en 1 y el gasto entero se carga al periodo que estés mirando, sea
++     cual sea. Es el fallo original entero, sobreviviendo por la puerta de
++     atrás. Mirando 7 días sobra gasto —conservador—, pero mirando un año
++     falta, y ahí el beneficio se infla sin que nada chirríe: el aviso de
++     solape estaba detrás de `adDays>0`, así que no aparecía, y la etiqueta
++     que se pintaba era «estimado a diario», que describe otro camino distinto
++     del código.
++
++     No se puede inventar la duración. Lo que sí se puede es no callarla. */
++  const spanUnknown = spend>0 && !(d0&&d1);
+   /* Cuánto del periodo cubre de verdad ese informe. Prorratear un informe de
+      junio sobre el mes de agosto da un número utilizable —mejor que cero, que
+      inflaría el margen— pero no es una medición de agosto, y la diferencia
+@@ -808,7 +819,7 @@ function adStats(){
+     const a = d0>pi ? d0 : pi, b = d1<pf ? d1 : pf;
+     solape = Math.max(0, daysBetween(a,b)+1);
+   }
+-  return {spend: spend*factor, spendBruto: spend, adDays, factor,
++  return {spend: spend*factor, spendBruto: spend, adDays, factor, spanUnknown,
+           desde:d0, hasta:d1, solape,
+           solapePct: daysInPeriod()>0 ? Math.min(100, solape/daysInPeriod()*100) : 0,
+           sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
+@@ -895,11 +906,12 @@ function pnl(){
+      Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
+      columnas de tarifa no reconocemos salían 0 € de comisión sellados como
+      «medido», y el beneficio subía un 23 %. */
++  const ads = adStats();
+   /* Y no basta con que la liquidación se entienda: si la BASE de ingreso está
+      deducida en vez de leída, el margen que sale encima no está medido por
+      mucho que las comisiones sí lo estén. La etiqueta la fija el eslabón más
+      débil, no el más fuerte. */
+-  const measured = sf.matched>0 && tb.known;
++  const measured = sf.matched>0 && tb.known && !ads.spanUnknown;
+   let referral, fba, storage, otherFee, feeCoverPct;
+   let ship=0, fbmUnits=0, fbaUnits=0;
+   S.forEach(r=>{
+@@ -928,15 +940,27 @@ function pnl(){
+     tarifas[sk] = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
+   });
+   let udsConTarifa=0;
++  /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el 15 %
++     por defecto. El 15 % es el último recurso, no el primero.
++
++     Vive aquí, en UNA función, porque lo usan dos sitios: la comisión que se
++     cobra en la venta y la que Amazon reintegra en la devolución. Estaban
++     duplicados y el de las devoluciones se saltaba el informe de tarifas, así
++     que cobraba la venta al tipo real y reintegraba al 15 %. Con una categoría
++     al 8 %, cada devolución te devolvía un 15 % que nunca pagaste. Dos copias
++     de la misma regla siempre acaban divergiendo; es la misma lección que
++     `iso()`. */
++  const refPctOf = k => {
++    const p = pm[k], t = tarifas[k];
++    return (t && t.pct>0) ? t.pct
++         : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
++  };
+   const estFees = rows => {
+     let ref=0, f=0;
+     rows.forEach(r=>{
+       const k = String(r.sku).toLowerCase();
+       const p = pm[k], t = tarifas[k];
+-      /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el
+-         15 % por defecto. El 15 % es el último recurso, no el primero. */
+-      const pct = (t && t.pct>0) ? t.pct
+-                : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
++      const pct = refPctOf(k);
+       if(t && t.pct>0) udsConTarifa += r.qty;
+       ref += r.revenue*pct;
+       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
+@@ -970,8 +994,15 @@ function pnl(){
+     referral = est.referral; fba = est.fba; storage = 0; otherFee = 0;
+     feeCoverPct = 0;
+   }
+-  const ads = adStats();
+   const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
++  /* De dónde sale ese gasto, que no es lo mismo y la pantalla lo tenía todo
++     bajo la misma etiqueta:
++       informe            · con su rango, prorrateado a los días del periodo
++       informe-sin-fechas · el informe no dice qué periodo cubre: NO prorrateado
++       diario             · no hay informe, se usa el gasto diario de ajustes
++       ninguno            · no hay ni informe ni gasto diario: publicidad = 0 */
++  const ppcSource = ads.spend>0 ? (ads.spanUnknown ? 'informe-sin-fechas' : 'informe')
++                  : (ppc>0 ? 'diario' : 'ninguno');
+   const retRows = imp('returns').filter(r=>{ const d=parseDate(gv(r,'_date','returndate')); return d && d>=periodStart(); });
+   const retUnits = retRows.reduce((a,r)=>a+(toNum(gv(r,'_qty','quantity'))||1),0);
+   const reimb = imp('reimb').filter(r=>{const d=parseDate(r.approvaldate); return d&&d>=periodStart();})
+@@ -997,21 +1028,44 @@ function pnl(){
+   S.forEach(r=>{ const k=String(r.sku).toLowerCase();
+     if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0};
+     ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty; });
++
++  /* El informe de devoluciones NO trae país. Con el desplegable en España se
++     estaban restando las devoluciones de los nueve mercados contra las ventas
++     de uno: el país que miras carga con lo que devuelven todos. La pantalla ya
++     avisa de este mismo defecto para la publicidad y en devoluciones callaba.
++
++     No se puede saber de qué mercado vino cada devolución, pero sí en qué
++     proporción vende ese SKU en el mercado que estás mirando. Se reparte por
++     esa proporción y se dice que es un reparto, no una medición. Con el
++     filtro en «todos» la proporción es 1 y no cambia nada. */
++  const cuotaPais = {};
++  if(countryFilter !== 'ALL'){
++    const todo = {};
++    salesRows({country:'ALL'}).forEach(r=>{ const k=String(r.sku).toLowerCase();
++      todo[k] = (todo[k]||0) + r.qty; });
++    Object.keys(ventaSku).forEach(k=>{
++      cuotaPais[k] = todo[k]>0 ? ventaSku[k].units/todo[k] : 1; });
++  }
++  const cuotaDe = k => countryFilter==='ALL' ? 1 : (cuotaPais[k]!=null ? cuotaPais[k] : 1);
+   /* `cost.bySku` viene con el SKU tal cual lo escribe el informe; aquí se
+      compara en minúsculas, así que hace falta el índice. */
+   const costeSku = {};
+   Object.keys(cost.bySku||{}).forEach(k=>{ costeSku[k.toLowerCase()] = cost.bySku[k]; });
+   let retIngreso=0, retComision=0, retCoste=0, retVendibles=0, retSinEstado=0;
++  /* Unidades que se cuentan pero NO se cobran, porque su SKU no vendió en el
++     periodo. Antes el rótulo decía «N ud» sobre un importe de menos unidades. */
++  let retDescartadas=0, retImputadas=0;
+   retRows.forEach(r=>{
+     const k = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase();
+-    const q = toNum(gv(r,'_qty','quantity'))||1;
++    const qBruto = toNum(gv(r,'_qty','quantity'))||1;
+     const v = ventaSku[k];
+-    if(!v || !v.units) return;                 // no sé a qué venta corresponde
++    if(!v || !v.units){ retDescartadas += qBruto; return; }  // no sé a qué venta corresponde
++    const q = qBruto * cuotaDe(k);
+     const p = pm[k];
+     const netUd   = (v.rev - v.tax)/v.units;
+     const grossUd = v.rev/v.units;
+-    const pct = p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15;
+-    const comUd = grossUd*pct;
++    const comUd = grossUd*refPctOf(k);
++    retImputadas += q;
+     retIngreso  += q*netUd;
+     retComision += q*(comUd - Math.min(5, 0.20*comUd));
+     const disp = String(gv(r,'_disp','detaileddisposition','disposicion','estado')||'').trim().toLowerCase();
+@@ -1028,9 +1082,11 @@ function pnl(){
+   return {
+     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
++    ppcSource, adSpanUnknown: ads.spanUnknown,
+     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
+     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
++    retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
+     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
+     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
+     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
+@@ -1231,11 +1287,36 @@ function cashProjection(){
+ 
+      Para no cobrarlo dos veces, la mercancía que ya has pedido y aún no ha
+      llegado cubre sus días: durante esos días no se carga reposición, porque
+-     ya la estás pagando en los vencimientos del pedido. */
++     ya la estás pagando en los vencimientos del pedido.
++
++     Dos cosas que este filtro daba por buenas y no lo son:
++
++     · Un pedido RECIBIDO ya no está en camino, está en la estantería, y su
++       coste ya viajó al lote y de ahí al coste de ventas. Contarlo otra vez
++       como «mercancía que cubre días futuros» es contarlo dos veces. Medido:
++       un pedido recibido y pagado de 600 unidades de OTRO SKU regalaba 60 días
++       sin cargo de reposición y dejaba la caja final en 70.250 € en vez de
++       46.250 €. Veinticuatro mil euros en la curva que decide si pides
++       financiación. El resto del fichero ya excluye `received` por este mismo
++       motivo (ver `enCamino`): esta línea era la que se había quedado fuera de
++       la convención.
++
++     · Un BORRADOR no es un pedido. No lo has enviado, el proveedor no lo ha
++       visto y no hay nada viajando. Cubrir días con él es cubrirlos con una
++       intención.
++
++     Y el crédito es POR SKU, no entre SKU: 600 unidades de un producto no
++     reponen las ventas de otro. Se cuenta solo lo pedido de los SKU que de
++     verdad se están vendiendo en el periodo. */
+   const dayUnits    = P.units/daysInPeriod();
+   const dayCogsFlow = P.cogs/daysInPeriod();
+-  const unidsEnCurso = DB.pos.filter(po=>po.status!=='closed')
+-                             .reduce((a,po)=>a+poUnits(po), 0);
++  const skusVendidos = {};
++  salesRows().forEach(r=>{ if(r.sku) skusVendidos[String(r.sku).toLowerCase()] = 1; });
++  const unidsEnCurso = DB.pos
++    .filter(po => po.status!=='closed' && po.status!=='received' && po.status!=='draft')
++    .reduce((a,po) => a + (po.items||[])
++      .filter(i => skusVendidos[String(i.sku).toLowerCase()])
++      .reduce((b,i) => b + toNum(i.qty), 0), 0);
+   const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
+ 
+   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
+diff --git a/src/13-render.js b/src/13-render.js
+index b717c30..a1d8c0a 100644
+--- a/src/13-render.js
++++ b/src/13-render.js
+@@ -449,14 +449,18 @@ function renderRent(){
+     line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
+     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
+     (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
+-        num(P.retUnits)+' ud · ingreso devuelto menos comisión reintegrada'+
++        num(P.retImputadas,1)+' ud imputadas de '+num(P.retUnits)+
++        (P.retRepartidas?' · repartidas por la cuota de ventas de este mercado':'')+
++        ' · ingreso devuelto menos comisión reintegrada'+
+         (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
+     line('Almacenaje',P.storage,'',true)+
+     line('Otras tarifas',P.otherFee,'',true)+
+     line('Coste de producto',P.cogs,'',true)+
+-    line('Publicidad',P.ppc, P.adDays
+-        ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
+-        : (P.ppc>0?'estimado a diario':''), true)+
++    line('Publicidad',P.ppc,
++        P.ppcSource==='informe' ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
++      : P.ppcSource==='informe-sin-fechas' ? 'el informe no dice qué periodo cubre · cargado ENTERO, sin prorratear'
++      : P.ppcSource==='diario' ? 'estimado a diario'
++      : '', true)+
+     line('Gastos fijos',P.fixed,'prorrateados',true)+
+     line('Reembolsos recuperados',P.reimb)+
+     '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
+@@ -495,6 +499,13 @@ function renderRent(){
+        propio rango. Cargar su gasto entero contra cualquier periodo hacía que
+        el margen fuese de −58,6 % a 30 días y de −13,6 % con «Todo», con las
+        mismas ventas todos los días. Se prorratea, y se dice que se prorratea. */
++    /* El aviso de solape vivía detrás de `adDays>0`, así que el caso peor —el
++       informe que no dice qué periodo cubre— era justo el único mudo. */
++    if(P.adSpanUnknown)
++      v+='<br><br><strong>El informe de publicidad no trae su rango de fechas</strong>, así que no se puede '+
++         'prorratear: los '+fmt(P.ppc,0)+' de gasto se están cargando ENTEROS al periodo que estés mirando, '+
++         'sea de una semana o de un año. Mirando un periodo largo, el beneficio que ves está por encima del real. '+
++         'Descarga el informe de términos de búsqueda con las columnas de fecha de inicio y fin.';
+     if(P.adDays>0 && Math.round(P.adSolapePct)<100)
+       v+='<br><br>El informe de publicidad cubre '+num(P.adDays)+' días'+
+          (P.adDesde?' ('+P.adDesde.toLocaleDateString('es-ES')+' a '+P.adHasta.toLocaleDateString('es-ES')+')':'')+
+@@ -503,6 +514,10 @@ function renderRent(){
+          (Math.round(P.adSolapePct)===0 ? 'Con cero solape, descárgate el informe del periodo que quieres analizar antes de fiarte del TACOS.' : '');
+     if(P.retUnits>0){
+       v+='<br><br>Las '+num(P.retUnits)+' devoluciones del periodo cuestan '+fmt(P.returnsCost,0)+': se devuelve el ingreso, Amazon reintegra la comisión menos la tasa de gestión del reembolso, y la tarifa de logística no vuelve.';
++      if(P.retDescartadas>0)
++        v+=' De ellas, '+num(P.retDescartadas)+' son de referencias que no han vendido nada en este periodo, así que no se les puede poner precio y no se cobran: el coste real de las devoluciones es mayor que este.';
++      if(P.retRepartidas)
++        v+=' <strong>El informe de devoluciones no trae país.</strong> Estás mirando un solo mercado, así que las devoluciones se reparten por la cuota de ventas de ese mercado en cada referencia. Es un reparto, no una medición: si este país devuelve más o menos que la media, el número se desvía.';
+       if(P.retSinEstado>0)
+         v+=' De ellas, '+num(P.retSinEstado)+' vienen sin estado en el informe, así que doy por perdido su coste de producto: si volvieron vendibles, tu beneficio real es algo mayor que este.';
+       v+=' <span class="mut">No está incluida la tasa de procesamiento de devolución, que depende de la categoría y del porcentaje de devoluciones de cada referencia: si Amazon te la cobra, tu beneficio es menor que este.</span>';
+diff --git a/tests/caja.test.js b/tests/caja.test.js
+index 6e8d338..1d6b9a6 100644
+--- a/tests/caja.test.js
++++ b/tests/caja.test.js
+@@ -171,6 +171,56 @@ const js = body => '(()=>{' + LAB + body + '})()';
+   check('y sigue diciendo que faltan pedidos y gastos, sin tapar el aviso',
+     aviso.sigueDiciendoQueFaltanDatos===true, 'las dos cosas caben');
+ 
++  console.log('\n=== CAJA-G · LO QUE CUBRE DÍAS ES LO QUE VIENE EN CAMINO, NO CUALQUIER PEDIDO ===');
++  /* La curva descuenta reposición salvo los días que ya cubre mercancía
++     pedida. Ese crédito solo vale para lo que de verdad está viajando.
++
++     Aritmética del caso, con el laboratorio (10 ud/día, 40 €/ud de coste):
++       coste de reposición = 10 × 40                    =    400,00 €/día
++       en 90 días sin ningún crédito                    = 36.000,00 €
++
++     Un pedido de 600 unidades daría 600/10 = 60 días de crédito, y la salida
++     bajaría a 30 × 400 = 12.000 €. Diferencia: 24.000 €.
++
++     Ese crédito NO debe darse cuando:
++       · el pedido ya está RECIBIDO — está en la estantería, su coste ya viajó
++         al lote y al coste de ventas; contarlo otra vez es contarlo dos veces;
++       · el pedido es un BORRADOR — no lo has enviado, no hay nada viajando;
++       · el pedido es de OTRO SKU — 600 unidades de un producto no reponen las
++         ventas de otro.                                                      */
++  const credito = await page.evaluate(js(`
++    /* Solo la reposición, sin los vencimientos del propio pedido: lo que se
++       compara es el crédito de días, no el desembolso. */
++    const salida = () => { const c = cashProjection();
++      return c.reduce((a,d)=>a+((d.outflow||0)-(d.po||0)), 0); };
++    const po = (status, sku, qty) => { DB.pos = [{id:'p1', supplier:'S', status:status,
++      eta:'', items:[{sku:sku, qty:qty, unitCost:40}], payments:[]}]; return salida(); };
++    DB.pos = []; DB.expenses = [];
++    const sinPedido   = salida();
++    const enTransito  = po('transit',  'TEST-1', 600);
++    const recibido    = po('received', 'TEST-1', 600);
++    const borrador    = po('draft',    'TEST-1', 600);
++    const otroSku     = po('transit',  'OTRO',   600);
++    DB.pos = [];
++    return {sinPedido, enTransito, recibido, borrador, otroSku};
++  `));
++  console.log('     sin pedido ' + credito.sinPedido.toFixed(0) + ' €  ·  en tránsito ' +
++              credito.enTransito.toFixed(0) + ' €  ·  recibido ' + credito.recibido.toFixed(0) +
++              ' €  ·  borrador ' + credito.borrador.toFixed(0) + ' €  ·  otro SKU ' +
++              credito.otroSku.toFixed(0) + ' €');
++  check('un pedido en tránsito SÍ cubre días y baja la salida',
++        credito.enTransito < credito.sinPedido - 1000,
++        credito.enTransito.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
++  check('un pedido ya RECIBIDO no vuelve a cubrir días',
++        near(credito.recibido, credito.sinPedido, 1),
++        credito.recibido.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
++  check('un BORRADOR no cubre días',
++        near(credito.borrador, credito.sinPedido, 1),
++        credito.borrador.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
++  check('un pedido de OTRO SKU no repone las ventas de este',
++        near(credito.otroSku, credito.sinPedido, 1),
++        credito.otroSku.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
++
+   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
+   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
+   await browser.close();
+diff --git a/tests/pnl.test.js b/tests/pnl.test.js
+index 6727a85..ed38fe2 100644
+--- a/tests/pnl.test.js
++++ b/tests/pnl.test.js
+@@ -428,6 +428,73 @@ const js = body => '(()=>{' + LAB + body + '})()';
+     near(dev.vendCoste, 830) && dev.vendUd===10,
+     dev.vendCoste.toFixed(2)+' € = 880 − 10 × 5,00 de coste recuperado');
+ 
++  console.log('\n=== PNL-P · UN INFORME DE PUBLICIDAD SIN FECHAS NO SE PUEDE PRORRATEAR ===');
++  /* El informe de términos de búsqueda trae su propio rango en «Start Date» y
++     «End Date», y el gasto se prorratea a los días del periodo. Si NO trae ese
++     rango, el prorrateo es imposible y el gasto entero se cargaba al periodo
++     que estuvieras mirando, fuera de una semana o de un año.
++
++     Mirando poco sobra gasto, que es conservador. Mirando mucho FALTA, y ahí
++     el beneficio se infla. Y era mudo por partida doble: el aviso de solape
++     vivía detrás de `adDays>0` y la etiqueta decía «estimado a diario», que
++     describe otro camino distinto del código.
++
++     Aritmética: 1.200 € de gasto declarado, sin fechas.
++       a 30 días  → 1.200 €      (no hay nada que prorratear)
++       a 365 días → 1.200 €      ← el mismo gasto para doce veces más ventas
++     Lo que se exige aquí no es un número distinto —no se puede inventar la
++     duración— sino que el hub DIGA que no la sabe y deje de llamarlo medido. */
++  const sinFechas = await page.evaluate(js(`
++    DB.imports.orders = {rows:[venta(dia(5),100)], count:1, file:'o'};
++    DB.imports.searchterm = {count:1, file:'st', rows:[
++      {customersearchterm:'pulsera', campaignname:'C1', spend:'1200', sales:'3000',
++       orders:'20', clicks:'400', impressions:'9000'}
++    ]};
++    periodDays = 30;  const a = pnl();
++    periodDays = 365; const b = pnl();
++    periodDays = 30;
++    return {ppc30:a.ppc, ppc365:b.ppc, src:a.ppcSource, span:a.adSpanUnknown, med:a.measured};
++  `));
++  check('el gasto no se prorratea, porque no hay con qué',
++    near(sinFechas.ppc30, 1200, 1) && near(sinFechas.ppc365, 1200, 1),
++    sinFechas.ppc30.toFixed(0)+' € a 30 días y '+sinFechas.ppc365.toFixed(0)+' € a 365');
++  check('pero el hub dice que no sabe qué periodo cubre',
++    sinFechas.span===true && sinFechas.src==='informe-sin-fechas',
++    sinFechas.src);
++  check('y por eso el margen deja de estar medido', sinFechas.med===false, 'measured='+sinFechas.med);
++
++  console.log('\n=== PNL-Q · LA COMISIÓN QUE SE REINTEGRA ES LA QUE SE COBRÓ ===');
++  /* La venta se carga con el tipo del informe de vista previa de tarifas
++     cuando lo hay. La devolución reintegraba con el tipo del producto o con el
++     15 % por defecto, saltándose ese informe. Con una categoría al 8 %, cada
++     devolución devolvía un 15 % que nunca se pagó.
++
++     Aritmética: 100 uds a 100 €, tarifa real del 8 %, 10 devoluciones.
++       comisión cobrada en la venta  = 10.000 × 0,08          = 800,00 €
++       por unidad devuelta           = 100 × 0,08             =   8,00 €
++       tasa de gestión               = mín(5 €, 20 % de 8) = 1,60 €
++       reintegro por unidad          = 8,00 − 1,60            =   6,40 €
++       reintegro de 10 unidades                               =  64,00 €
++     Con el 15 %: 15 − mín(5, 3) = 12 €/ud → 120 €. 56 € de más, inventados. */
++  const reint = await page.evaluate(js(`
++    DB.imports.orders = {rows:[venta(dia(10),100)], count:1, file:'o'};
++    DB.imports.fees = {count:1, file:'f', rows:[
++      {sku:'TEST-1', yourprice:'100', estimatedreferralfeeperunit:'8',
++       expectedfulfillmentfeeperunit:'3.00'}
++    ]};
++    DB.imports.returns = {count:1, file:'r', rows:[
++      {orderid:'o1', returndate:dia(5), sku:'TEST-1', quantity:'10', detaileddisposition:''}
++    ]};
++    periodDays = 30;
++    const p = pnl();
++    return {ref:p.referral, retCom:p.retComision, retIng:p.retIngreso, cost:p.returnsCost};
++  `));
++  console.log('     comisión de la venta ' + reint.ref.toFixed(2) +
++              ' €  ·  reintegro de las 10 devoluciones ' + reint.retCom.toFixed(2) + ' €');
++  check('la venta se cobra al 8 % del informe de tarifas', near(reint.ref, 800, 1), reint.ref.toFixed(2)+' €');
++  check('y la devolución reintegra 64 €, no 120 €', near(reint.retCom, 64, 1),
++    reint.retCom.toFixed(2)+' € = 10 × (8,00 − 1,60)');
++
+   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
+   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
+   await browser.close();
+-- 
+2.43.0
+
+
+From 0104b94757a794ca9a4bb11ecb509738a62b4a49 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 19 Aug 2026 11:54:19 +0000
+Subject: [PATCH 3/5] =?UTF-8?q?=C2=ABMedido=C2=BB=20era=20una=20etiqueta?=
+ =?UTF-8?q?=20que=20se=20regalaba=20de=20tres=20formas=20distintas?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ninguno de los tres es un fallo de aritmetica. Son de rotulo, que es peor: el
+numero equivocado se corrige, pero la etiqueta de maxima confianza es la que
+hace que alguien se lo crea y decida con el.
+
+PANEL · `P.measured` solo dice «hay al menos una linea de liquidacion que
+entiendo», no cuanto cubre. Con 90 dias de ventas y una liquidacion de 14
+—cobertura 15,6 %— Rentabilidad decia «comisiones 16 % reales» y el Panel, que
+es la pantalla que mas se mira, ponia «medido» a secas. Ahora dice «medido al
+16 %».
+
+REDONDEO · una cobertura del 99,97 % se redondeaba a 100 y la insignia saltaba
+a «medido». El redondeo es para ensenar, no para decidir: `covFull` compara sin
+redondear, y al ensenar se trunca en 99 para que «100 %» solo aparezca cuando
+de verdad lo es.
+
+TARIFA FBA · la salvedad «estimadas con recargo 1,5 %» colgaba de la cobertura
+de COMISION. Una liquidacion que cubria el periodo entero con solo lineas de
+comision presentaba como medida una tarifa FBA integramente estimada. Son dos
+conceptos distintos y ahora se dicen por separado: `refMedido` y `fbaMedido`.
+
+La insignia de Rentabilidad exige ademas base de IVA leida y publicidad con
+duracion conocida, por lo mismo: la etiqueta la fija el eslabon mas debil.
+
+Pruebas PNL-R, con los tres casos construidos a proposito: 15,6 % de cobertura
+por dias, 99,97 % por importe (9.997 EUR dentro de la ventana y 3 EUR fuera) y
+liquidacion sin lineas de FBA.
+
+test:all 358 comprobaciones, exit 0, sin regresiones.
+---
+ src/12-datos.js   |  9 ++++-
+ src/13-render.js  | 27 +++++++++++----
+ tests/pnl.test.js | 86 +++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 115 insertions(+), 7 deletions(-)
+
+diff --git a/src/12-datos.js b/src/12-datos.js
+index 6910636..d8f5729 100644
+--- a/src/12-datos.js
++++ b/src/12-datos.js
+@@ -913,6 +913,12 @@ function pnl(){
+      débil, no el más fuerte. */
+   const measured = sf.matched>0 && tb.known && !ads.spanUnknown;
+   let referral, fba, storage, otherFee, feeCoverPct;
++  /* Qué conceptos vienen de verdad de la liquidación. La salvedad de la tarifa
++     FBA colgaba de la cobertura de COMISIÓN, así que una liquidación que
++     cubría el periodo entero con solo líneas de comisión presentaba como
++     medida una tarifa FBA íntegramente estimada. Son cosas distintas y ahora
++     se dicen por separado. */
++  let refMedido = false, fbaMedido = false;
+   let ship=0, fbmUnits=0, fbaUnits=0;
+   S.forEach(r=>{
+     const p=pm[String(r.sku).toLowerCase()];
+@@ -983,7 +989,7 @@ function pnl(){
+        detrás no es una medición de cero: es que ese concepto no venía en el
+        fichero. Cobrar 0 € de comisión sobre ventas reales no le pasa a nadie.
+        Se estima esa categoría y se deja de llamarla medida. */
+-    const refMedido = sf.referral>0, fbaMedido = sf.fba>0;
++    refMedido = sf.referral>0; fbaMedido = sf.fba>0;
+     referral = (refMedido ? sf.referral : estDentro.referral) + est.referral;
+     fba      = (fbaMedido ? sf.fba      : estDentro.fba)      + est.fba;
+     storage  = sf.storage; otherFee = sf.other;
+@@ -1083,6 +1089,7 @@ function pnl(){
+     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
+     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
+     ppcSource, adSpanUnknown: ads.spanUnknown,
++    refMedido, fbaMedido,
+     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
+     feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
+     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
+diff --git a/src/13-render.js b/src/13-render.js
+index a1d8c0a..591c448 100644
+--- a/src/13-render.js
++++ b/src/13-render.js
+@@ -143,7 +143,15 @@ function renderPanel(){
+   }
+   document.getElementById('panelFresh').innerHTML = fresh;
+ 
+-  const tag = P.measured ? 'medido' : 'estimado';
++  /* El Panel es la pantalla que más se mira, y era la que peor lo contaba:
++     `P.measured` solo dice «hay al menos una línea casada», no cuánto cubre.
++     Con una liquidación de 14 días contra 90 de ventas —cobertura 15,6 %—
++     Rentabilidad decía «comisiones 16 % reales» y aquí ponía «medido» a secas.
++     La etiqueta la fija el eslabón más débil, igual que en el motor. */
++  const covPFull = (P.feeCoverPct||0) >= 99.995;
++  const covP = covPFull ? 100 : Math.min(99, Math.floor(P.feeCoverPct||0));
++  const tag = (P.measured && covPFull) ? 'medido'
++            : (covP>0 ? 'medido al '+covP+'%' : 'estimado');
+   document.getElementById('panelKpis').innerHTML =
+     kpi('Ventas '+(periodDays?periodDays+' d':'histórico'), fmt(P.grossInc,0), num(P.units)+' unidades','accent')+
+     kpi('Beneficio neto', fmt(P.profit,0), tag+' · '+num(P.units?P.profit/P.units:0,2)+' €/ud', P.profit>0?'pos':'neg')+
+@@ -411,19 +419,26 @@ function renderRent(){
+   /* «Medido» solo cuando la liquidación cubre el periodo entero. Cubriendo una
+      parte, el número es una mezcla y decirlo medido es justo lo que hace que
+      alguien se lo crea sin mirarlo. */
+-  const cov = Math.round(P.feeCoverPct||0);
+-  const badge = cov>=100 ? '<span class="pill go">medido</span>'
++  /* La decisión se toma sobre el valor SIN redondear: con una cobertura del
++     99,97 % el redondeo la subía a 100 y la insignia saltaba a «medido», que
++     es justamente la etiqueta que hace que alguien se crea el número.
++     Y al enseñarlo se trunca en 99, para que «100 %» solo aparezca cuando de
++     verdad lo es: un 100 redondeado dice lo mismo que la insignia que acabamos
++     de quitar. */
++  const covFull = (P.feeCoverPct||0) >= 99.995;
++  const cov = covFull ? 100 : Math.min(99, Math.floor(P.feeCoverPct||0));
++  const badge = (covFull && P.baseQuality==='medida' && !P.adSpanUnknown) ? '<span class="pill go">medido</span>'
+               : cov>0    ? '<span class="pill warn">'+cov+'% medido</span>'
+               :            '<span class="pill warn">estimado</span>';
+   /* El tipo efectivo se enseña calculado, no como una constante: la comisión
+      sale del % de cada producto y el catálogo puede mezclar categorías. */
+   const tipoEf = P.grossInc>0 ? num(P.referral/P.grossInc*100,1)+'%' : '—';
+-  const cobTxt = cov>=100 ? 'de la liquidación'
++  const cobTxt = covFull ? 'de la liquidación'
+                : cov>0    ? cov+'% de la liquidación · el resto estimado al '+tipoEf
+                :            'estimada al '+tipoEf+' · el % de cada producto';
+   document.getElementById('pnlKpis').innerHTML =
+     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
+-    kpi('Beneficio', fmt(P.profit,0), cov>=100?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
++    kpi('Beneficio', fmt(P.profit,0), covFull?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
+     kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
+         P.margin===null ? 'sin ingreso en el periodo'
+         : (P.baseQuality==='medida' ? 'sobre ingreso sin IVA'
+@@ -446,7 +461,7 @@ function renderRent(){
+     line('IVA repercutido',P.tax,'',true)+
+     '<tr class="tot"><td class="name">Ingreso neto</td><td class="num">'+fmt(P.net,0)+'</td></tr>'+
+     line('Comisión de Amazon',P.referral,cobTxt,true)+
+-    line('Tarifas FBA',P.fba,cov>=100?'':'estimadas con recargo 1,5%',true)+
++    line('Tarifas FBA',P.fba,(P.fbaMedido && covFull)?'':'estimadas con recargo 1,5%',true)+
+     (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
+     (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
+         num(P.retImputadas,1)+' ud imputadas de '+num(P.retUnits)+
+diff --git a/tests/pnl.test.js b/tests/pnl.test.js
+index ed38fe2..b5655d5 100644
+--- a/tests/pnl.test.js
++++ b/tests/pnl.test.js
+@@ -495,6 +495,92 @@ const js = body => '(()=>{' + LAB + body + '})()';
+   check('y la devolución reintegra 64 €, no 120 €', near(reint.retCom, 64, 1),
+     reint.retCom.toFixed(2)+' € = 10 × (8,00 − 1,60)');
+ 
++  console.log('\n=== PNL-R · LA ETIQUETA «MEDIDO» NO SE REGALA ===');
++  /* Tres formas distintas de que un número estimado saliera con la etiqueta de
++     máxima confianza. Las tres son de rótulo, no de aritmética, y son las que
++     hacen que alguien se crea el número.
++
++     R1 · El Panel decía «medido» a secas mientras Rentabilidad, con los mismos
++          datos, decía «comisiones 16 % reales». 90 días de ventas contra una
++          liquidación de 14: cobertura 14/90 = 15,6 %.
++     R2 · Una cobertura del 99,97 % redondeaba a 100 y la insignia saltaba a
++          «medido». El redondeo es para enseñar, no para decidir.
++     R3 · La salvedad de la tarifa FBA colgaba de la cobertura de COMISIÓN, así
++          que una liquidación con solo líneas de comisión presentaba como
++          medida una tarifa FBA íntegramente estimada.                        */
++  const etiq = await page.evaluate(js(`
++    const liq = (desdeK, hastaK, conFba) => {
++      const rows = [
++        {settlementid:'S', transactiontype:'Order', posteddate:dia(hastaK), marketplacename:'Amazon.es',
++         itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-1500.00', sku:'TEST-1'},
++        {settlementid:'S', transactiontype:'Order', posteddate:dia(desdeK), marketplacename:'Amazon.es',
++         itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-0.01', sku:'TEST-1'}
++      ];
++      if(conFba) rows.push({settlementid:'S', transactiontype:'Order', posteddate:dia(hastaK),
++         marketplacename:'Amazon.es', itemrelatedfeetype:'FBAPerUnitFulfillmentFee',
++         itemrelatedfeeamount:'-304.50', sku:'TEST-1'});
++      DB.imports.settlement = {count:rows.length, file:'v1', rows};
++    };
++    const ventas=[]; for(let k=0;k<90;k++) ventas.push(venta(dia(k),1));
++    DB.imports.orders = {rows:ventas, count:90, file:'o'};
++    periodDays = 90;
++    liq(13, 0, true);                       // 14 dias de 90
++    const parcial = pnl();
++    go('panel');
++    const tagPanel = document.getElementById('panelKpis').textContent;
++    liq(89, 0, false);                      // cubre el periodo entero, sin FBA
++    const sinFba = pnl();
++    go('rentabilidad');
++    const txtFba = document.getElementById('pnlTable').textContent;
++    const badge  = document.getElementById('pnlKpis').textContent;
++    return {cobParcial: parcial.feeCoverPct, tagPanel,
++            covSinFba: sinFba.feeCoverPct, fbaMedido: sinFba.fbaMedido,
++            refMedido: sinFba.refMedido, txtFba, badge};
++  `));
++  console.log('     cobertura con liquidación de 14 días sobre 90: ' + etiq.cobParcial.toFixed(1) + ' %');
++  check('R1 · con cobertura parcial el Panel NO dice «medido» a secas',
++    /medido al \d+%|estimado/.test(etiq.tagPanel) && !/·\s*medido\s*·/.test(etiq.tagPanel),
++    etiq.tagPanel.replace(/\s+/g,' ').slice(0,80)+'…');
++  check('R3 · con la liquidación cubriendo todo pero sin líneas de FBA, la comisión sí está medida',
++    etiq.refMedido===true && etiq.covSinFba>99, etiq.covSinFba.toFixed(1)+' % de cobertura');
++  const redondeo = await page.evaluate(js(`
++    /* Cobertura 99,97 % por IMPORTE: la liquidación cubre del día −4 al −2, y
++       dentro de esa ventana cae una venta de 9.997 € mientras 3 € quedan
++       fuera. 9.997/10.000 = 99,97 %. Redondeado son 100; sin redondear, no, y
++       la decisión se toma sin redondear. */
++    DB.imports.orders = {rows:[
++      {amazonorderid:'A', purchasedate:dia(3)+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
++       saleschannel:'Amazon.es', sku:'TEST-1', asin:'B0X', itemstatus:'Shipped',
++       quantity:'9997', itemprice:'9997.00', itemtax:'0', shipcountry:'ES'},
++      {amazonorderid:'B', purchasedate:dia(40)+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
++       saleschannel:'Amazon.es', sku:'TEST-1', asin:'B0X', itemstatus:'Shipped',
++       quantity:'3', itemprice:'3.00', itemtax:'0', shipcountry:'ES'}
++    ], count:2, file:'o'};
++    DB.imports.settlement = {count:2, file:'v1', rows:[
++      {settlementid:'S', transactiontype:'Order', posteddate:dia(2), marketplacename:'Amazon.es',
++       itemrelatedfeetype:'Commission', itemrelatedfeeamount:'-1499.55', sku:'TEST-1'},
++      {settlementid:'S', transactiontype:'Order', posteddate:dia(4), marketplacename:'Amazon.es',
++       itemrelatedfeetype:'FBAPerUnitFulfillmentFee', itemrelatedfeeamount:'-304.50', sku:'TEST-1'}
++    ]};
++    periodDays = 90;
++    const p = pnl();
++    go('rentabilidad');
++    const badge = document.getElementById('pnlBadge') ? document.getElementById('pnlBadge').textContent
++                : document.getElementById('pnlKpis').textContent;
++    return {cov:p.feeCoverPct, badge};
++  `));
++  console.log('     cobertura sin redondear: ' + redondeo.cov.toFixed(4) + ' %  (redondeada: ' +
++              Math.round(redondeo.cov) + ' %)');
++  check('R2 · una cobertura del 99,97 % no es 100',
++    redondeo.cov < 100 && redondeo.cov > 99.9, redondeo.cov.toFixed(4)+' %');
++  check('R2 · y por tanto NO se rotula «medido»',
++    !/\bmedido\b(?!\s*al)/.test(redondeo.badge),
++    redondeo.badge.replace(/\s+/g,' ').slice(0,70)+'…');
++
++  check('R3 · pero la tarifa FBA no, y la pantalla lo dice',
++    etiq.fbaMedido===false && /estimadas con recargo/.test(etiq.txtFba),
++    'fbaMedido='+etiq.fbaMedido);
++
+   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
+   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
+   await browser.close();
+-- 
+2.43.0
+
+
+From 449eaba8e438c0746cf875486a0115b7ec5f92b8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 19 Aug 2026 12:05:26 +0000
+Subject: [PATCH 4/5] Inventario se contradecia consigo mismo, y una copia
+ vacia se llevaba el historico
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+TARIFA Y COMPRA SON DOS PREGUNTAS · `enCamino` entraba en lo que hay que pedir
+pero no en la cobertura ni en el riesgo, asi que una referencia con 900 unidades
+llegando seguia pintada «tarifa bajo inv.» y seguia contando en el KPI «Bajo
+cobertura» mientras la columna de al lado decia que no habia que pedir nada.
+Ahora `cover` es lo que hay EN EL ALMACEN —que es lo que Amazon mira para
+cobrar la tarifa, la mercancia que navega no cuenta— y `coverTransito` cuenta lo
+que viene. El aviso de tarifa se mantiene, porque se va a cobrar igual, pero
+deja de leerse como una orden de compra. Se dice ademas si el pedido llega a
+tiempo, tarde, o sin fecha prevista.
+
+BORRADORES · un pedido en `draft` no esta en ningun barco. Descontarlo de lo que
+hay que pedir es descontar una intencion. Mismo criterio que en la caja.
+
+HISTORICO · se archivaba stock CERO para el SKU que solo viene en el informe
+multipais, guardando a la vez sus 1.400 unidades por pais en el mismo registro.
+En el historico un cero significa rotura, asi que la referencia quedaba en
+rotura permanente y su velocidad real —unidades entre dias CON stock— salia
+inflada: justo el numero que M2 usa para reponer. invStats ya hacia el respaldo;
+captureStock se habia quedado fuera.
+
+RESTAURAR · `{"products":[],"settings":{},"imports":{}}` tiene la forma de una
+copia, asi que pasaba el filtro, borraba el historico y dejaba DB.settings sin
+`cash`, con lo que Tesoreria y el P&L reventaban DESPUES, lejos de donde se
+causo el dano. Ahora se rechaza la copia vacia, el dialogo enseña lo que RECIBES
+ademas de lo que pierdes, y los ajustes que la copia no traiga conservan su
+valor por defecto.
+
+Pruebas INV-I (20 dias de cobertura fisica, 80 contando transito, borrador a
+cero), INV-J (1.400 ud archivadas y ninguna observacion a cero) y SAL-E, que
+ejercita importData de verdad soltando el fichero en el input en vez de
+reimplementar el filtro en la prueba.
+
+test:all 370 comprobaciones, exit 0, sin regresiones.
+---
+ src/12-datos.js          | 46 +++++++++++++++++++++----
+ src/12b-historico.js     | 16 +++++++--
+ src/13-render.js         | 51 ++++++++++++++++++++++++----
+ tests/inventario.test.js | 72 ++++++++++++++++++++++++++++++++++++++++
+ tests/salida.test.js     | 40 ++++++++++++++++++++++
+ 5 files changed, 211 insertions(+), 14 deletions(-)
+
+diff --git a/src/12-datos.js b/src/12-datos.js
+index d8f5729..7d0e061 100644
+--- a/src/12-datos.js
++++ b/src/12-datos.js
+@@ -1201,12 +1201,42 @@ function invStats(){
+     const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
+     /* Lo que ya está en un barco cuenta. Sin esto, el ejemplo mandaba pedir
+        421 unidades más de una referencia que tenía 900 llegando, y encima la
+-       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa. */
+-    const enCamino = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received')
+-      .reduce((a,po)=>a+(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
+-                                       .reduce((b,i)=>b+toNum(i.qty),0), 0);
++       marcaba en rotura: 753 unidades de sobrecompra y una alarma falsa.
++
++       Un BORRADOR no está en ningún barco: no lo has enviado y el proveedor no
++       lo ha visto. Descontarlo de lo que hay que pedir es descontar una
++       intención, y hace que la pantalla ponga «Pedir —» sobre una referencia
++       que no tiene nada llegando. Mismo criterio que en la curva de caja. */
++    const posSku = DB.pos.filter(po=>po.status!=='closed' && po.status!=='received' && po.status!=='draft')
++      .map(po=>({po, q:(po.items||[]).filter(i=>String(i.sku).toLowerCase()===k.toLowerCase())
++                                     .reduce((b,i)=>b+toNum(i.qty),0)}))
++      .filter(x=>x.q>0);
++    const enCamino = posSku.reduce((a,x)=>a+x.q, 0);
++    /* Y una segunda mitad que faltaba: `enCamino` entraba en lo que hay que
++       pedir pero NO en la cobertura ni en el riesgo, así que la referencia con
++       900 unidades llegando seguía pintada «tarifa bajo inventario» y seguía
++       contando en el KPI «Bajo cobertura». Son dos preguntas distintas y
++       mezclarlas hacía que la pantalla se contradijera consigo misma:
++
++         cover        · días que aguanta lo que HAY EN EL ALMACÉN. Es lo que
++                        determina la tarifa por inventario bajo, porque Amazon
++                        la cobra sobre lo almacenado, no sobre lo que navega.
++                        Meter aquí el tránsito ocultaría un coste real.
++         coverTransito· días que aguanta contando lo que viene. Es la respuesta
++                        a «¿tengo que pedir?».
++
++       El aviso de tarifa se mantiene —se va a cobrar igual—, pero deja de
++       leerse como una orden de compra cuando ya hay mercancía en camino. Si el
++       pedido no tiene fecha prevista no se puede afirmar que llegue a tiempo,
++       y entonces no mitiga nada: se dice y ya. */
++    const etaConocida = posSku.length>0 && posSku.every(x=>!!parseDate(x.po.eta));
++    const diasHastaRotura = velocity>0 ? qty/velocity : 999;
++    const llegaATiempo = etaConocida && posSku.every(x=>{
++      const d = parseDate(x.po.eta); return d && daysBetween(today(), d) <= diasHastaRotura; });
+     const pl = plan[k]||{};
+-    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, lead:toNum(lead), enCamino,
++    const coverTransito = velocity>0 ? (qty+enCamino)/velocity : ((qty+enCamino)>0?999:0);
++    return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, coverTransito,
++      lead:toNum(lead), enCamino, etaConocida, llegaATiempo,
+       reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
+       byCountry: fbm ? {} : (byCountry[k]||{}),
+       excess: toNum(pl.estimatedexcessquantity),
+@@ -1216,7 +1246,11 @@ function invStats(){
+          de hace un año: el capital inmovilizado es lo que costaría reponerlo. */
+       unitCost: costNow(p),
+       value: qty*costNow(p),
+-      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok'))
++      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok')),
++      /* El riesgo de COMPRA, que es el que manda pedir. El de tarifa sigue
++         siendo `risk` y sigue avisando aunque este esté cubierto. */
++      riskCompra: fbm ? (coverTransito<14?'low':(coverTransito>154?'over':'ok'))
++                      : (coverTransito<28 ? 'low' : (coverTransito>154 ? 'over' : 'ok'))
+     };
+   }).filter(r=>r.qty>0||r.velocity>0).sort((a,b)=>a.cover-b.cover);
+ }
+diff --git a/src/12b-historico.js b/src/12b-historico.js
+index cb440a9..456f3e7 100644
+--- a/src/12b-historico.js
++++ b/src/12b-historico.js
+@@ -103,17 +103,29 @@ function captureOrders(){
+ 
+ /* ---------- 2 · Foto de stock, fechada hoy ---------- */
+ function captureStock(){
+-  const stock = {}, byC = {};
++  const stock = {}, byC = {}, hasInv = {};
+   imp('inventory').forEach(r=>{
+     const k = gv(r,'_sku','sku','sellersku'); if(!k) return;
++    hasInv[k] = 1;
+     stock[k] = (stock[k]||0) + toNum(gv(r,'_qty','afnfulfillablequantity'));
+   });
+   imp('multicountry').forEach(r=>{
+     const k = gv(r,'_sku','sellersku','sku'), c = countryOf(gv(r,'_country','country'));
+     if(!k) return;
+     if(!byC[k]) byC[k] = {};
+-    if(c) byC[k][c] = (byC[k][c]||0) + toNum(gv(r,'_qty','quantityforlocalfulfillment'));
++    const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
++    if(c) byC[k][c] = (byC[k][c]||0) + q;
++    /* Aquí se archivaba stock CERO para el SKU que solo viene en el informe
++       multipaís, guardando a la vez sus unidades por país en el mismo
++       registro. Ese cero no es una medición: es «este SKU no salía en el otro
++       informe». Y en el histórico un cero significa rotura, así que la
++       referencia quedaba en rotura permanente y su velocidad real —unidades
++       entre días CON stock— salía inflada, que es justo el número que M2 usa
++       para decidir cuánto reponer.
++       Lo mismo que hace invStats: si no viene en el de inventario, el stock es
++       la suma de lo que declara el multipaís. Sumar los dos contaría doble. */
+     if(stock[k]===undefined) stock[k] = 0;
++    if(!hasInv[k]) stock[k] += q;
+   });
+   DB.products.forEach(p=>{ if(p.channel==='FBM' && toNum(p.fbmStock)) stock[String(p.sku)] = toNum(p.fbmStock); });
+   const keys = Object.keys(stock);
+diff --git a/src/13-render.js b/src/13-render.js
+index 591c448..1e0f42a 100644
+--- a/src/13-render.js
++++ b/src/13-render.js
+@@ -178,7 +178,10 @@ function renderPanel(){
+       s:'Saldo proyectado de '+fmt(low[0].bal,0)+' el '+low[0].date.toLocaleDateString('es-ES')+', por debajo de tu colchón de '+fmt(TARGET.cash,0)+'.', go:'tesoreria'});
+   }
+   const I = invStats();
+-  const rupture = I.filter(r=>r.risk==='low' && r.velocity>0);
++  /* Este aviso del Panel manda PEDIR, así que mira la cobertura contando lo
++     que ya viene en camino. El riesgo de tarifa por inventario bajo es otra
++     cosa y vive en Inventario: se sigue avisando, pero no como orden de compra. */
++  const rupture = I.filter(r=>r.riskCompra==='low' && r.velocity>0);
+   if(rupture.length) A.push({p:2,lvl:'warn',t:rupture.length+' producto'+(rupture.length===1?'':'s')+' bajo 28 días de cobertura',
+     s:'Entras en tarifa por bajo inventario en Alemania, Francia, Italia y España: '+rupture.slice(0,3).map(r=>esc(r.sku)+' ('+num(r.cover,0)+' d)').join(', ')+'.', go:'inventario'});
+   const over = I.filter(r=>r.cover>154 && r.qty>0);
+@@ -953,6 +956,7 @@ function renderInv(){
+   const I = invStats();
+   const value = I.reduce((a,r)=>a+r.value,0);
+   const rupture = I.filter(r=>r.risk==='low'&&r.velocity>0), over = I.filter(r=>r.risk==='over'&&r.qty>0);
++  const porPedir = I.filter(r=>r.riskCompra==='low'&&r.velocity>0);
+   /* Cobertura de la cartera: stock total entre venta diaria total. No se
+      promedian porcentajes ni ratios por SKU; se dividen los totales. */
+   const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
+@@ -961,7 +965,10 @@ function renderInv(){
+   document.getElementById('invKpis').innerHTML =
+     kpi('Unidades en almacén', num(I.reduce((a,r)=>a+r.qty,0)), I.length+' referencias','accent')+
+     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
+-    kpi('Bajo cobertura', num(rupture.length),'riesgo de tarifa por bajo inventario', rupture.length?'neg':'pos')+
++    kpi('Bajo cobertura', num(rupture.length),
++        rupture.length===porPedir.length ? 'riesgo de tarifa por bajo inventario'
++        : 'riesgo de tarifa · '+num(porPedir.length)+' sin cubrir con lo que viene en camino',
++        porPedir.length?'neg':(rupture.length?'warn':'pos'))+
+     kpi('Sobrestock', num(over.length),'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
+     /* Cobertura de la CARTERA: unidades totales entre venta diaria total. La
+        media aritmética de las coberturas por SKU decía 119 d con cuatro
+@@ -984,7 +991,11 @@ function renderInv(){
+       '<td class="num mut">'+num(r.lead)+' d</td><td class="num mut">'+num(r.reorderPoint)+'</td>'+
+       '<td class="num '+(r.enCamino>0?'info':'mut')+'">'+(r.enCamino>0?num(r.enCamino):'—')+'</td>'+
+       '<td class="num '+(r.need>0?'warn':'')+'" style="font-weight:600">'+(r.need>0?num(r.need):'—')+'</td>'+
+-      '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>':'<span class="pill stop">tarifa bajo inv.</span>')
++      '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>'
++              : (r.riskCompra!=='low'
++                 ? '<span class="pill warn">tarifa bajo inv. · '+num(r.enCamino)+' en camino'+
++                   (r.etaConocida ? (r.llegaATiempo?', llegan a tiempo':', llegan tarde') : ', sin fecha prevista')+'</span>'
++                 : '<span class="pill stop">tarifa bajo inv.</span>'))
+              :r.risk==='over'?'<span class="pill warn">sobrestock</span>':'<span class="pill go">en banda</span>')+'</td></tr>').join('')
+       : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
+ 
+@@ -1444,16 +1455,44 @@ function importData(ev){
+         toast('Ese archivo no es una copia de seguridad del hub. No lo cargo: reemplazaría tus datos y tu histórico.');
+         ev.target.value=''; return;
+       }
++      /* Y una copia con la FORMA correcta y el contenido vacío también pasaba:
++         `{"products":[],"settings":{},"imports":{}}` se llevaba el histórico
++         por delante. El diálogo enseñaba lo que pierdes y nunca lo que trae el
++         fichero entrante, que es la mitad que permite decidir. */
+       const hs = (function(){ try{ return historyStats(); }catch(e){ return {span:0}; } })();
+-      if(hs.span>0 && !confirm('Restaurar reemplaza TODO lo que tienes ahora, incluido el histórico ('+
+-          hs.span+' días archivados desde el '+hs.first+').\n\n'+
++      const trae = {
++        prod: (d.products||[]).length,
++        dias: d.history && d.history.d ? Object.keys(d.history.d).length : 0,
++        meses: d.history && d.history.m ? Object.keys(d.history.m).length : 0,
++        fecha: d.exported ? String(d.exported).slice(0,10) : null
++      };
++      if(!trae.prod && !trae.dias && !trae.meses && (hs.span>0 || DB.products.length)){
++        toast('Esa copia viene vacía: ni productos ni histórico. No la cargo, porque borraría lo que tienes.');
++        ev.target.value=''; return;
++      }
++      if((hs.span>0 || DB.products.length) && !confirm(
++          'Restaurar reemplaza TODO lo que tienes ahora.\n\n'+
++          'PIERDES: '+DB.products.length+' productos'+(hs.span>0?' y '+hs.span+' días de histórico desde el '+hs.first:' y ningún histórico')+'.\n'+
++          'RECIBES: '+trae.prod+' productos y '+(trae.dias||trae.meses?trae.dias+' días'+(trae.meses?' + '+trae.meses+' meses compactados':''):'ningún histórico')+
++          (trae.fecha?' · copia del '+trae.fecha:'')+'.\n\n'+
+           'El histórico no se puede reconstruir descargando informes otra vez. ¿Continuar?')){
+         ev.target.value=''; return;
+       }
+       /* `app` y `exported` son del sobre, no del contenido: si se quedan
+          dentro, se guardan en la base y vuelven a salir en la copia siguiente. */
+       delete d.app; delete d.exported;
+-      DB = Object.assign(blankDB(), d);
++      /* Fusión superficial con una excepción: `settings`. Una copia con
++         `settings:{}` sustituía el objeto entero y dejaba la base sin `cash`,
++         así que Tesorería y el P&L reventaban DESPUÉS, lejos del sitio donde
++         se causó el daño. Los ajustes que la copia no traiga se quedan con su
++         valor por defecto. */
++      const base = blankDB();
++      const settings = Object.assign({}, base.settings, d.settings||{});
++      Object.keys(base.settings||{}).forEach(k=>{
++        if(base.settings[k] && typeof base.settings[k]==='object' && !Array.isArray(base.settings[k]))
++          settings[k] = Object.assign({}, base.settings[k], (d.settings&&d.settings[k])||{});
++      });
++      DB = Object.assign(base, d, {settings});
+       TARGET = Object.assign(TARGET, (DB.settings&&DB.settings.targets)||{});
+       saveDB(); bootValues(); refreshAll(); toast('Datos restaurados');
+     }catch(e){ toast('No se pudo leer el archivo'); }
+diff --git a/tests/inventario.test.js b/tests/inventario.test.js
+index cdedd2c..ef2d823 100644
+--- a/tests/inventario.test.js
++++ b/tests/inventario.test.js
+@@ -258,6 +258,78 @@ const js = body => '(()=>{' + LAB + body + '})()';
+     /no se ha detectado/i.test(honest.conFoto) && /30 días con foto/i.test(honest.conFoto),
+     honest.conFoto.slice(0,120)+'…');
+ 
++  console.log('\n=== INV-I · LA TARIFA POR INVENTARIO BAJO Y LA ORDEN DE PEDIR SON DOS PREGUNTAS ===');
++  /* `enCamino` entraba en lo que hay que pedir pero NO en la cobertura ni en el
++     riesgo. Resultado: una referencia con 900 unidades llegando seguía pintada
++     «tarifa bajo inv.» y seguía contando en el KPI «Bajo cobertura», mientras
++     la columna de al lado ya decía que no había que pedir nada. La pantalla se
++     contradecía consigo misma.
++
++     Y son dos preguntas distintas de verdad:
++       cover         · lo que hay EN EL ALMACÉN. Es lo que Amazon mira para
++                       cobrar la tarifa: la mercancía que navega no cuenta, así
++                       que meterla aquí ocultaría un coste real.
++       coverTransito · contando lo que viene. Es «¿tengo que pedir?».
++
++     Aritmética: RAPIDO vende 10 ud/día (300 en 30 días).
++       stock 200 ud  → cover = 20 días  → por debajo de 28: tarifa SÍ
++       600 en camino → coverTransito = 800/10 = 80 días → pedir NO           */
++  const dosPreguntas = await page.evaluate(js(`
++    DB.imports.inventory = {count:2, file:'i', rows:[
++      {sku:'RAPIDO', afnfulfillablequantity:'200'},
++      {sku:'LENTO',  afnfulfillablequantity:'400'}]};
++    DB.pos = [];
++    const sinPedido = invStats().find(r=>r.sku==='RAPIDO');
++    DB.pos = [{id:'p1', supplier:'S', status:'transit', eta:'',
++               items:[{sku:'RAPIDO', qty:600, unitCost:5}], payments:[]}];
++    const conPedido = invStats().find(r=>r.sku==='RAPIDO');
++    DB.pos = [{id:'p2', supplier:'S', status:'draft', eta:'',
++               items:[{sku:'RAPIDO', qty:600, unitCost:5}], payments:[]}];
++    const borrador = invStats().find(r=>r.sku==='RAPIDO');
++    DB.pos = [];
++    return {sinPedido, conPedido, borrador};
++  `));
++  check('sin pedido, 200 ud a 10/día son 20 días de cobertura',
++    near(dosPreguntas.sinPedido.cover, 20, 0.5), dosPreguntas.sinPedido.cover.toFixed(1)+' días');
++  check('y eso es tarifa por inventario bajo, con y sin pedido en camino',
++    dosPreguntas.sinPedido.risk==='low' && dosPreguntas.conPedido.risk==='low',
++    'la mercancía que navega no cuenta para la tarifa');
++  check('pero con 600 llegando ya no hay que pedir',
++    dosPreguntas.conPedido.riskCompra!=='low' && near(dosPreguntas.conPedido.coverTransito, 80, 1),
++    dosPreguntas.conPedido.coverTransito.toFixed(0)+' días contando el tránsito');
++  check('un BORRADOR no cubre nada: sigue habiendo que pedir',
++    dosPreguntas.borrador.riskCompra==='low' && dosPreguntas.borrador.enCamino===0,
++    'enCamino='+dosPreguntas.borrador.enCamino);
++
++  console.log('\n=== INV-J · EL SKU QUE SOLO VIENE EN EL MULTIPAÍS NO TIENE STOCK CERO ===');
++  /* El histórico archivaba stock 0 para la referencia que solo aparece en el
++     informe multipaís, y a la vez guardaba sus unidades por país en el mismo
++     registro. Ese cero no es una medición, es «no salía en el otro informe»; y
++     en el histórico un cero significa ROTURA, así que la referencia quedaba en
++     rotura permanente y su velocidad real —unidades entre días CON stock—
++     salía inflada. Justo el número que M2 usa para decidir cuánto reponer. */
++  const multipais = await page.evaluate(js(`
++    DB.imports.inventory = {count:1, file:'i', rows:[{sku:'RAPIDO', afnfulfillablequantity:'200'}]};
++    DB.imports.multicountry = {count:2, file:'m', rows:[
++      {sellersku:'LENTO', country:'DE', quantityforlocalfulfillment:'900'},
++      {sellersku:'LENTO', country:'ES', quantityforlocalfulfillment:'500'}]};
++    DB.history = {};
++    captureStock();
++    const diaHoy = Object.keys(DB.history.d).sort().pop();
++    const k = DB.history.d[diaHoy].k;
++    const obs = DB.history.obs['LENTO'] || {};
++    return {lento: k['LENTO'] && k['LENTO'][0], rapido: k['RAPIDO'] && k['RAPIDO'][0],
++            porPais: k['LENTO'] && k['LENTO'][1], ceros: obs.z};
++  `));
++  check('archiva las 1.400 unidades que declara el multipaís, no cero',
++    multipais.lento===1400, multipais.lento+' ud = 900 DE + 500 ES');
++  check('y no las suma dos veces al que sí viene en el de inventario',
++    multipais.rapido===200, multipais.rapido+' ud');
++  check('sigue guardando el desglose por país', !!(multipais.porPais && multipais.porPais.DE===900),
++    JSON.stringify(multipais.porPais||{}));
++  check('y no cuenta ese día como rotura', multipais.ceros===0,
++    multipais.ceros+' observaciones a cero · con el fallo era rotura permanente');
++
+   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
+   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
+   await browser.close();
+diff --git a/tests/salida.test.js b/tests/salida.test.js
+index 2c04c29..f0b6bd2 100644
+--- a/tests/salida.test.js
++++ b/tests/salida.test.js
+@@ -89,6 +89,46 @@ const check = (label, cond, extra) => {
+     guardia.aceptados+' aceptados · antes los aceptaba los tres y sobrescribía sin preguntar');
+   check('y una copia de verdad sí pasa', guardia.aceptaLaBuena===true);
+ 
++  console.log('\n=== SAL-E · UNA COPIA CON LA FORMA BUENA Y NADA DENTRO TAMPOCO PASA ===');
++  /* SAL-B protege del fichero que no se parece a una copia. Queda el que SÍ se
++     parece: `{"products":[],"settings":{},"imports":{}}` tiene lista, ajustes e
++     importaciones, así que pasaba el filtro, se llevaba el histórico por
++     delante y además dejaba `DB.settings` sin `cash`, con lo que Tesorería y el
++     P&L reventaban DESPUÉS, lejos del sitio donde se causó el daño.
++
++     Aquí se ejercita `importData` de verdad, soltando el fichero en el input,
++     no reimplementando el filtro en la prueba. */
++  const os = require('os'), fs = require('fs');
++  const tmp = path.join(os.tmpdir(), 'copia-vacia.json');
++  fs.writeFileSync(tmp, JSON.stringify({products:[], settings:{}, imports:{}}));
++  await page.evaluate(()=>{ loadDemo(); });
++  const antesVacia = await page.evaluate(()=>({prod:DB.products.length, dias:historyStats().days,
++                                               cash: !!(DB.settings&&DB.settings.cash)}));
++  await page.setInputFiles('#importFile', tmp);
++  await page.waitForTimeout(500);
++  const despuesVacia = await page.evaluate(()=>({prod:DB.products.length, dias:historyStats().days,
++                                                 cash: !!(DB.settings&&DB.settings.cash)}));
++  check('había productos e histórico que perder',
++    antesVacia.prod>0 && antesVacia.dias>0, antesVacia.prod+' productos · '+antesVacia.dias+' días');
++  check('la copia vacía NO reemplaza nada',
++    despuesVacia.prod===antesVacia.prod && despuesVacia.dias===antesVacia.dias,
++    despuesVacia.prod+' productos · '+despuesVacia.dias+' días después de soltarla');
++
++  /* Y si la copia trae contenido pero le faltan ajustes, los que no vengan se
++     quedan con su valor por defecto en vez de desaparecer. */
++  const tmp2 = path.join(os.tmpdir(), 'copia-sin-ajustes.json');
++  fs.writeFileSync(tmp2, JSON.stringify({app:'Aresstore Seller Hub',
++    products:[{id:'z', sku:'Z-1', name:'Z', cogs:1, price:10, channel:'FBA', lots:[]}],
++    settings:{}, imports:{}, history:{}}));
++  await page.setInputFiles('#importFile', tmp2);
++  await page.waitForTimeout(500);
++  const parcial = await page.evaluate(()=>({prod:DB.products.length,
++    cash: !!(DB.settings&&DB.settings.cash), pnlOk:(function(){ try{ pnl(); return true; }catch(e){ return false; } })()}));
++  check('una copia sin ajustes sí entra, pero no deja la base coja',
++    parcial.prod===1 && parcial.cash===true, parcial.prod+' producto · settings.cash '+(parcial.cash?'presente':'PERDIDO'));
++  check('y el P&L sigue calculando después de restaurarla', parcial.pnlOk===true,
++    'antes reventaba aquí, lejos de donde se causó el daño');
++
+   console.log('\n=== SAL-C · CADA MÓDULO EXPORTA LO QUE ENSEÑA ===');
+   /* Se intercepta la descarga para leer el CSV que se habría bajado, en vez de
+      comprobar que el botón existe: un botón que produce un fichero vacío pasa
+-- 
+2.43.0
+
+
+From caf74efa0201b632565d2046e54fa3a49bf92484 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 19 Aug 2026 14:58:45 +0000
+Subject: [PATCH 5/5] El aviso del IVA vive donde se puede arreglar, no solo
+ donde se nota
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Idea de la sesion de Code, y es la parte buena de la alternativa que proponia:
+deducir el IVA salva el numero y el orden entre mercados, pero deducir no es
+leer, y el sitio donde esto se arregla de verdad no es Rentabilidad — es Datos,
+volviendo a descargar «Todos los pedidos» con la columna. Un aviso puesto solo
+junto al margen es un aviso puesto donde ya no se puede hacer nada.
+
+El catalogo de informes dice ahora cuantas lineas y que porcentaje del ingreso
+vienen sin columna de impuesto, que el hub lo deduce, y como conseguir el
+informe bueno. Con la columna presente no aparece nada.
+
+Prueba IVA-E, sobre la pantalla y no sobre el motor.
+---
+ src/02-views.html |  1 +
+ src/13-render.js  | 20 ++++++++++++++++++++
+ tests/iva.test.js | 24 ++++++++++++++++++++++++
+ 3 files changed, 45 insertions(+)
+
+diff --git a/src/02-views.html b/src/02-views.html
+index 5d04050..90a7c44 100644
+--- a/src/02-views.html
++++ b/src/02-views.html
+@@ -102,6 +102,7 @@
+             <div class="ph-actions"><button class="btn sm" onclick="loadDemo()">Cargar datos de ejemplo</button></div>
+           </div>
+           <div class="catalog" id="reportCatalog"></div>
++          <div id="dataTaxWarn"></div>
+         </div>
+ 
+         <div class="panel">
+diff --git a/src/13-render.js b/src/13-render.js
+index 1e0f42a..41349b5 100644
+--- a/src/13-render.js
++++ b/src/13-render.js
+@@ -267,6 +267,26 @@ function renderDatos(){
+       (r.guardaSinUsar?'<div class="c-path" style="color:var(--caution);margin-top:4px">Se guarda entero, pero todavía no alimenta ningún cálculo del hub.</div>':'')+
+       '</div>';
+   }).join('');
++  /* Aviso al pie del catálogo: el informe de pedidos está cargado y NO trae la
++     columna de impuesto.
++
++     `taxBasis()` deduce el IVA del tipo de cada país para que el margen y la
++     comparación entre mercados no salgan del revés, pero deducir no es leer.
++     El sitio donde esto se arregla de verdad no es Rentabilidad: es aquí,
++     volviendo a descargar el informe con la columna. Decirlo solo junto al
++     margen es decirlo donde ya no se puede hacer nada. */
++  const avisoIva = document.getElementById('dataTaxWarn');
++  if(avisoIva){
++    const S = salesRows({from:null, country:'ALL'});
++    const sinCol = S.filter(r=>!r.taxSeen), rev = S.reduce((a,r)=>a+r.revenue,0);
++    const revSin = sinCol.reduce((a,r)=>a+r.revenue,0);
++    avisoIva.innerHTML = !sinCol.length ? '' :
++      '<div class="note warn" style="margin-top:12px"><strong>El informe de pedidos no trae la columna de impuesto</strong> en '+
++      num(sinCol.length)+' de '+num(S.length)+' líneas ('+num(rev>0?revSin/rev*100:0,0)+' % del ingreso). '+
++      'Sin ella no se puede leer el IVA, así que el hub lo <strong>deduce</strong> del tipo de cada país y marca todo lo que dependa de esa base como estimado. '+
++      'Es utilizable, pero no es una medición: vuelve a descargar «Todos los pedidos» asegurándote de que incluye <em>item-tax</em> / <em>Impuesto del artículo</em>. '+
++      'Con la columna, el margen y la comparación entre mercados dejan de depender de un supuesto.</div>';
++  }
+   const F = freshness();
+   const nMap = Object.keys(DB.mappings||{}).length;
+   const mapInfo = document.getElementById('mapInfo');
+diff --git a/tests/iva.test.js b/tests/iva.test.js
+index 81c993f..877ca18 100644
+--- a/tests/iva.test.js
++++ b/tests/iva.test.js
+@@ -223,6 +223,30 @@ const js = body => '(()=>{' + LAB + body + '})()';
+   check('el orden es el mismo con y sin columna', ord(conCol) === ord(sinCol),
+         '«' + ord(conCol) + '» frente a «' + ord(sinCol) + '»');
+ 
++  /* =====================================================================
++     IVA-E · EL AVISO VIVE DONDE SE PUEDE ARREGLAR
++     =====================================================================
++     Deducir el IVA salva el número, pero deducir no es leer. Donde esto se
++     arregla de verdad no es en Rentabilidad, es en Datos: volviendo a
++     descargar el informe con la columna. Un aviso que solo aparece junto al
++     margen es un aviso puesto donde ya no se puede hacer nada.             */
++  console.log('\n=== IVA-E · DATOS AVISA DE QUE FALTA LA COLUMNA ===');
++  const E = await page.evaluate(js(`
++    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21, conIva:false})], count:1, file:'o'};
++    periodDays = 30;
++    go('datos');
++    const conFallo = document.getElementById('dataTaxWarn').textContent;
++    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21})], count:1, file:'o'};
++    go('datos');
++    const sinFallo = document.getElementById('dataTaxWarn').textContent;
++    return {conFallo, sinFallo};
++  `));
++  check('con la columna ausente, la pantalla de Datos lo dice',
++    /no trae la columna de impuesto/i.test(E.conFallo), E.conFallo.slice(0,90)+'…');
++  check('y dice qué hay que hacer, no solo qué pasa',
++    /vuelve a descargar/i.test(E.conFallo) && /item-tax/i.test(E.conFallo), 'incluye la acción');
++  check('con la columna presente, no molesta', E.sinFallo.trim()==='', '«'+E.sinFallo.trim()+'»');
++
+   console.log('\nERRORES JS: ' + errors.length);
+   errors.forEach(e => console.log('   ' + e));
+   await browser.close();
+-- 
+2.43.0
+

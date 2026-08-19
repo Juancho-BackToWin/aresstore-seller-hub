@@ -267,6 +267,26 @@ function renderDatos(){
       (r.guardaSinUsar?'<div class="c-path" style="color:var(--caution);margin-top:4px">Se guarda entero, pero todavía no alimenta ningún cálculo del hub.</div>':'')+
       '</div>';
   }).join('');
+  /* Aviso al pie del catálogo: el informe de pedidos está cargado y NO trae la
+     columna de impuesto.
+
+     `taxBasis()` deduce el IVA del tipo de cada país para que el margen y la
+     comparación entre mercados no salgan del revés, pero deducir no es leer.
+     El sitio donde esto se arregla de verdad no es Rentabilidad: es aquí,
+     volviendo a descargar el informe con la columna. Decirlo solo junto al
+     margen es decirlo donde ya no se puede hacer nada. */
+  const avisoIva = document.getElementById('dataTaxWarn');
+  if(avisoIva){
+    const S = salesRows({from:null, country:'ALL'});
+    const sinCol = S.filter(r=>!r.taxSeen), rev = S.reduce((a,r)=>a+r.revenue,0);
+    const revSin = sinCol.reduce((a,r)=>a+r.revenue,0);
+    avisoIva.innerHTML = !sinCol.length ? '' :
+      '<div class="note warn" style="margin-top:12px"><strong>El informe de pedidos no trae la columna de impuesto</strong> en '+
+      num(sinCol.length)+' de '+num(S.length)+' líneas ('+num(rev>0?revSin/rev*100:0,0)+' % del ingreso). '+
+      'Sin ella no se puede leer el IVA, así que el hub lo <strong>deduce</strong> del tipo de cada país y marca todo lo que dependa de esa base como estimado. '+
+      'Es utilizable, pero no es una medición: vuelve a descargar «Todos los pedidos» asegurándote de que incluye <em>item-tax</em> / <em>Impuesto del artículo</em>. '+
+      'Con la columna, el margen y la comparación entre mercados dejan de depender de un supuesto.</div>';
+  }
   const F = freshness();
   const nMap = Object.keys(DB.mappings||{}).length;
   const mapInfo = document.getElementById('mapInfo');

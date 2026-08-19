@@ -223,6 +223,30 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('el orden es el mismo con y sin columna', ord(conCol) === ord(sinCol),
         '«' + ord(conCol) + '» frente a «' + ord(sinCol) + '»');
 
+  /* =====================================================================
+     IVA-E · EL AVISO VIVE DONDE SE PUEDE ARREGLAR
+     =====================================================================
+     Deducir el IVA salva el número, pero deducir no es leer. Donde esto se
+     arregla de verdad no es en Rentabilidad, es en Datos: volviendo a
+     descargar el informe con la columna. Un aviso que solo aparece junto al
+     margen es un aviso puesto donde ya no se puede hacer nada.             */
+  console.log('\n=== IVA-E · DATOS AVISA DE QUE FALTA LA COLUMNA ===');
+  const E = await page.evaluate(js(`
+    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21, conIva:false})], count:1, file:'o'};
+    periodDays = 30;
+    go('datos');
+    const conFallo = document.getElementById('dataTaxWarn').textContent;
+    DB.imports.orders = {rows:[venta(dia(5),100,{pais:'ES', vat:21})], count:1, file:'o'};
+    go('datos');
+    const sinFallo = document.getElementById('dataTaxWarn').textContent;
+    return {conFallo, sinFallo};
+  `));
+  check('con la columna ausente, la pantalla de Datos lo dice',
+    /no trae la columna de impuesto/i.test(E.conFallo), E.conFallo.slice(0,90)+'…');
+  check('y dice qué hay que hacer, no solo qué pasa',
+    /vuelve a descargar/i.test(E.conFallo) && /item-tax/i.test(E.conFallo), 'incluye la acción');
+  check('con la columna presente, no molesta', E.sinFallo.trim()==='', '«'+E.sinFallo.trim()+'»');
+
   console.log('\nERRORES JS: ' + errors.length);
   errors.forEach(e => console.log('   ' + e));
   await browser.close();

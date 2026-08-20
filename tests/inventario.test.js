@@ -258,6 +258,78 @@ const js = body => '(()=>{' + LAB + body + '})()';
     /no se ha detectado/i.test(honest.conFoto) && /30 días con foto/i.test(honest.conFoto),
     honest.conFoto.slice(0,120)+'…');
 
+  console.log('\n=== INV-I · LA TARIFA POR INVENTARIO BAJO Y LA ORDEN DE PEDIR SON DOS PREGUNTAS ===');
+  /* `enCamino` entraba en lo que hay que pedir pero NO en la cobertura ni en el
+     riesgo. Resultado: una referencia con 900 unidades llegando seguía pintada
+     «tarifa bajo inv.» y seguía contando en el KPI «Bajo cobertura», mientras
+     la columna de al lado ya decía que no había que pedir nada. La pantalla se
+     contradecía consigo misma.
+
+     Y son dos preguntas distintas de verdad:
+       cover         · lo que hay EN EL ALMACÉN. Es lo que Amazon mira para
+                       cobrar la tarifa: la mercancía que navega no cuenta, así
+                       que meterla aquí ocultaría un coste real.
+       coverTransito · contando lo que viene. Es «¿tengo que pedir?».
+
+     Aritmética: RAPIDO vende 10 ud/día (300 en 30 días).
+       stock 200 ud  → cover = 20 días  → por debajo de 28: tarifa SÍ
+       600 en camino → coverTransito = 800/10 = 80 días → pedir NO           */
+  const dosPreguntas = await page.evaluate(js(`
+    DB.imports.inventory = {count:2, file:'i', rows:[
+      {sku:'RAPIDO', afnfulfillablequantity:'200'},
+      {sku:'LENTO',  afnfulfillablequantity:'400'}]};
+    DB.pos = [];
+    const sinPedido = invStats().find(r=>r.sku==='RAPIDO');
+    DB.pos = [{id:'p1', supplier:'S', status:'transit', eta:'',
+               items:[{sku:'RAPIDO', qty:600, unitCost:5}], payments:[]}];
+    const conPedido = invStats().find(r=>r.sku==='RAPIDO');
+    DB.pos = [{id:'p2', supplier:'S', status:'draft', eta:'',
+               items:[{sku:'RAPIDO', qty:600, unitCost:5}], payments:[]}];
+    const borrador = invStats().find(r=>r.sku==='RAPIDO');
+    DB.pos = [];
+    return {sinPedido, conPedido, borrador};
+  `));
+  check('sin pedido, 200 ud a 10/día son 20 días de cobertura',
+    near(dosPreguntas.sinPedido.cover, 20, 0.5), dosPreguntas.sinPedido.cover.toFixed(1)+' días');
+  check('y eso es tarifa por inventario bajo, con y sin pedido en camino',
+    dosPreguntas.sinPedido.risk==='low' && dosPreguntas.conPedido.risk==='low',
+    'la mercancía que navega no cuenta para la tarifa');
+  check('pero con 600 llegando ya no hay que pedir',
+    dosPreguntas.conPedido.riskCompra!=='low' && near(dosPreguntas.conPedido.coverTransito, 80, 1),
+    dosPreguntas.conPedido.coverTransito.toFixed(0)+' días contando el tránsito');
+  check('un BORRADOR no cubre nada: sigue habiendo que pedir',
+    dosPreguntas.borrador.riskCompra==='low' && dosPreguntas.borrador.enCamino===0,
+    'enCamino='+dosPreguntas.borrador.enCamino);
+
+  console.log('\n=== INV-J · EL SKU QUE SOLO VIENE EN EL MULTIPAÍS NO TIENE STOCK CERO ===');
+  /* El histórico archivaba stock 0 para la referencia que solo aparece en el
+     informe multipaís, y a la vez guardaba sus unidades por país en el mismo
+     registro. Ese cero no es una medición, es «no salía en el otro informe»; y
+     en el histórico un cero significa ROTURA, así que la referencia quedaba en
+     rotura permanente y su velocidad real —unidades entre días CON stock—
+     salía inflada. Justo el número que M2 usa para decidir cuánto reponer. */
+  const multipais = await page.evaluate(js(`
+    DB.imports.inventory = {count:1, file:'i', rows:[{sku:'RAPIDO', afnfulfillablequantity:'200'}]};
+    DB.imports.multicountry = {count:2, file:'m', rows:[
+      {sellersku:'LENTO', country:'DE', quantityforlocalfulfillment:'900'},
+      {sellersku:'LENTO', country:'ES', quantityforlocalfulfillment:'500'}]};
+    DB.history = {};
+    captureStock();
+    const diaHoy = Object.keys(DB.history.d).sort().pop();
+    const k = DB.history.d[diaHoy].k;
+    const obs = DB.history.obs['LENTO'] || {};
+    return {lento: k['LENTO'] && k['LENTO'][0], rapido: k['RAPIDO'] && k['RAPIDO'][0],
+            porPais: k['LENTO'] && k['LENTO'][1], ceros: obs.z};
+  `));
+  check('archiva las 1.400 unidades que declara el multipaís, no cero',
+    multipais.lento===1400, multipais.lento+' ud = 900 DE + 500 ES');
+  check('y no las suma dos veces al que sí viene en el de inventario',
+    multipais.rapido===200, multipais.rapido+' ud');
+  check('sigue guardando el desglose por país', !!(multipais.porPais && multipais.porPais.DE===900),
+    JSON.stringify(multipais.porPais||{}));
+  check('y no cuenta ese día como rotura', multipais.ceros===0,
+    multipais.ceros+' observaciones a cero · con el fallo era rotura permanente');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

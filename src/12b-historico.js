@@ -103,17 +103,29 @@ function captureOrders(){
 
 /* ---------- 2 · Foto de stock, fechada hoy ---------- */
 function captureStock(){
-  const stock = {}, byC = {};
+  const stock = {}, byC = {}, hasInv = {};
   imp('inventory').forEach(r=>{
     const k = gv(r,'_sku','sku','sellersku'); if(!k) return;
+    hasInv[k] = 1;
     stock[k] = (stock[k]||0) + toNum(gv(r,'_qty','afnfulfillablequantity'));
   });
   imp('multicountry').forEach(r=>{
     const k = gv(r,'_sku','sellersku','sku'), c = countryOf(gv(r,'_country','country'));
     if(!k) return;
     if(!byC[k]) byC[k] = {};
-    if(c) byC[k][c] = (byC[k][c]||0) + toNum(gv(r,'_qty','quantityforlocalfulfillment'));
+    const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
+    if(c) byC[k][c] = (byC[k][c]||0) + q;
+    /* Aquí se archivaba stock CERO para el SKU que solo viene en el informe
+       multipaís, guardando a la vez sus unidades por país en el mismo
+       registro. Ese cero no es una medición: es «este SKU no salía en el otro
+       informe». Y en el histórico un cero significa rotura, así que la
+       referencia quedaba en rotura permanente y su velocidad real —unidades
+       entre días CON stock— salía inflada, que es justo el número que M2 usa
+       para decidir cuánto reponer.
+       Lo mismo que hace invStats: si no viene en el de inventario, el stock es
+       la suma de lo que declara el multipaís. Sumar los dos contaría doble. */
     if(stock[k]===undefined) stock[k] = 0;
+    if(!hasInv[k]) stock[k] += q;
   });
   DB.products.forEach(p=>{ if(p.channel==='FBM' && toNum(p.fbmStock)) stock[String(p.sku)] = toNum(p.fbmStock); });
   const keys = Object.keys(stock);

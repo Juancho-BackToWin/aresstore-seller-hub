@@ -171,6 +171,56 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('y sigue diciendo que faltan pedidos y gastos, sin tapar el aviso',
     aviso.sigueDiciendoQueFaltanDatos===true, 'las dos cosas caben');
 
+  console.log('\n=== CAJA-G · LO QUE CUBRE DÍAS ES LO QUE VIENE EN CAMINO, NO CUALQUIER PEDIDO ===');
+  /* La curva descuenta reposición salvo los días que ya cubre mercancía
+     pedida. Ese crédito solo vale para lo que de verdad está viajando.
+
+     Aritmética del caso, con el laboratorio (10 ud/día, 40 €/ud de coste):
+       coste de reposición = 10 × 40                    =    400,00 €/día
+       en 90 días sin ningún crédito                    = 36.000,00 €
+
+     Un pedido de 600 unidades daría 600/10 = 60 días de crédito, y la salida
+     bajaría a 30 × 400 = 12.000 €. Diferencia: 24.000 €.
+
+     Ese crédito NO debe darse cuando:
+       · el pedido ya está RECIBIDO — está en la estantería, su coste ya viajó
+         al lote y al coste de ventas; contarlo otra vez es contarlo dos veces;
+       · el pedido es un BORRADOR — no lo has enviado, no hay nada viajando;
+       · el pedido es de OTRO SKU — 600 unidades de un producto no reponen las
+         ventas de otro.                                                      */
+  const credito = await page.evaluate(js(`
+    /* Solo la reposición, sin los vencimientos del propio pedido: lo que se
+       compara es el crédito de días, no el desembolso. */
+    const salida = () => { const c = cashProjection();
+      return c.reduce((a,d)=>a+((d.outflow||0)-(d.po||0)), 0); };
+    const po = (status, sku, qty) => { DB.pos = [{id:'p1', supplier:'S', status:status,
+      eta:'', items:[{sku:sku, qty:qty, unitCost:40}], payments:[]}]; return salida(); };
+    DB.pos = []; DB.expenses = [];
+    const sinPedido   = salida();
+    const enTransito  = po('transit',  'TEST-1', 600);
+    const recibido    = po('received', 'TEST-1', 600);
+    const borrador    = po('draft',    'TEST-1', 600);
+    const otroSku     = po('transit',  'OTRO',   600);
+    DB.pos = [];
+    return {sinPedido, enTransito, recibido, borrador, otroSku};
+  `));
+  console.log('     sin pedido ' + credito.sinPedido.toFixed(0) + ' €  ·  en tránsito ' +
+              credito.enTransito.toFixed(0) + ' €  ·  recibido ' + credito.recibido.toFixed(0) +
+              ' €  ·  borrador ' + credito.borrador.toFixed(0) + ' €  ·  otro SKU ' +
+              credito.otroSku.toFixed(0) + ' €');
+  check('un pedido en tránsito SÍ cubre días y baja la salida',
+        credito.enTransito < credito.sinPedido - 1000,
+        credito.enTransito.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
+  check('un pedido ya RECIBIDO no vuelve a cubrir días',
+        near(credito.recibido, credito.sinPedido, 1),
+        credito.recibido.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
+  check('un BORRADOR no cubre días',
+        near(credito.borrador, credito.sinPedido, 1),
+        credito.borrador.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
+  check('un pedido de OTRO SKU no repone las ventas de este',
+        near(credito.otroSku, credito.sinPedido, 1),
+        credito.otroSku.toFixed(0) + ' € frente a ' + credito.sinPedido.toFixed(0) + ' €');
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

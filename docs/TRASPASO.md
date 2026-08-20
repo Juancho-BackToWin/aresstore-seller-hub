@@ -76,8 +76,8 @@ aparezca en GitHub no dice nada de lo que se está sirviendo.
 |---|---|
 | PR #1 · `claude/verify-git-environment-nbjq49` | 15 commits · **mergeada** |
 | PR #2 · `claude/margen-honesto` | 6 commits · **mergeada** |
-| Suites | **11**, todas dentro de `npm run test:all` |
-| Comprobaciones | **373**, `exit 0`, cero fallos |
+| Suites | **12**, todas dentro de `npm run test:all` |
+| Comprobaciones | **392**, `exit 0`, cero fallos |
 
 ### La trampa que costó el sexto commit de la PR #2
 
@@ -612,6 +612,32 @@ Y una lección de método que vale más que cualquiera de los doce: **una suite 
 fija una variable como constante es ciega a los fallos de esa variable.** El IVA
 llevaba cuatrocientas comprobaciones puesto a cero.
 
+### Del importador, con ficheros como los entrega Amazon — tres
+
+Las fixtures de `npm run fixtures` son limpias: UTF-8, saltos de Unix, punto
+decimal. Los ficheros reales no siempre. Estos tres salieron de reproducir las
+manías que Amazon tiene de verdad al exportar, y los tres estaban vivos.
+
+- **UTF-16 se daba por reconocido y no se leía.** Amazon sirve varios TSV en
+  UTF-16. Leído como UTF-8 queda un NUL entre cada letra, y `normHdr` los quita
+  al limpiar la cabecera: el informe casaba, salía el tick verde, y dentro había
+  cero unidades y cero euros. Un informe reconocido del que no se lee nada es
+  peor que uno rechazado, porque el rechazado se ve. Ahora `readSmart` detecta la
+  marca de orden de bytes antes de intentar nada.
+- **«--» en la columna del IVA pasaba por un cero medido.** Es el fallo más caro
+  del hub entrando por otra puerta: `taxBasis()` ya cubría la columna *ausente*,
+  pero una columna *presente* con el marcador de vacío de Amazon daba
+  `taxSeen: true` y un IVA de 0 € con el margen sellado como medido. Ahora
+  `hayNumero()` distingue un número de un hueco disfrazado.
+- **Un pedido PENDIENTE se contaba como venta.** El comprador aún no ha pagado y
+  el informe lo trae sin importe: sumaba unidades fantasma —que bajan el precio
+  medio— y les cobraba tarifa de logística a unidades que nunca se enviaron. «Sin
+  enviar» sí es una venta y sigue contando.
+
+Lo que se comprueba en `robustez.test.js` no es que el fichero se reconozca, sino
+que **los números que salen son los mismos que con el fichero limpio**. Esa es la
+diferencia entre probar el importador y probar el detector de informes.
+
 ## 6. Riesgos abiertos y límites honestos
 
 - **La base de la comisión no está cerrada.** El contrato europeo la define sobre
@@ -675,7 +701,7 @@ npm install                    # playwright (los navegadores ya están en el ent
 pip3 install Pillow            # solo para build.sh: rasteriza los iconos
 bash build.sh                  # ensambla index.html · nunca editarlo a mano
 npm run fixtures               # informes de Amazon simulados, en inglés y en español
-npm run test:all               # las once suites de una vez · 373 comprobaciones
+npm run test:all               # las doce suites de una vez · 392 comprobaciones
 ```
 
 | Suite | Qué sujeta |
@@ -686,6 +712,7 @@ npm run test:all               # las once suites de una vez · 373 comprobacione
 | `test:m11` | los tres métodos de coste contra la cuenta hecha a mano |
 | `test:pnl` | tarifas, comisión, base del ingreso neto, periodo, publicidad, devoluciones |
 | `test:iva` | el IVA como eje de prueba: base leída, base deducida, y el orden entre mercados |
+| `test:robustez` | los cuatro informes que alimentan el negocio, en la forma en que Amazon los entrega de verdad |
 | `test:caja` | la proyección de caja a 90 días, incluido el gráfico medido en píxeles |
 | `test:inv` | cobertura, velocidad, reposición y honestidad del histórico |
 | `test:informes` | los doce informes uno a uno, y **qué alimenta cada uno** |

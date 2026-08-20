@@ -112,6 +112,19 @@ function toNum(v){
   const n2 = parseFloat(s);
   return isNaN(n2) ? 0 : n2;
 }
+/* ¿Esta celda trae un número, o trae un hueco disfrazado?
+
+   Amazon rellena las celdas vacías con «--», «N/A» o «-» según el informe, y
+   `toNum` las convierte en 0 sin decir nada. Para la mayoría de columnas da
+   igual; para la del IVA no: confundir «el IVA es cero» con «no me han dicho el
+   IVA» es el fallo más caro que ha tenido este hub, y por esa puerta volvía a
+   entrar aunque taxBasis() ya lo cubriera para la columna ausente. */
+function hayNumero(v){
+  if(v === undefined || v === null) return false;
+  const s = String(v).trim();
+  if(s === '') return false;
+  return /\d/.test(s);
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 /* Plegado de acentos ANTES de limpiar: si no, "término" queda en "trmino" y
    ningún alias en español puede casar nunca. Este detalle rompía la mitad
@@ -333,11 +346,23 @@ function readSmart(file){
     r.onerror = ()=>rej(new Error('No se pudo leer el archivo'));
     r.onload = ()=>{
       const buf = r.result;
-      let txt = new TextDecoder('utf-8',{fatal:false}).decode(buf);
-      // Amazon sirve muchos informes en Latin-1. Si aparece el carácter de
-      // sustitución, reintentamos con windows-1252.
-      if(txt.indexOf(String.fromCharCode(65533)) >= 0){
-        try{ txt = new TextDecoder('windows-1252').decode(buf); }catch(e){}
+      const b = new Uint8Array(buf);
+      /* UTF-16 se detecta por su marca de orden de bytes, ANTES de intentar
+         nada. Leído como UTF-8, un TSV en UTF-16 queda con un NUL entre cada
+         letra; `normHdr` los quita al limpiar, así que las cabeceras seguían
+         casando y el informe se daba por reconocido — con cero unidades y cero
+         euros dentro. Un «✓ reconocido» sobre un fichero que no se ha leído es
+         peor que un error. Amazon sirve así varios de sus TSV. */
+      let txt;
+      if(b.length>=2 && b[0]===0xFF && b[1]===0xFE)      txt = new TextDecoder('utf-16le').decode(buf);
+      else if(b.length>=2 && b[0]===0xFE && b[1]===0xFF) txt = new TextDecoder('utf-16be').decode(buf);
+      else {
+        txt = new TextDecoder('utf-8',{fatal:false}).decode(buf);
+        // Amazon sirve muchos informes en Latin-1. Si aparece el carácter de
+        // sustitución, reintentamos con windows-1252.
+        if(txt.indexOf(String.fromCharCode(65533)) >= 0){
+          try{ txt = new TextDecoder('windows-1252').decode(buf); }catch(e){}
+        }
       }
       res(txt.replace(/^﻿/,''));
     };
@@ -713,11 +738,16 @@ function salesRows(opt){
       /* La columna de impuesto es OPCIONAL en este informe (`_tax` req:0), así
          que hay que distinguir «el IVA es cero» de «no me han dicho el IVA».
          Confundirlos era el fallo más caro del hub: ver taxBasis(). */
-      taxSeen: (()=>{ const v = gv(r,'_tax','itemtax');
-                      return v !== undefined && v !== null && String(v).trim() !== ''; })(),
+      taxSeen: hayNumero(gv(r,'_tax','itemtax')),
       country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
-      cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0
+      /* Un pedido PENDIENTE no es una venta: el comprador todavía no ha pagado
+         y el informe lo trae sin importe. Contarlo sumaba unidades fantasma
+         —que bajan el precio medio— y, peor, les cobraba tarifa de logística
+         a unidades que nunca se enviaron. «Sin enviar» sí es una venta y no
+         entra aquí. */
+      cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0 ||
+                 st==='pending' || st==='pendiente'
     };
   }).filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
                (cf==='ALL' || r.country===cf));

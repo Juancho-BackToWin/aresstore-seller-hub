@@ -568,6 +568,22 @@ function renderRent(){
        de lo real, y eso hay que decirlo en vez de dejar que parezca un dato. */
     if(P.dataDays>0 && P.dataDays < P.periodDaysReal)
       v+='<br><br><strong>El informe de pedidos cubre '+num(P.dataDays)+' días de los '+num(P.periodDaysReal)+' que estás mirando.</strong> Las ventas son las que hay; los gastos fijos, en cambio, se cuentan por los '+num(P.periodDaysReal)+' días completos, así que el margen que ves está por debajo del real. Descarga un informe más largo o mira un periodo más corto.';
+    /* Qué se ha podido leer del informe de tarifas y qué no. Sin esto, un
+       fichero de nueve tiendas y tres divisas del que solo sirven las filas en
+       euros se presentaba como si hubiera alimentado el catálogo entero. */
+    if(P.feeFilas>0){
+      const divs = Object.keys(P.feeDivisas||{});
+      let t = '<br><br>Informe de tarifas: <strong>'+num(P.feeFilas)+' filas</strong>';
+      if((P.feeTiendas||[]).length>1) t += ' de <strong>'+P.feeTiendas.length+' tiendas</strong>';
+      if(divs.length>1) t += ' en '+divs.length+' divisas ('+divs.join(', ')+')';
+      t += '.';
+      if(P.feeOtraDivisa>0) t += ' <strong>'+num(P.feeOtraDivisa)+' filas no están en euros y quedan fuera</strong>: '+
+        'mezclar una tarifa en otra divisa con un ingreso en euros no da un número aproximado, da uno inventado. '+
+        'Cuando haya tipos de cambio se podrán convertir; hasta entonces prefiero decírtelo.';
+      if(P.feeSinFba>0) t += ' En '+num(P.feeSinFba)+' filas la tarifa de logística viene como «--», que es ausencia y no un cero: esas caen al valor por defecto.';
+      if(P.feeSinTarifaPais>0) t += ' <strong>'+num(P.feeSinTarifaPais)+' unidades vendidas no tienen tarifa de su propio mercado</strong> en este informe, así que van con el valor por defecto del producto. No les pongo la de otro país: la comisión del mismo SKU no es la misma en las nueve tiendas.';
+      v += t;
+    }
     const cv = Math.round(P.feeCoverPct||0);
     if(cv<=0 && P.settleRows>0 && !P.settleMatched)
       v+='<br><br><strong>Hay una liquidación cargada y no reconozco sus columnas de tarifas.</strong> El fichero plano de Amazon tiene dos formatos y este lector entiende el que trae «item-related-fee-type». Las comisiones siguen estimadas al 15%: prefiero decírtelo a enseñarte 0 € de comisión y llamarlo medido.';

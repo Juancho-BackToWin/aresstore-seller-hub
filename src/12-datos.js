@@ -268,8 +268,25 @@ const REPORTS = [
    fields:{
      _sku     :{req:1, type:'code',  alias:[/^sku$/,/sellersku/,/referencia/]},
      _referral:{req:1, type:'money', alias:[/referralfeeperunit/,/comision.*porunidad/,/comisionporrecomendacion/,/comision/]},
-     _fba     :{req:0, type:'money', alias:[/expectedfulfillmentfeeperunit/,/tarifadegestionlogistica/,/tarifadelogistica/,/gestionlogistica/]},
-     _price   :{req:0, type:'money', alias:[/yourprice/,/salesprice/,/tuprecio/,/preciodeventa/]}
+     /* Amazon escribe esta columna de tres maneras y ninguna es «la» oficial:
+        `expected-fulfillment-fee-per-unit` en el formato antiguo, y en el nuevo
+        `expected-domestic-fulfilment-fee-per-unit` —ortografía británica, una
+        sola `l`, y un `domestic` en medio— más seis columnas EFN por país. El
+        alias antiguo no casaba con la nueva, y entonces la segunda pasada de
+        resolveFields le enchufaba `sales-price`: la tarifa de logística se leía
+        como el PRECIO DE VENTA, 12,99 € donde eran 2,18 €. La doméstica va
+        primero a propósito; las EFN suelen venir a `--`. */
+     _fba     :{req:0, type:'money', alias:[/expected.*domestic.*fulfil?ment.*feeperunit/,
+                                            /expected.*fulfil?ment.*feeperunit/,
+                                            /expectedefnfulfil?mentfeeperunit/,
+                                            /tarifadegestionlogistica/,/tarifadelogistica/,/gestionlogistica/]},
+     _price   :{req:0, type:'money', alias:[/yourprice/,/salesprice/,/tuprecio/,/preciodeventa/]},
+     /* El fichero real trae 31 SKU × 9 tiendas en 3 divisas. Sin leer estas dos
+        columnas la clave era solo el SKU y ganaba la última fila leída: según el
+        orden del fichero podías acabar aplicando tarifas saudíes en riales a
+        ventas españolas. El dato estaba en el fichero; no se leía. */
+     _store   :{req:0, type:null,  alias:[/amazonstore/,/^store$/,/tienda/,/marketplace/]},
+     _cur     :{req:0, type:null,  alias:[/^currency$/,/divisa/,/moneda/]}
    },
    forbid:['orderId'],
    sig:P => P.has.asin && P.has.currency && P.n.money>=5 && !P.has.orderId && P.cols>=25},
@@ -490,11 +507,20 @@ function resolveFields(rep, headers, P){
       }
     }
   });
-  // segunda pasada: por tipo de contenido, para lo que quede sin asignar
+  /* Segunda pasada: por tipo de contenido, para lo que quede sin asignar.
+
+     Solo para campos OBLIGATORIOS. Un campo opcional cuyo alias no ha casado se
+     queda sin mapear a propósito: sin él se cae a un valor por defecto que está
+     documentado, mientras que adivinarlo por tipo mete un número real de otra
+     columna y no lo dice nadie. Medido: la tarifa de logística acababa siendo
+     `sales-price`, y con un informe de pedidos sin columna de impuesto
+     reconocible el IVA habría acabado siendo cualquier otro importe. Los
+     obligatorios sí lo conservan, porque sin ellos la importación se bloquea y
+     el asignador manual se lo pregunta al usuario. */
   Object.keys(fields).forEach(f=>{
     if(map[f]) return;
     const d = fields[f];
-    if(!d.type) return;
+    if(!d.type || !d.req) return;
     let bestK=null, bestU=-1;
     H.forEach(k=>{
       if(used[k]) return;
@@ -967,15 +993,48 @@ function pnl(){
      Del informe se saca el PORCENTAJE (comisión ÷ precio del informe), no el
      importe por unidad: así se adapta al precio al que vendiste de verdad, que
      con promociones no es el del informe. */
-  const tarifas = {};
+  /* Las tarifas se indexan por SKU **y tienda**, y solo entran las filas en la
+     divisa de referencia. Una tarifa en riales sumada a un ingreso en euros no
+     da un número aproximado: da uno inventado, y encima creíble. Las filas de
+     otra divisa se cuentan y se declaran en vez de convertirse con un tipo de
+     cambio que no tenemos. */
+  const DIVISA_REF = 'EUR';
+  const tarifas = {}, feeTiendas = {}, feeDivisas = {};
+  let feeOtraDivisa = 0, feeSinFba = 0, feeFilas = 0;
   imp('fees').forEach(r=>{
     const sk = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase(); if(!sk) return;
+    feeFilas++;
+    const div = String(gv(r,'_cur','currency')||'').trim().toUpperCase() || DIVISA_REF;
+    feeDivisas[div] = (feeDivisas[div]||0) + 1;
+    const tiendaTxt = gv(r,'_store','amazonstore','store');
+    const tienda = countryOf(tiendaTxt) || null;
+    if(tiendaTxt) feeTiendas[String(tiendaTxt).trim()] = 1;
+    if(div !== DIVISA_REF){ feeOtraDivisa++; return; }   // no se mezcla con euros
     const ref   = toNum(gv(r,'_referral','estimatedreferralfeeperunit'));
     const precio= toNum(gv(r,'_price','yourprice','salesprice'));
-    const fbaUd = toNum(gv(r,'_fba','expectedfulfillmentfeeperunit'));
-    tarifas[sk] = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
+    const crudo = gv(r,'_fba','expecteddomesticfulfilmentfeeperunit','expectedfulfillmentfeeperunit');
+    /* «--» es la marca de ausencia de ESTE informe, no un cero: 4 filas de la
+       tarifa doméstica y 363 de las EFN vienen así en el fichero real. */
+    const fbaUd = hayNumero(crudo) ? toNum(crudo) : 0;
+    if(!hayNumero(crudo)) feeSinFba++;
+    const fila = {pct: (ref>0 && precio>0) ? ref/precio : 0, fba: fbaUd};
+    tarifas[sk+'|'+(tienda||'*')] = fila;
+    if(!tarifas[sk+'|*']) tarifas[sk+'|*'] = fila;   // respaldo si no hay tienda
   });
-  let udsConTarifa=0;
+  /* La tarifa del país que vendió, y NUNCA la de otro país.
+
+     Si el informe declara tiendas y no hay fila del país de esa venta, se cae al
+     valor por defecto del producto y se cuenta en `feeSinTarifaPais`. Coger la
+     de otra tienda daría un número con pinta de medido que no lo es: la comisión
+     de un mismo SKU no es la misma en las nueve. El respaldo `|*` solo vale
+     cuando el fichero es de un único mercado y no trae columna de tienda. */
+  const feeMultiTienda = Object.keys(feeTiendas).length > 1;
+  const tarifaDe = (sk, pais) => {
+    if(pais && tarifas[sk+'|'+pais]) return tarifas[sk+'|'+pais];
+    if(feeMultiTienda) return null;
+    return tarifas[sk+'|*'] || null;
+  };
+  let udsConTarifa=0, udsSinTarifaDeSuPais=0;
   /* Orden de preferencia: lo que dice Amazon, lo que has puesto tú, el 15 %
      por defecto. El 15 % es el último recurso, no el primero.
 
@@ -986,8 +1045,10 @@ function pnl(){
      al 8 %, cada devolución te devolvía un 15 % que nunca pagaste. Dos copias
      de la misma regla siempre acaban divergiendo; es la misma lección que
      `iso()`. */
-  const refPctOf = k => {
-    const p = pm[k], t = tarifas[k];
+  /* El país de la venta manda: la comisión de un SKU no es la misma en las
+     nueve tiendas, y aplicar la de otra es inventarse un número creíble. */
+  const refPctOf = (k, pais) => {
+    const p = pm[k], t = tarifaDe(k, pais);
     return (t && t.pct>0) ? t.pct
          : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
   };
@@ -995,8 +1056,9 @@ function pnl(){
     let ref=0, f=0;
     rows.forEach(r=>{
       const k = String(r.sku).toLowerCase();
-      const p = pm[k], t = tarifas[k];
-      const pct = refPctOf(k);
+      const p = pm[k], t = tarifaDe(k, r.country);
+      if(!t && (tarifas[k+'|*'] || (r.country && feeMultiTienda))) udsSinTarifaDeSuPais += r.qty;
+      const pct = refPctOf(k, r.country);
       if(t && t.pct>0) udsConTarifa += r.qty;
       ref += r.revenue*pct;
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
@@ -1062,8 +1124,12 @@ function pnl(){
          el supuesto que no infla el beneficio. */
   const ventaSku = {};
   S.forEach(r=>{ const k=String(r.sku).toLowerCase();
-    if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0};
-    ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty; });
+    if(!ventaSku[k]) ventaSku[k]={rev:0, tax:0, units:0, paises:{}, pais:null};
+    ventaSku[k].rev+=r.revenue; ventaSku[k].tax+=r.tax; ventaSku[k].units+=r.qty;
+    /* El país donde MÁS se vendió ese SKU, para poder cobrar la devolución a la
+       comisión de su mercado en vez de a la de otro. */
+    if(r.country){ const P2=ventaSku[k].paises; P2[r.country]=(P2[r.country]||0)+r.qty;
+      if(!ventaSku[k].pais || P2[r.country]>P2[ventaSku[k].pais]) ventaSku[k].pais=r.country; } });
 
   /* El informe de devoluciones NO trae país. Con el desplegable en España se
      estaban restando las devoluciones de los nueve mercados contra las ventas
@@ -1100,7 +1166,7 @@ function pnl(){
     const p = pm[k];
     const netUd   = (v.rev - v.tax)/v.units;
     const grossUd = v.rev/v.units;
-    const comUd = grossUd*refPctOf(k);
+    const comUd = grossUd*refPctOf(k, v.pais);
     retImputadas += q;
     retIngreso  += q*netUd;
     retComision += q*(comUd - Math.min(5, 0.20*comUd));
@@ -1121,7 +1187,9 @@ function pnl(){
     ppcSource, adSpanUnknown: ads.spanUnknown,
     refMedido, fbaMedido,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
-    feeSkus: Object.keys(tarifas).length, feeUnits: udsConTarifa,
+    feeSkus: Object.keys(tarifas).filter(k=>!/\|\*$/.test(k)).length, feeUnits: udsConTarifa,
+    feeFilas, feeTiendas: Object.keys(feeTiendas), feeDivisas,
+    feeOtraDivisa, feeSinFba, feeSinTarifaPais: udsSinTarifaDeSuPais,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
     retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,

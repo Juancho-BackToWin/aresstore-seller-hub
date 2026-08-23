@@ -1,9 +1,7 @@
 # Aresstore Seller Hub — traspaso a sesión nueva
 
-Estado a 18 de agosto de 2026, **con la v0.7 desplegada y con la fontanería
-cerrada**: los doce informes verificados uno a uno, la salida probada de ida y
-vuelta, los accesos en verde, y veinte números creíbles y falsos encontrados en
-revisión adversarial y corregidos con prueba (§5). Este documento
+Estado a 19 de agosto de 2026, **con la v0.7 desplegada, la fontanería cerrada y
+treinta y dos números creíbles y falsos corregidos con prueba** (§5). Este documento
 es lo único que hace falta leer para retomar el proyecto desde cero. Todo lo demás
 está en el repositorio.
 
@@ -64,6 +62,38 @@ dispositivos) y valida la sintaxis. **Nunca editar `index.html` a mano**: se
 sobrescribe en cada compilación.
 
 ---
+
+## 2 bis. Estado del despliegue
+
+**Lo que hay en producción es exactamente lo que hay en `main`.** Comprobado
+sobre la URL servida, no sobre el repositorio: el `index.html` que devuelve
+`aresstore-seller-hub.vercel.app` tiene el mismo SHA-256 que el de `main`
+(`8218788…`), y `sw.js` responde con el identificador de caché de la última
+compilación. Esa comprobación es la que cierra un despliegue; que el merge
+aparezca en GitHub no dice nada de lo que se está sirviendo.
+
+| | |
+|---|---|
+| PR #1 · `claude/verify-git-environment-nbjq49` | 15 commits · **mergeada** |
+| PR #2 · `claude/margen-honesto` | 6 commits · **mergeada** |
+| Suites | **12**, todas dentro de `npm run test:all` |
+| Comprobaciones | **392**, `exit 0`, cero fallos |
+
+### La trampa que costó el sexto commit de la PR #2
+
+La serie de cinco commits del parche tocaba `src/` y **no** `index.html`. Aquí
+Vercel no compila: sirve el `index.html` del repositorio tal cual (§3.0). Sin
+recompilar y commitear el resultado, el merge habría desplegado producción con
+el código anterior y el arreglo no habría llegado a la pantalla, con la PR en
+verde y todo el mundo convencido.
+
+No es una hipótesis: con el `index.html` que dejaba el parche, `tests/iva.test.js`
+—la suite que traía el propio parche— fallaba con nueve fallos.
+
+**Regla que se saca de ahí:** un cambio en `src/` no está terminado hasta que
+`npm run build` está commiteado con él. Y `npm run build`, nunca `./build.sh`:
+GitHub guarda sin bit de ejecución lo que se sube por la web.
+
 
 ## 3. Lo pendiente, en orden
 
@@ -502,6 +532,112 @@ ejecutando, no razonando. Salieron veinte. Ninguno daba error en pantalla.
   histórico —lo único que no se puede reconstruir descargando informes otra vez—
   desaparecía por soltar el fichero equivocado.
 
+### De la PR #2 — doce más, y ninguno de aritmética
+
+La revisión anterior dejó el motor limpio de cuentas mal hechas. Estos doce son
+de otra clase, y por eso sobrevivieron: **de rótulo y de premisa**. Un número
+equivocado se corrige; una etiqueta de máxima confianza puesta sobre un número
+frágil es la que hace que alguien decida con él.
+
+**La base del IVA, que invertía el orden entre mercados**
+
+- **El impuesto es una columna OPCIONAL del informe de pedidos.** Sin ella,
+  `tax` valía 0, el «ingreso neto» pasaba a ser el bruto y no se decía nada. No
+  solo inflaba el margen 4,5 puntos: **invertía el ranking de mercados**. Amazon
+  cobra la comisión sobre el precio con IVA, así que el país de tipo más alto es
+  genuinamente el peor; sin la columna salía el mejor. Medido con tres mercados:
+  `DE > ES > SE` se convertía en `SE > ES > DE`.
+- **La suite era estructuralmente incapaz de verlo**: `tests/pnl.test.js` fija
+  `itemtax:'0'` en su laboratorio, así que cuatrocientas y pico comprobaciones de
+  rentabilidad corrían sobre un negocio sin IVA. Por eso el arreglo empieza por
+  `tests/iva.test.js`, con el IVA como eje de prueba y no como constante.
+- **Dónde se arregla de verdad no es Rentabilidad, es Datos.** Deducir el IVA
+  salva el número, pero deducir no es leer: se arregla volviendo a descargar el
+  informe con la columna. Un aviso puesto solo junto al margen está puesto donde
+  ya no se puede hacer nada.
+
+**«Medido», que se regalaba de tres formas distintas**
+
+- **El Panel decía «medido» a secas** con una liquidación que cubría el 15,6 %
+  del periodo, mientras Rentabilidad decía «16 % reales». La pantalla que más se
+  mira era la que menos matizaba.
+- **Una cobertura del 99,97 % se redondeaba a 100** y la insignia saltaba a
+  «medido». El redondeo es para enseñar, no para decidir.
+- **La salvedad de la tarifa FBA colgaba de la cobertura de COMISIÓN.** Una
+  liquidación con solo líneas de comisión presentaba como medida una tarifa FBA
+  íntegramente estimada. Son dos conceptos y ahora se dicen por separado.
+
+Principio que queda escrito: **la etiqueta la fija el eslabón más débil.** La
+insignia exige base de IVA leída, publicidad con duración conocida y comisión
+medida; si falla uno, no hay «medido».
+
+**Los que movían dinero**
+
+- **La caja daba crédito de días a cualquier pedido no cerrado.** Un pedido ya
+  RECIBIDO está en la estantería y su coste ya viajó al lote: contarlo otra vez
+  es contarlo dos veces. Un BORRADOR no es un pedido. Y 600 unidades de un SKU no
+  reponen las ventas de otro. Medido: la salida de 90 días pasaba de 36.000 € a
+  12.000 € con un pedido recibido **de otro producto**.
+- **Publicidad sin rango de fechas era muda por partida doble**: el aviso vivía
+  detrás de `adDays>0` y la etiqueta decía «estimado a diario», que describe otro
+  camino. El gasto entero se cargaba al periodo que miraras, de una semana o de
+  un año.
+- **Las devoluciones no tienen país en el informe**, así que con el desplegable
+  en España se restaban las de los nueve mercados contra las ventas de uno. Ahora
+  se reparten por cuota de ventas y la pantalla dice que es un reparto.
+- **La venta se cobraba al tipo del informe de tarifas y la devolución
+  reintegraba al 15 % por defecto.** Con una categoría al 8 %, cada devolución
+  devolvía un 15 % que nunca se pagó. Dos copias de la misma regla siempre
+  divergen: ahora hay una sola función.
+
+**Inventario contradiciéndose consigo mismo, y una copia vacía**
+
+- **`enCamino` entraba en «Pedir» pero no en la cobertura ni en el riesgo**: una
+  referencia con 900 unidades llegando seguía pintada «tarifa bajo inv.» mientras
+  la columna de al lado decía que no había que pedir nada. Son dos preguntas
+  distintas — la tarifa la cobra Amazon por lo que hay **en el almacén**, y la
+  mercancía que navega no cuenta — y ahora se responden por separado.
+- **El histórico archivaba stock CERO** para el SKU que solo viene en el informe
+  multipaís, guardando a la vez sus 1.400 unidades por país en el mismo registro.
+  En el histórico un cero significa rotura, así que la referencia quedaba en
+  rotura permanente y su velocidad real salía inflada — justo el número que M2 va
+  a usar para reponer. `invStats` ya hacía el respaldo; `captureStock` se había
+  quedado fuera.
+- **`{"products":[],"settings":{},"imports":{}}` tiene la forma de una copia**,
+  así que pasaba el filtro, borraba el histórico y dejaba `DB.settings` sin
+  `cash`. Tesorería y el P&L reventaban **después**, lejos de donde se causó el
+  daño.
+
+Y una lección de método que vale más que cualquiera de los doce: **una suite que
+fija una variable como constante es ciega a los fallos de esa variable.** El IVA
+llevaba cuatrocientas comprobaciones puesto a cero.
+
+### Del importador, con ficheros como los entrega Amazon — tres
+
+Las fixtures de `npm run fixtures` son limpias: UTF-8, saltos de Unix, punto
+decimal. Los ficheros reales no siempre. Estos tres salieron de reproducir las
+manías que Amazon tiene de verdad al exportar, y los tres estaban vivos.
+
+- **UTF-16 se daba por reconocido y no se leía.** Amazon sirve varios TSV en
+  UTF-16. Leído como UTF-8 queda un NUL entre cada letra, y `normHdr` los quita
+  al limpiar la cabecera: el informe casaba, salía el tick verde, y dentro había
+  cero unidades y cero euros. Un informe reconocido del que no se lee nada es
+  peor que uno rechazado, porque el rechazado se ve. Ahora `readSmart` detecta la
+  marca de orden de bytes antes de intentar nada.
+- **«--» en la columna del IVA pasaba por un cero medido.** Es el fallo más caro
+  del hub entrando por otra puerta: `taxBasis()` ya cubría la columna *ausente*,
+  pero una columna *presente* con el marcador de vacío de Amazon daba
+  `taxSeen: true` y un IVA de 0 € con el margen sellado como medido. Ahora
+  `hayNumero()` distingue un número de un hueco disfrazado.
+- **Un pedido PENDIENTE se contaba como venta.** El comprador aún no ha pagado y
+  el informe lo trae sin importe: sumaba unidades fantasma —que bajan el precio
+  medio— y les cobraba tarifa de logística a unidades que nunca se enviaron. «Sin
+  enviar» sí es una venta y sigue contando.
+
+Lo que se comprueba en `robustez.test.js` no es que el fichero se reconozca, sino
+que **los números que salen son los mismos que con el fichero limpio**. Esa es la
+diferencia entre probar el importador y probar el detector de informes.
+
 ## 6. Riesgos abiertos y límites honestos
 
 - **La base de la comisión no está cerrada.** El contrato europeo la define sobre
@@ -565,7 +701,7 @@ npm install                    # playwright (los navegadores ya están en el ent
 pip3 install Pillow            # solo para build.sh: rasteriza los iconos
 bash build.sh                  # ensambla index.html · nunca editarlo a mano
 npm run fixtures               # informes de Amazon simulados, en inglés y en español
-npm run test:all               # las diez suites de una vez
+npm run test:all               # las doce suites de una vez · 392 comprobaciones
 ```
 
 | Suite | Qué sujeta |
@@ -575,6 +711,8 @@ npm run test:all               # las diez suites de una vez
 | `test:m0` | el histórico no duplica, no pierde y detecta rotura |
 | `test:m11` | los tres métodos de coste contra la cuenta hecha a mano |
 | `test:pnl` | tarifas, comisión, base del ingreso neto, periodo, publicidad, devoluciones |
+| `test:iva` | el IVA como eje de prueba: base leída, base deducida, y el orden entre mercados |
+| `test:robustez` | los cuatro informes que alimentan el negocio, en la forma en que Amazon los entrega de verdad |
 | `test:caja` | la proyección de caja a 90 días, incluido el gráfico medido en píxeles |
 | `test:inv` | cobertura, velocidad, reposición y honestidad del histórico |
 | `test:informes` | los doce informes uno a uno, y **qué alimenta cada uno** |
@@ -596,6 +734,13 @@ Tres cosas que estas suites hacen a propósito y conviene no deshacer:
   fichero vacío pasa esa prueba. Así salió que los lotes se exportaban a coste 0.
 - **`caja.test.js` mide el gráfico en píxeles del DOM**, no leyendo el CSS. El
   fallo era que una barra negativa se dibujaba igual que una positiva.
+- **`iva.test.js` no fija el impuesto como constante.** El resto de suites de
+  rentabilidad usan `itemtax:'0'` para que las cuentas salgan redondas, y eso las
+  hacía estructuralmente incapaces de ver un fallo en la base del IVA. Si alguien
+  «simplifica» esta suite poniendo el impuesto a cero, deja de servir para nada.
+- **`salida.test.js` suelta el fichero en el input de verdad** en vez de
+  reimplementar el filtro de restauración dentro de la prueba. Una prueba que
+  reimplementa lo que comprueba solo se comprueba a sí misma.
 
 ## 8. Mensaje para arrancar la sesión nueva
 

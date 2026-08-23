@@ -193,6 +193,82 @@ EPR completo. Queda anotado aquí para que no se pierda entre cosas técnicas.
 
 ---
 
+## P-12 · Los cuatro informes reales, cargados por ti (paso 4 del método)
+
+**Bloquea a:** nada del código. Bloquea el paso a **apta** de todo el hub.
+
+Me pediste verificar el importador con ficheros reales de Seller Central para
+pedidos, inventario, devoluciones y vista previa de tarifas. **No lo he hecho, y
+por dos razones, las dos importantes.**
+
+**La primera es tuya:** `docs/METODO.md` lo prohíbe explícitamente. «Jamás
+cargues datos reales de mi negocio. Sintéticos siempre», y entre lo que la norma
+prohíbe está «cargar datos reales para *ir probando* mientras se construye». Los
+datos reales son el paso 4 y van al final, contigo delante. Lo escribiste
+precisamente porque un número creíble y falso con datos reales encima se
+convierte en una decisión tomada.
+
+**La segunda es material:** esos ficheros no existen en mi entorno. Solo tú
+puedes descargarlos, y en cuanto los descargues dejan de ser sintéticos.
+
+Lo que sí he hecho mientras tanto, que es lo que se puede hacer sin ellos:
+endurecer el importador contra lo que de verdad rompe a los importadores con
+ficheros reales — codificaciones, saltos de línea, comillas, separadores de
+miles, columnas vacías y celdas con el separador dentro.
+
+**Qué necesito de ti, cuando quieras hacer el paso 4:** descarga los cuatro y
+súbelos. Los abro contigo delante, uno a uno, y comparamos lo que sale en
+pantalla con lo que tú sabes de tu negocio. Es una sola tanda:
+
+| Informe | Dónde | Qué miramos al cargarlo |
+|---|---|---|
+| Todos los pedidos | Informes › Logística de Amazon | que traiga la **columna de impuestos** (ver P-13) |
+| Gestión de inventario FBA | Informes › Logística de Amazon › Inventario | que el stock cuadre con lo que tienes |
+| Devoluciones FBA | Informes › Logística de Amazon › Concesiones al cliente | la tasa real de devolución |
+| Vista previa de tarifas | Informes › Logística de Amazon › Pagos | la comisión real por SKU (esto cierra P-2) |
+
+---
+
+## P-13 · ¿Tu informe de pedidos trae la columna de impuestos?
+
+**Bloquea a:** que el margen esté medido en vez de deducido.
+
+El impuesto es una columna **opcional** del informe «Todos los pedidos». Cuando
+no viene, el hub deduce el IVA del tipo del país y **lo dice**, pero deducir no
+es leer: con la base deducida el margen no puede sellarse como medido por muy
+reales que sean las comisiones.
+
+Esto no era menor. Sin la columna, el margen salía 4,5 puntos alto y —peor— se
+invertía el orden entre mercados: el país de tipo más alto es genuinamente el
+peor, porque Amazon cobra la comisión sobre el precio con IVA, y sin la columna
+aparecía como el mejor.
+
+**Qué necesito:** abre tu «Todos los pedidos» y mira si hay una columna
+`item-tax` o «Impuesto del artículo». Si no está, hay que volver a descargarlo
+pidiéndola. La pantalla de Datos te dice cuántas líneas y qué porcentaje de tu
+ingreso vienen sin ella.
+
+---
+
+## P-14 · Borrar dos ramas en GitHub — un clic tuyo
+
+**Bloquea a:** nada. Es limpieza.
+
+Me pediste borrar `parche-margen-honesto` y `claude/verify-git-environment-nbjq49`.
+**No puedo desde aquí:** el proxy de este entorno bloquea el borrado de ramas,
+por `git push --delete` y por la API REST, las dos con 403
+(«Write access to this GitHub API path is not permitted through this proxy»).
+No es un permiso que yo pueda darme.
+
+**Qué necesito:** bórralas tú en
+`github.com/Juancho-BackToWin/aresstore-seller-hub/branches`. Las dos están
+mergeadas en `main`; `claude/verify-git-environment-nbjq49` no tiene ni un commit
+fuera. Un aviso: `parche-margen-honesto` sí tiene uno fuera, el que añadió el
+fichero `seller-hub-5-commits.patch`. Su **contenido** está en `main` como los
+cinco commits, pero el fichero `.patch` en sí desaparece al borrar la rama. Si lo
+quieres conservar como archivo histórico, dímelo antes.
+
+
 ## Índice
 
 | # | Bloquea a | Asunto | Estado |
@@ -208,3 +284,6 @@ EPR completo. Queda anotado aquí para que no se pierda entre cosas técnicas.
 | P-9 | coste de las devoluciones | ¿hay tasa de procesamiento? | abierto |
 | P-10 | prioridad, no cálculo | ¿cableo los tres informes parados? | abierto |
 | P-11 | nada del código | EPR/PPWR, riesgo de bloqueo de listados | abierto |
+| P-12 | el paso a «apta» de todo | los cuatro informes reales, cargados por ti | abierto |
+| P-13 | margen medido vs deducido | ¿tu informe de pedidos trae la columna de impuestos? | abierto |
+| P-14 | nada, es limpieza | borrar dos ramas en GitHub (no puedo desde aquí) | abierto |

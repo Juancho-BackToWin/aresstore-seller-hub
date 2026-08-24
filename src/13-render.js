@@ -491,6 +491,8 @@ function renderRent(){
         (P.retRepartidas?' · repartidas por la cuota de ventas de este mercado':'')+
         ' · ingreso devuelto menos comisión reintegrada'+
         (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
+    (P.vatShortfall>0 ? line('IVA no repercutido',P.vatShortfall,
+        num(P.vatVentasReducidas)+' ventas a tipo reducido · lo debes tú, no Amazon', true) : '')+
     line('Almacenaje',P.storage,'',true)+
     line('Otras tarifas',P.otherFee,'',true)+
     line('Coste de producto',P.cogs,'',true)+
@@ -574,6 +576,23 @@ function renderRent(){
     /* Divisa · una sola línea en zlotys de 238 sobrestimaba el ingreso un
        1,19 %. Excluirla y decirlo es más honesto que convertirla con un tipo
        que no tenemos. */
+    /* El detector de tipo reducido. Va el primero del veredicto porque es, con
+       diferencia, el que más dinero mueve de todo lo que enseña esta pantalla. */
+    if(P.vatVentasReducidas>0){
+      const V = P.vat||{};
+      const paises = Object.keys(V.porPais||{}).filter(k=>V.porPais[k].dif>0)
+        .sort((a,b)=>V.porPais[b].dif-V.porPais[a].dif)
+        .map(k=>k+' '+fmt(V.porPais[k].dif,0)).join(' · ');
+      const cods = Object.keys(V.porCodigo||{});
+      v += '<br><br><strong style="color:var(--stop)">'+num(P.vatVentasReducidas)+
+        ' ventas con un tipo de IVA inferior al general · diferencia '+fmt(V.diferencia,2)+'</strong>'+
+        (paises?'<br>'+paises:'')+
+        (cods.length?'<br>Código fiscal de producto en el informe: <strong>'+cods.join(', ')+'</strong>. '+
+          'Si tus productos no son lo que dice ese código, el tipo reducido no les toca y la diferencia es una deuda, no un ahorro.':'')+
+        (V.difDelMercado>0?'<br>De esa diferencia, '+fmt(V.difDelMercado,2)+' responde Amazon como sujeto pasivo y no te la van a reclamar a ti.':'')+
+        (V.sinResponsable>0?'<br>En '+num(V.sinResponsable)+' ventas el informe no dice quién responde, así que las cargo a tu cuenta: equivocarme por ahí es más barato que enseñarte un margen que no tienes.':'')+
+        '<br>Esto no es un fallo de cálculo del hub. Es una deuda fiscal real que el hub no veía, y por eso los márgenes de antes eran optimistas.';
+    }
     if(P.ventasFueraDivisa>0){
       const d = Object.keys(P.ventasOtraDivisa).map(k=>num(P.ventasOtraDivisa[k])+' en '+k).join(', ');
       v += '<br><br><strong>'+num(P.ventasFueraDivisa)+' línea'+(P.ventasFueraDivisa===1?'':'s')+

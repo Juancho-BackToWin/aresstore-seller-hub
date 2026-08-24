@@ -16,6 +16,20 @@ const COUNTRIES = [
   {code:'IE', name:'Irlanda',      vat:23, storage:false, lowInv:false, vatCost:0,    cur:'EUR'},
   {code:'SE', name:'Suecia',       vat:25, storage:false, lowInv:false, vatCost:0,    cur:'SEK'}
 ];
+
+/* Tipo general de IVA por país, para el DETECTOR de tipo reducido.
+
+   Sale de COUNTRIES para los mercados donde ya se vende, así que no hay dos
+   verdades para el mismo país; se añaden a mano los que aparecen en el informe
+   fiscal sin que vendamos allí todavía. Se usa solo para comparar contra el
+   tipo que Amazon aplicó de verdad: si el aplicado es menor, o el producto está
+   clasificado en una categoría reducida que no le toca, o hay una exención — y
+   las dos cosas hay que verlas. */
+const VAT_GENERAL = (function(){
+  const m = {AT:20, PT:23};
+  COUNTRIES.forEach(c => { m[c.code] = c.vat; });
+  return m;
+})();
 /* Mapa de dominio de marketplace -> código de país. Los informes de Amazon
    identifican el país de formas distintas según el informe, nunca por el
    nombre del fichero. */

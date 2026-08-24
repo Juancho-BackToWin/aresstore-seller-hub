@@ -356,9 +356,27 @@ const REPORTS = [
    hdr:['reimbursementid'], onlyEn:true, fields:{}, sig:()=>false},
 
   {id:'vat', label:'Transacciones sujetas a IVA', en:'VAT Transactions',
-   path:'Informes › Biblioteca de documentos fiscales', feeds:'IVA por país',
-   guardaSinUsar:1,
-   hdr:['transactiontype','salearrivalcountry'], onlyEn:true, fields:{}, sig:()=>false}
+   path:'Informes › Biblioteca de documentos fiscales',
+   feeds:'IVA realmente aplicado por pedido, y el detector de tipo reducido',
+   /* 95 columnas, TAB, UTF-8. Los alias cubren los dos juegos de nombres que
+      trae el informe: el corto (`SALE_ARRIVAL_COUNTRY`, `TOTAL_ACTIVITY_VALUE_*`)
+      y el largo (`TAXABLE_JURISDICTION`, `TOTAL_PRICE_OF_ITEMS_*`). */
+   hdr:['transactiontype','salearrivalcountry'], onlyEn:true,
+   fields:{
+     _period:{req:0, type:null,   alias:[/activityperiod/]},
+     _ttype :{req:0, type:null,   alias:[/^transactiontype$/]},
+     _event :{req:0, type:null,   alias:[/transactioneventid/,/activitytransactionid/]},
+     _sku   :{req:0, type:'code', alias:[/sellersku/,/^sku$/]},
+     _juris :{req:0, type:null,   alias:[/taxablejurisdiction/,/salearrivalcountry/,/arrivalcountry/]},
+     /* Ojo: viene en FRACCIÓN DECIMAL. `0.1` es el 10 %, no el 0,1 %. */
+     _rate  :{req:0, type:null,   alias:[/priceofitemsvatratepercent/,/vatratepercent/]},
+     _base  :{req:0, type:'money',alias:[/totalpriceofitemsamtvatexcl/,/totalactivityvalueamtvatexcl/]},
+     _vat   :{req:0, type:'money',alias:[/totalpriceofitemsvatamt/,/totalactivityvaluevatamt/]},
+     _ptc   :{req:0, type:null,   alias:[/producttaxcode/]},
+     _scheme:{req:0, type:null,   alias:[/taxreportingscheme/]},
+     _resp  :{req:0, type:null,   alias:[/taxcollectionresponsibility/]}
+   },
+   sig:()=>false}
 ];
 
 /* ---------- Lectura de fichero con detección de codificación ---------- */
@@ -791,6 +809,7 @@ function salesRows(opt){
         return !(nom > 0);
       })(),
       cur: String(gv(r,'_cur','currency')||'').trim().toUpperCase(),
+      oid: String(gv(r,'_oid','amazonorderid','orderid')||'').trim(),
       country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
       /* Un pedido PENDIENTE no es una venta: el comprador todavía no ha pagado
@@ -819,6 +838,90 @@ function salesRows(opt){
   out.meta = {otraDivisa, fueraPorDivisa:Object.keys(otraDivisa).reduce((a,k)=>a+otraDivisa[k],0)};
   return out;
 }
+/* =========================================================================
+   IVA realmente aplicado · el informe de transacciones sujetas al IVA
+
+   Por qué esto es lo que más dinero mueve del hub. El código fiscal de producto
+   de la cuenta es `A_FOOD_DESSERT` —postre alimenticio— aplicado a pulseras y a
+   bayetas de coche, así que Amazon está liquidando tipos reducidos de
+   alimentación: 10 % en España e Italia, 5,5 % en Francia, 7 % en Alemania,
+   6 % en Bélgica. Medido sobre mayo, junio y julio de 2026: faltan 759,13 € de
+   IVA repercutido sobre 6.533,76 € de base, el 11,62 %.
+
+   Ese coste no estaba en ninguna pantalla, así que todos los márgenes que el
+   hub enseñaba eran optimistas en unos once puntos. No es un fallo de cálculo
+   del hub: es una deuda fiscal real que el hub no veía.
+
+   Dos cosas distintas salen de aquí:
+
+   · el IVA MEDIDO por pedido, que cierra el hueco de las líneas de `orders` que
+     vienen sin importe de impuesto y sustituye a la deducción por tipo nominal;
+   · el DETECTOR, que compara el tipo aplicado con el general del país y dice
+     cuánto se está dejando de repercutir. Ese sigue haciendo falta aunque el
+     IVA esté medido, porque medir bien una liquidación equivocada no la
+     arregla.
+   ========================================================================= */
+function vatReport(){
+  const rows = imp('vat');
+  const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
+               difTuya:0, difDelMercado:0, sinResponsable:0,
+               porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0};
+  if(!rows.length) return out;
+  rows.forEach(r=>{
+    const tipoTx = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
+    /* Solo ventas. Devoluciones y ajustes tienen su propio signo y mezclarlos
+       aquí daría un tipo medio que no es el de ninguna transacción. */
+    if(tipoTx && tipoTx.indexOf('SALE')<0) return;
+    const pais = String(gv(r,'_juris','taxablejurisdiction','salearrivalcountry')||'').toUpperCase().slice(0,2);
+    const base = toNum(gv(r,'_base','totalpriceofitemsamtvatexcl','totalactivityvalueamtvatexcl'));
+    const iva  = toNum(gv(r,'_vat','totalpriceofitemsvatamt','totalactivityvaluevatamt'));
+    /* El tipo viene en fracción decimal: 0.1 es el 10 %. Un informe que lo
+       trajera ya en porcentaje daría 1000 % al multiplicar, así que se
+       distingue por el orden de magnitud en vez de confiar en el formato. */
+    let pct = toNum(gv(r,'_rate','priceofitemsvatratepercent','vatratepercent'));
+    if(pct > 1) pct = pct/100;
+    /* Y si no viene, se calcula del propio importe, que es más fiable que
+       suponer. */
+    if(!(pct>0) && base>0 && iva>0) pct = iva/base;
+    const aplicado = pct*100;
+    const general  = VAT_GENERAL[pais];
+
+    out.ventas++; out.base += base; out.vat += iva;
+    if(pais) { const P = out.porPais[pais] || (out.porPais[pais] = {ventas:0, base:0, vat:0, dif:0, tipos:{}});
+      P.ventas++; P.base += base; P.vat += iva;
+      P.tipos[aplicado.toFixed(1)] = (P.tipos[aplicado.toFixed(1)]||0)+1; }
+    else out.sinJuris++;
+    const ptc = String(gv(r,'_ptc','producttaxcode')||'').trim();
+    if(ptc) out.porCodigo[ptc] = (out.porCodigo[ptc]||0)+1;
+    const per = String(gv(r,'_period','activityperiod')||'').trim();
+    if(per) out.periodos[per] = (out.periodos[per]||0)+1;
+
+    /* El identificador de pedido permite cruzar con `orders` y tomar el IVA
+       medido en vez de deducirlo. En el fichero real viene en 265 de 294 filas. */
+    const ev = String(gv(r,'_event','transactioneventid','activitytransactionid')||'').trim();
+    const oid = (ev.match(/\d{3}-\d{7}-\d{7}/)||[])[0] || null;
+    if(oid){ const O = out.porPedido[oid] || (out.porPedido[oid] = {base:0, vat:0});
+      O.base += base; O.vat += iva; }
+
+    if(general > 0 && aplicado > 0 && aplicado < general - 0.05){
+      const dif = base*(general-aplicado)/100;
+      out.diferencia += dif; out.ventasReducidas++;
+      if(pais) out.porPais[pais].dif += dif;
+      /* De quién es la deuda. Cuando Amazon actúa como sujeto pasivo —el
+         `TAX_COLLECTION_RESPONSIBILITY` es del mercado— el que responde ante
+         Hacienda es Amazon y a ti no te lo van a reclamar. Cuando eres tú, o
+         cuando el informe no lo dice, la diferencia es tuya y entra en la
+         cuenta de resultados: si la columna falta, cargarla es lo prudente,
+         porque el error caro es creerte un margen que no tienes. */
+      const resp = String(gv(r,'_resp','taxcollectionresponsibility')||'').toUpperCase();
+      if(!resp) { out.sinResponsable++; out.difTuya += dif; }
+      else if(/MARKETPLACE|AMAZON|DEEMED/.test(resp)) out.difDelMercado += dif;
+      else out.difTuya += dif;
+    }
+  });
+  return out;
+}
+
 /* Comisiones reales desde la liquidación.
 
    Dos cosas que hay que distinguir y antes no se distinguían:
@@ -945,6 +1048,28 @@ function taxBasis(S){
   const nominal = {};
   COUNTRIES.forEach(c => { nominal[c.code] = c.vat; });
 
+  /* Orden de preferencia del IVA de una venta:
+       1 · el del informe fiscal, que es el que Amazon liquidó de verdad;
+       2 · el de la columna del informe de pedidos;
+       3 · deducido del tipo del país, y entonces la base va etiquetada.
+     El informe fiscal manda porque es el único que sabe que a estos productos
+     se les está aplicando un tipo reducido de alimentación: deducir por el tipo
+     general daría un IVA más ALTO que el real y un beneficio más bajo — sería
+     prudente, pero también falso, y taparía la deuda en vez de enseñarla. */
+  const V = vatReport();
+  const porPedido = V.porPedido || {};
+  const ingresoPorPedido = {};
+  S.forEach(r => { if(r.oid && porPedido[r.oid]) ingresoPorPedido[r.oid] = (ingresoPorPedido[r.oid]||0) + r.revenue; });
+  let medidoFiscal = 0, revFiscal = 0;
+  const ivaFiscalDe = r => {
+    if(!r.oid || !porPedido[r.oid]) return null;
+    const total = ingresoPorPedido[r.oid];
+    /* Un pedido puede tener varias líneas: se reparte por ingreso, que es la
+       única proporción que el informe permite reconstruir. */
+    const parte = total>0 ? r.revenue/total : 1;
+    return porPedido[r.oid].vat * parte;
+  };
+
   const obs = {};
   S.forEach(r => {
     if(!r.taxSeen || !r.country) return;
@@ -962,6 +1087,8 @@ function taxBasis(S){
   let observed = 0, estimated = 0, revSeen = 0, revEst = 0, revBlind = 0;
   const paises = {};
   S.forEach(r => {
+    const f = ivaFiscalDe(r);
+    if(f != null){ medidoFiscal += f; revFiscal += r.revenue; observed += f; revSeen += r.revenue; return; }
     if(r.taxSeen){ observed += r.tax; revSeen += r.revenue; return; }
     const pct = r.country != null ? rateFor(r.country) : null;
     if(pct == null){ revBlind += r.revenue; return; }   /* sin país: no deducible */
@@ -975,6 +1102,7 @@ function taxBasis(S){
     tax: observed + estimated,
     observed, estimated,
     revSeen, revEst, revBlind, rev,
+    medidoFiscal, revFiscal, fiscal: V,
     paisesDeducidos: paises,
     coverPct: rev > 0 ? revSeen/rev*100 : 100,
     known: revEst === 0 && revBlind === 0,   /* toda la base viene del informe */
@@ -1226,10 +1354,16 @@ function pnl(){
   });
   const returnsCost = retIngreso - retComision - retCoste;
 
-  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost;
+  /* El IVA que Amazon no repercutió y que responde tu NIF sigue siendo tuyo
+     ante Hacienda: es un coste real del periodo, no una advertencia. Sin esta
+     línea todos los márgenes salían optimistas en unos once puntos. */
+  const vatShortfall = (tb.fiscal||{}).difTuya || 0;
+  const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost - vatShortfall;
   return {
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
+    vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall,
+    vatVentasReducidas: (tb.fiscal||{}).ventasReducidas||0,
     ppcSource, adSpanUnknown: ads.spanUnknown,
     refMedido, fbaMedido,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,

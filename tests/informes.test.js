@@ -124,6 +124,7 @@ const ES = [
       return JSON.stringify([Math.round(P.grossInc), Math.round(P.profit), Math.round(P.cogs),
         Math.round(P.referral), Math.round(P.fba), Math.round(P.storage), Math.round(P.otherFee),
         Math.round(P.ppc), Math.round(P.reimb), Math.round(P.returnsCost), P.retUnits,
+        Math.round(P.tax), Math.round(P.vatShortfall||0),
         I.reduce((a,r)=>a+r.qty,0), I.length, H.days]);
     };
     return {huella: huella.toString()};
@@ -147,11 +148,11 @@ const ES = [
     console.log('     '+(mueve?'alimenta  ':'decorativo')+'  '+id.padEnd(14)+f);
   }
   check('los informes que el hub promete usar mueven algún número',
-    ['orders','inventory','multicountry','returns','searchterm','settlement','planning','reimb']
+    ['orders','inventory','multicountry','returns','searchterm','settlement','planning','reimb','vat']
       .every(id=>consumidos.indexOf(id)>=0),
     'alimentan: '+consumidos.join(', '));
   check('y los que no alimentan nada están declarados como tales',
-    decorativos.slice().sort().join(',')==='ledger,storage,vat',
+    decorativos.slice().sort().join(',')==='ledger,storage',
     'decorativos: '+(decorativos.join(', ')||'ninguno')+
     ' · si esta lista cambia, hay que actualizar lo que la pantalla de Datos promete de cada uno');
 

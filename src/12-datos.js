@@ -234,6 +234,11 @@ const REPORTS = [
      _asin   :{req:0, type:'asin',    alias:[/asin/]},
      _channel:{req:0, type:'channel', alias:[/saleschannel/,/canaldeventa/,/marketplace/]},
      _country:{req:0, type:'country', alias:[/shipcountry/,/paisdeenvio/,/pais/]},
+     /* La columna 16 de 34 se llama `currency`. El traspaso del 22 de agosto
+        afirmaba que «el informe de pedidos no declara campo de divisa»: es
+        falso, y esa afirmación es la que dejó el fallo sin arreglar. Amazon lo
+        dice; el hub no lo leía. */
+     _cur    :{req:0, type:null,      alias:[/^currency$/,/divisa/,/moneda/]},
      _status :{req:0, type:null,      alias:[/itemstatus/,/orderstatus/,/estadodel/,/estado/]},
      _fulfil :{req:0, type:null,      alias:[/fulfil?ment?channel/,/canaldegestion/,/logistica/]}
    },
@@ -705,6 +710,10 @@ function findProd(sku){ return prodBySku()[String(sku||'').toLowerCase()] || nul
    seguridad para las unidades que ningún lote de compra cubre. Quien decide el
    coste de una venta concreta es unitCostAt(), en 12c-lotes.js. */
 function landed(p){ return p ? (toNum(p.cogs)+toNum(p.freight)) : 0; }
+/* La divisa en la que el hub hace sus cuentas. Una sola, y declarada: el
+   catálogo de tarifas y el informe de pedidos la comparan contra esto para
+   dejar fuera lo que no se puede sumar sin un tipo de cambio. */
+const DIVISA_VENTAS = 'EUR';
 function periodStart(){ return periodDays ? addDays(today(), -periodDays) : new Date(2000,0,1); }
 
 /* Días que dura el periodo que se está mirando.
@@ -752,7 +761,7 @@ function salesRows(opt){
   opt = opt || {};
   const from = opt.from !== undefined ? opt.from : periodStart();
   const cf   = opt.country !== undefined ? opt.country : countryFilter;
-  return imp('orders').map(r=>{
+  const todas = imp('orders').map(r=>{
     const d = parseDate(gv(r,'_date','purchasedate'));
     const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
     const ful = gv(r,'_fulfil','fulfillmentchannel');
@@ -764,7 +773,24 @@ function salesRows(opt){
       /* La columna de impuesto es OPCIONAL en este informe (`_tax` req:0), así
          que hay que distinguir «el IVA es cero» de «no me han dicho el IVA».
          Confundirlos era el fallo más caro del hub: ver taxBasis(). */
-      taxSeen: hayNumero(gv(r,'_tax','itemtax')),
+      taxSeen: (()=>{
+        const v = gv(r,'_tax','itemtax');
+        if(!hayNumero(v)) return false;
+        /* Un 0,00 literal de IVA sobre una venta con importe, en un país con
+           tipo general distinto de cero, no es «el IVA es cero»: es la columna
+           sin poblar. Amazon no cobra 0 % en una venta corriente en España. Se
+           trata como sin dato para que taxBasis() lo deduzca, que baja el
+           ingreso neto y por tanto el beneficio: nunca infla.
+           En los informes reales de Juancho no aparece ni un cero literal, así
+           que esto es una red, no una corrección de algo que esté pasando. */
+        if(toNum(v) !== 0) return true;
+        const imp = toNum(gv(r,'_amount','itemprice'));
+        if(imp === 0) return true;                  // línea sin importe: cero coherente
+        const c = countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry'));
+        const nom = c ? (COUNTRIES.filter(x=>x.code===c)[0]||{}).vat : null;
+        return !(nom > 0);
+      })(),
+      cur: String(gv(r,'_cur','currency')||'').trim().toUpperCase(),
       country: countryOf(gv(r,'_channel','saleschannel')) || countryOf(gv(r,'_country','shipcountry')) || null,
       fbm: ful ? /merchant|mfn|vendedor|comerciante/i.test(ful) : null,
       /* Un pedido PENDIENTE no es una venta: el comprador todavía no ha pagado
@@ -775,8 +801,23 @@ function salesRows(opt){
       cancelled: st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0 ||
                  st==='pending' || st==='pendiente'
     };
-  }).filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
+  });
+  /* Divisa · de 238 líneas reales de un mes, UNA venía en zlotys, y contarla
+     como si fueran euros sobrestimaba el ingreso en 38,46 € sobre 3.237,73 €.
+     Se excluye y se dice cuántas: convertir con un tipo de cambio que no
+     tenemos sería inventarse la cifra, y excluir nunca infla el ingreso.
+     Las líneas sin divisa declarada se dejan pasar — son las canceladas y las
+     `Non-Amazon` sin importes, que ya no suman nada. */
+  const otraDivisa = {};
+  const enDivisa = todas.filter(r=>{
+    if(!r.cur || r.cur===DIVISA_VENTAS) return true;
+    otraDivisa[r.cur] = (otraDivisa[r.cur]||0) + 1;
+    return false;
+  });
+  const out = enDivisa.filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
                (cf==='ALL' || r.country===cf));
+  out.meta = {otraDivisa, fueraPorDivisa:Object.keys(otraDivisa).reduce((a,k)=>a+otraDivisa[k],0)};
+  return out;
 }
 /* Comisiones reales desde la liquidación.
 
@@ -968,6 +1009,12 @@ function pnl(){
      mucho que las comisiones sí lo estén. La etiqueta la fija el eslabón más
      débil, no el más fuerte. */
   const measured = sf.matched>0 && tb.known && !ads.spanUnknown;
+  /* Pero eso es la ETIQUETA. Cuánto cubre la liquidación es otro hecho, y de
+     la liquidación sola: mezclarlos hacía que una base de IVA deducida pusiera
+     la cobertura a 0 % y la pantalla dejara de poder decir «la liquidación
+     cubre el 16 % del periodo», que sigue siendo verdad. La insignia ya exige
+     por su cuenta cobertura completa Y base leída Y publicidad fechada. */
+  const hayLiquidacion = sf.matched>0;
   let referral, fba, storage, otherFee, feeCoverPct;
   /* Qué conceptos vienen de verdad de la liquidación. La salvedad de la tarifa
      FBA colgaba de la cobertura de COMISIÓN, así que una liquidación que
@@ -998,18 +1045,17 @@ function pnl(){
      da un número aproximado: da uno inventado, y encima creíble. Las filas de
      otra divisa se cuentan y se declaran en vez de convertirse con un tipo de
      cambio que no tenemos. */
-  const DIVISA_REF = 'EUR';
   const tarifas = {}, feeTiendas = {}, feeDivisas = {};
   let feeOtraDivisa = 0, feeSinFba = 0, feeFilas = 0;
   imp('fees').forEach(r=>{
     const sk = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase(); if(!sk) return;
     feeFilas++;
-    const div = String(gv(r,'_cur','currency')||'').trim().toUpperCase() || DIVISA_REF;
+    const div = String(gv(r,'_cur','currency')||'').trim().toUpperCase() || DIVISA_VENTAS;
     feeDivisas[div] = (feeDivisas[div]||0) + 1;
     const tiendaTxt = gv(r,'_store','amazonstore','store');
     const tienda = countryOf(tiendaTxt) || null;
     if(tiendaTxt) feeTiendas[String(tiendaTxt).trim()] = 1;
-    if(div !== DIVISA_REF){ feeOtraDivisa++; return; }   // no se mezcla con euros
+    if(div !== DIVISA_VENTAS){ feeOtraDivisa++; return; }   // no se mezcla con euros
     const ref   = toNum(gv(r,'_referral','estimatedreferralfeeperunit'));
     const precio= toNum(gv(r,'_price','yourprice','salesprice'));
     const crudo = gv(r,'_fba','expecteddomesticfulfilmentfeeperunit','expectedfulfillmentfeeperunit');
@@ -1066,7 +1112,7 @@ function pnl(){
     });
     return {referral:ref, fba:f};
   };
-  if(measured){
+  if(hayLiquidacion){
     /* Amazon liquida cada 14 días, así que una liquidación cubre una quincena
        y el periodo en pantalla puede ser un trimestre. Restar 14 días de
        comisiones a 90 días de ingresos inflaba el beneficio un 20 % con la
@@ -1189,6 +1235,8 @@ function pnl(){
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     feeSkus: Object.keys(tarifas).filter(k=>!/\|\*$/.test(k)).length, feeUnits: udsConTarifa,
     feeFilas, feeTiendas: Object.keys(feeTiendas), feeDivisas,
+    ventasFueraDivisa: (S.meta||{}).fueraPorDivisa||0,
+    ventasOtraDivisa: (S.meta||{}).otraDivisa||{},
     feeOtraDivisa, feeSinFba, feeSinTarifaPais: udsSinTarifaDeSuPais,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
     retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',

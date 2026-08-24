@@ -571,6 +571,16 @@ function renderRent(){
     /* Qué se ha podido leer del informe de tarifas y qué no. Sin esto, un
        fichero de nueve tiendas y tres divisas del que solo sirven las filas en
        euros se presentaba como si hubiera alimentado el catálogo entero. */
+    /* Divisa · una sola línea en zlotys de 238 sobrestimaba el ingreso un
+       1,19 %. Excluirla y decirlo es más honesto que convertirla con un tipo
+       que no tenemos. */
+    if(P.ventasFueraDivisa>0){
+      const d = Object.keys(P.ventasOtraDivisa).map(k=>num(P.ventasOtraDivisa[k])+' en '+k).join(', ');
+      v += '<br><br><strong>'+num(P.ventasFueraDivisa)+' línea'+(P.ventasFueraDivisa===1?'':'s')+
+           ' del informe de pedidos no está'+(P.ventasFueraDivisa===1?'':'n')+' en euros y queda'+
+           (P.ventasFueraDivisa===1?'':'n')+' fuera del total</strong> ('+d+'). '+
+           'Sumarla como si fueran euros inflaría el ingreso; convertirla haría falta un tipo de cambio que el hub no tiene.';
+    }
     if(P.feeFilas>0){
       const divs = Object.keys(P.feeDivisas||{});
       let t = '<br><br>Informe de tarifas: <strong>'+num(P.feeFilas)+' filas</strong>';

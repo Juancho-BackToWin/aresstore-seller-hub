@@ -28,7 +28,7 @@ for(let d=0; d<95; d++){
     const price = +(s[2]*q).toFixed(2);
     ordR.push([ '171-'+String(2000000+d*13+si).padStart(7,'0')+'-'+String(1000000+d*7+si).padStart(7,'0'), '', iso(ago(d))+'T09:12:44+00:00', iso(ago(d))+'T11:00:00+00:00',
       'Shipped','Amazon', ch,'','Expedited', s[1], s[0], 'B0TEST'+si, 'Shipped', q, 'EUR',
-      price, (price*0.21/1.21).toFixed(2), '0','0','0','0','0','0','Madrid','','28001',
+      price, (price*0.21/1.21).toFixed(2), '0','0','0','0','0','0','','','',
       ch.slice(7).toUpperCase().replace('COM.BE','BE'), '','','false','','','' ]);
   });
 }

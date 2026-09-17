@@ -438,9 +438,17 @@ function readSmart(file){
 function parseDelimited(text){
   const nl = text.indexOf('\n');
   const firstLine = text.slice(0, nl>0 ? nl : 400);
-  const tabs=(firstLine.match(/\t/g)||[]).length,
-        commas=(firstLine.match(/,/g)||[]).length,
-        semis=(firstLine.match(/;/g)||[]).length;
+  /* Los separadores se cuentan FUERA DE LAS COMILLAS. Un CSV cuya primera
+     celda sea un texto entrecomillado con comas dentro —«Incluye pedidos,
+     devoluciones y ajustes»— parecía tener siete columnas y ganaba la coma
+     aunque el fichero fuera de tabuladores. Contar dentro de las comillas es
+     contar el texto del usuario, no la forma del fichero. */
+  const fuera = sep => { let n=0, q=false;
+    for(let i=0;i<firstLine.length;i++){ const ch=firstLine[i];
+      if(ch==='"'){ if(q && firstLine[i+1]==='"'){ i++; } else q=!q; }
+      else if(ch===sep && !q) n++; }
+    return n; };
+  const tabs=fuera('\t'), commas=fuera(','), semis=fuera(';');
   const D = tabs >= Math.max(commas,semis) && tabs>0 ? '\t' : (semis>commas ? ';' : ',');
   const rows=[]; let row=[], cur='', q=false;
   for(let i=0;i<text.length;i++){
@@ -455,11 +463,42 @@ function parseDelimited(text){
   }
   if(cur!==''||row.length){ row.push(cur); rows.push(row); }
   if(!rows.length) return {headers:[],rows:[],delim:D};
-  // Los informes de Publicidad llevan líneas de título antes de la cabecera:
-  // se toma como cabecera la primera fila con 3+ celdas no vacías.
+  /* Dónde está la cabecera. Varios informes llevan líneas de aviso antes.
+     La regla vieja miraba SEIS líneas y se conformaba con «3+ celdas no
+     vacías»; el informe de transacciones personalizadas trae SIETE líneas de
+     preámbulo, así que se quedaba con la última de ellas —una sola celda— y
+     todo lo demás salía desalineado. Ahora se busca en treinta líneas y se
+     exige que la fila tenga tantas celdas como la mayoría del fichero, que es
+     lo que distingue una cabecera de una línea de aviso.
+     `registrarPreproceso` ya recorta el preámbulo antes de llegar aquí; esto
+     es la red por si un fichero se cuela por otro camino. */
   let hi=0;
-  for(let i=0;i<Math.min(6,rows.length);i++){
-    if(rows[i].filter(x=>String(x).trim()!=='').length>=3){ hi=i; break; }
+  const frec={};
+  for(let i=0;i<Math.min(40,rows.length);i++){ const n=rows[i].length; if(n>1) frec[n]=(frec[n]||0)+1; }
+  let modo=0, veces=0;
+  for(const n in frec){ if(frec[n]>veces || (frec[n]===veces && +n>modo)){ modo=+n; veces=frec[n]; } }
+  let hallado=false;
+  if(modo>=3){
+    for(let i=0;i<Math.min(30,rows.length);i++){
+      if(rows[i].length!==modo) continue;
+      const llenas = rows[i].map(x=>String(x).trim()).filter(x=>x!=='');
+      if(llenas.length<3) continue;
+      /* Y TIENE QUE PARECER UNA CABECERA. Sin esta condición, un CSV en español
+         con coma decimal y coma de separador —donde las filas de datos llevan
+         MÁS celdas que la cabecera— haría que la mayoría fuese la de los datos
+         y se cogería la primera fila de datos como cabecera. El fichero
+         quedaría «alineado», nadie vería el desajuste y las cifras saldrían
+         desplazadas de columna: exactamente el fallo que este parser existe
+         para no cometer. Una cabecera son nombres; una fila de datos, números. */
+      const numericas = llenas.filter(x=>/^[-+]?[\d.,]+%?$/.test(x)).length;
+      if(numericas > llenas.length*0.4) continue;
+      hi=i; hallado=true; break;
+    }
+  }
+  if(!hallado){
+    for(let i=0;i<Math.min(6,rows.length);i++){
+      if(rows[i].filter(x=>String(x).trim()!=='').length>=3){ hi=i; break; }
+    }
   }
   const headers = rows[hi].map(h=>String(h).trim());
   const out=[]; let bad=0;

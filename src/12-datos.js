@@ -392,7 +392,23 @@ const REPORTS = [
      _ttype :{req:0, type:null,   alias:[/^transactiontype$/]},
      _event :{req:0, type:null,   alias:[/transactioneventid/,/activitytransactionid/]},
      _sku   :{req:0, type:'code', alias:[/sellersku/,/^sku$/]},
-     _juris :{req:0, type:null,   alias:[/taxablejurisdiction/,/salearrivalcountry/,/arrivalcountry/]},
+     /* EL ORDEN DE ESTOS TRES ALIAS ES EL NÚMERO.
+
+        `TAXABLE_JURISDICTION` trae el NOMBRE del país en inglés —SPAIN, ITALY,
+        GERMANY—, y `vatReport()` se queda con sus dos primeras letras para
+        buscar el tipo general. Con esa columna delante, España salía como «SP»,
+        Alemania como «GE», Austria como «AU» y Polonia y Portugal LAS DOS como
+        «PO». Ninguno de esos códigos está en `VAT_GENERAL`, así que el detector
+        de tipo reducido no comparaba nada en esos países y la diferencia de IVA
+        que sí existe se quedaba a cero, sin un solo aviso. Y «PO» es peor
+        todavía: dos países distintos sumando en el mismo cajón.
+
+        `SALE_ARRIVAL_COUNTRY` trae el código ISO de dos letras —ES, IT, DE—,
+        que es lo que `VAT_GENERAL` espera, y además viene poblada en más filas.
+        Va primero. `vatReport()` es función congelada: no se toca; se le da la
+        columna correcta, que es lo que estaba mal. */
+     _juris :{req:0, type:null,   alias:[/^salearrivalcountry$/,/^arrivalcountry$/,
+                                         /taxablejurisdiction/,/arrivalcountry/]},
      /* Ojo: viene en FRACCIÓN DECIMAL. `0.1` es el 10 %, no el 0,1 %. */
      _rate  :{req:0, type:null,   alias:[/priceofitemsvatratepercent/,/vatratepercent/]},
      _base  :{req:0, type:'money',alias:[/totalpriceofitemsamtvatexcl/,/totalactivityvalueamtvatexcl/]},

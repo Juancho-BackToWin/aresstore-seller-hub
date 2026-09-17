@@ -44,7 +44,26 @@ function hist(){
   if(!H.obs || typeof H.obs!=='object') H.obs = {}; // observaciones de stock por SKU
   if(!H.bk || typeof H.bk!=='object') H.bk = {last:null};
   if(H.cut===undefined) H.cut = null;           // fecha hasta la que está compactado
+  if(!Array.isArray(H.rev)) H.rev = [];         // reescrituras de lo ya archivado
   return H;
+}
+const HIST_REV_MAX = 200;
+/* ---------- Constancia de que algo ya archivado ha cambiado ----------------
+   El histórico es el único daño irreversible de este hub. Sobrescribir el rango
+   que cubre el informe de pedidos es deliberado —si no, reimportar un mes
+   duplicaría las ventas— pero hacerlo EN SILENCIO no lo es. Un arreglo de
+   fechas como B3 mueve pedidos de un día al siguiente: sin este registro, la
+   serie de ayer cambia y no aparece en ninguna pantalla, que es exactamente
+   cómo un número deja de ser fiable sin que nadie se entere.
+
+   La foto de stock es distinta y se trata distinto: Amazon no guarda el stock
+   de días pasados, así que una foto archivada no se puede volver a medir. Esa
+   NO se sobrescribe nunca; el conflicto se anota y gana la que ya estaba. */
+function logRevision(k, que, antes, ahora, nota){
+  const H = hist();
+  H.rev.unshift({t:new Date().toISOString(), k, q:que, a:antes, b:ahora, n:nota||''});
+  if(H.rev.length > HIST_REV_MAX) H.rev.length = HIST_REV_MAX;
+  return H.rev[0];
 }
 function hDay(k){ const H=hist(); return H.d[k] || (H.d[k] = {}); }
 function r2(x){ return Math.round((x||0)*100)/100; }
@@ -89,16 +108,29 @@ function captureOrders(){
   const cut = H.cut || '';
   const tIso = iso(today());
   let n = 0;
+  const revisiones = [];
   for(let d = new Date(min.getTime()); d <= max; d = addDays(d,1)){
     const k = iso(d);
     if(cut && k <= cut) continue;
     const day = hDay(k);
     const a = agg[k] || {s:{}, cs:{}};
+    /* Un día que ya estaba archivado y que cambia se anota antes de cambiarlo.
+       Es lo que hace visible el arreglo de B3: al dejar de tirar el huso, los
+       pedidos de 22:00–24:00 UTC se mueven al día siguiente y dos días de la
+       serie cambian de total. La reimportación idéntica no anota nada, porque
+       no cambia nada. */
+    if(day.s){
+      const antes = Object.keys(day.s).reduce((x,sk)=>x+(day.s[sk][0]||0),0);
+      const ahora = Object.keys(a.s).reduce((x,sk)=>x+(a.s[sk][0]||0),0);
+      if(antes!==ahora) revisiones.push([k, antes, ahora]);
+    }
     day.s = a.s; day.cs = a.cs;
     if(k >= tIso) day.x = 1; else delete day.x;   // hoy siempre es un día parcial
     n++;
   }
-  return {days:n, from:iso(min), to:iso(max)};
+  revisiones.forEach(r=>logRevision(r[0], 'ventas', r[1], r[2],
+    'el informe reimportado trae otro total para un día ya archivado'));
+  return {days:n, from:iso(min), to:iso(max), revisiones:revisiones.length};
 }
 
 /* ---------- 2 · Foto de stock, fechada hoy ---------- */
@@ -261,6 +293,85 @@ function velocityStats(windowDays){
   }).sort((a,b)=>b.units-a.units);
 }
 
+/* Primera venta archivada de cada SKU, en clave aaaa-mm-dd.
+
+   Es lo que permite a invStats() distinguir un SKU RECIÉN LANZADO —cuya
+   velocidad hay que medir desde su primera venta, D1— de uno viejo que
+   simplemente lleva semanas sin vender. Sin esta distinción, estrechar la
+   ventana convierte una unidad vendida anteayer en 0,5 ud/día y manda comprar
+   un contenedor. Los meses compactados cuentan con su primer día real
+   archivado, que es lo único que queda de ellos. */
+function primerasVentasHistoricas(){
+  const H = hist(), out = {};
+  const anota = (sk, k)=>{ if(!out[sk] || k<out[sk]) out[sk]=k; };
+  Object.keys(H.d).forEach(k=>{
+    const s = H.d[k].s || {};
+    Object.keys(s).forEach(sk=>{ if(s[sk][0]>0) anota(sk, k); });
+  });
+  Object.keys(H.m).forEach(mk=>{
+    const m = H.m[mk], s = m.s || {};
+    const k = m.first || (mk + '-01');
+    Object.keys(s).forEach(sk=>{ if(s[sk][0]>0) anota(sk, k); });
+  });
+  return out;
+}
+
+/* ---------- D5 · la foto de stock lleva la fecha en que se MIDIÓ -----------
+
+   `captureStock()` fecha la foto HOY, y está bien: en una importación normal el
+   fichero se acaba de descargar. Pero «Reconstruir desde lo importado» vuelve a
+   archivar una foto que puede llevar semanas en el navegador, y la refecha como
+   de hoy. Consecuencias medidas sobre la mecánica de este módulo: los días
+   entre la foto real y hoy pierden su stock arrastrado, `oosDays()` deja de ver
+   una rotura que sí hubo, y `velocityStats()` devuelve la media simple
+   disfrazada de velocidad real. Un número creíble y falso, y encima sobre el
+   histórico, que no se puede volver a pedir.
+
+   Esta función mueve la foto que `captureStock()` acaba de dejar en el día de
+   hoy al día en que de verdad se midió. Si ese día YA TIENE una foto
+   archivada, no la pisa: gana la que estaba —es una medición que Amazon no
+   conserva en ningún sitio— y el conflicto queda anotado. */
+function refecharFotoStock(destino){
+  const H = hist(), kHoy = iso(today());
+  const day = H.d[kHoy];
+  if(!day || !day.k) return {movida:0, motivo:'no hay foto de hoy que mover'};
+  const skus = Object.keys(day.k);
+  const descontarObs = ()=>skus.forEach(s=>{
+    const o = H.obs[s];
+    if(o && o.last===kHoy){ o.n=Math.max(0,o.n-1); o.z=Math.max(0,o.z-(o.lz||0)); o.last=null; o.lz=0; }
+  });
+  const limpiarHoy = ()=>{ delete day.k; if(!Object.keys(day).length) delete H.d[kHoy]; };
+
+  if(!destino){
+    /* Nada se archiva sin saber de qué día es. */
+    descontarObs(); limpiarHoy();
+    logRevision(kHoy, 'foto de stock', skus.length, 0,
+      'no consta la fecha de descarga del informe de inventario: la foto no se archiva');
+    return {movida:0, motivo:'sin fecha de medición'};
+  }
+  const kDest = iso(destino);
+  if(kDest === kHoy) return {movida:0, motivo:'la foto ya es de hoy'};
+  if(H.cut && kDest <= H.cut){
+    descontarObs(); limpiarHoy();
+    logRevision(kDest, 'foto de stock', null, skus.length,
+      'el '+kDest+' ya está compactado y no se reabre');
+    return {movida:0, motivo:'compactado'};
+  }
+  if(H.d[kDest] && H.d[kDest].k){
+    descontarObs(); limpiarHoy();
+    logRevision(kDest, 'foto de stock', Object.keys(H.d[kDest].k).length, skus.length,
+      'ya había una foto archivada ese día y no se reescribe: Amazon no guarda el stock de días pasados');
+    return {movida:0, motivo:'ya archivada', conflicto:true};
+  }
+  const dest = hDay(kDest);
+  dest.k = day.k;
+  skus.forEach(s=>{ const o = H.obs[s]; if(o && o.last===kHoy) o.last = kDest; });
+  limpiarHoy();
+  logRevision(kDest, 'foto de stock', null, skus.length,
+    'foto refechada al día en que se descargó el informe, no al de la reconstrucción');
+  return {movida:skus.length, kDest};
+}
+
 /* =========================================================================
    COMPACTACIÓN
    El detalle día a día se resume a mes a partir de los 90 días. Antes de
@@ -343,7 +454,7 @@ function historyStats(){
   return {first, span, days:days.length, months:months.length, withStock, withFees,
           units, rev:r2(rev), bytes, dbBytes, log:H.log.length,
           backup:H.bk.last, backupAge: H.bk.last ? daysBetween(new Date(H.bk.last), today()) : null,
-          cut:H.cut};
+          cut:H.cut, revisiones:(H.rev||[]).length};
 }
 function backupDue(){
   const s = historyStats();
@@ -376,8 +487,23 @@ function wipeHistory(){
   saveDB(); refreshAll(); toast('Histórico borrado');
 }
 function rebuildHistory(){
+  /* D5 · la fecha de la foto se decide ANTES de reconstruir, con
+     stockSnapshotDate(), que la saca de cuándo se importó el informe. Si no
+     consta, no se archiva ninguna foto: nada entra en el histórico sin saber de
+     qué día es. `captureStock()` está congelada y sigue fechando hoy; lo que
+     hace esta función es corregir la fecha después, sin tocarla. */
+  const snap = (typeof stockSnapshotDate==='function') ? stockSnapshotDate() : null;
   const g = captureAll();
+  let ref = null;
+  try{ ref = refecharFotoStock(snap); }catch(e){ console.warn('refechado', e); }
+  compactHistory();
   saveDB(); refreshAll();
-  toast(g.orders && g.orders.days ? ('Histórico reconstruido con '+num(g.orders.days)+' días del informe de pedidos')
-                                  : 'Reconstruido con lo que hay importado ahora mismo');
+  let msg = g.orders && g.orders.days
+    ? 'Histórico reconstruido con '+num(g.orders.days)+' días del informe de pedidos'
+    : 'Reconstruido con lo que hay importado ahora mismo';
+  if(ref && ref.movida) msg += ' · foto de stock fechada el '+ref.kDest+', no hoy';
+  else if(ref && ref.motivo==='sin fecha de medición') msg += ' · sin foto de stock: no consta de qué día es';
+  else if(ref && ref.conflicto) msg += ' · la foto de ese día ya estaba archivada y no se ha reescrito';
+  if(g.orders && g.orders.revisiones) msg += ' · '+num(g.orders.revisiones)+' día(s) ya archivados han cambiado';
+  toast(msg);
 }

@@ -89,5 +89,48 @@ const intrusos = TODOS.map(f=>path.relative(RAIZ,f)).filter(f=>SOSPECHOSOS.test(
 check('no hay ficheros con nombre de descarga de Seller Central',
   intrusos.length===0, intrusos.join(', ') || 'ninguno');
 
+console.log('\n=== PRIV-D · NI UN DATO DE COMPRADOR EN NINGÚN FICHERO VERSIONADO ===');
+/* PRIV-B mira los fixtures, que es donde se sabe que hay tablas. Esto mira EL
+   ÁRBOL ENTERO, porque el fichero que de verdad hace daño es el que nadie
+   esperaba: un informe real dejado en la raíz «un momento para probar», o
+   copiado dentro de docs/. El nombre puede ser inocente — `datos.txt`,
+   `prueba.csv` — así que aquí no se mira el nombre: se mira el contenido.
+
+   Se busca cualquier columna de comprador con algo escrito. Vacía es válida:
+   los fixtures llevan esas columnas para reproducir el formato literal del
+   informe de Amazon, y tienen que seguir llevándolas. Lo que no puede haber es
+   un valor dentro. */
+/* `ship-country` NO entra aquí a propósito: es el país de destino, no identifica
+   a nadie, y el hub lo necesita para el IVA multipaís y para `countryOf`. Lo que
+   identifica a una persona es la ciudad, la provincia, el código postal, la
+   dirección y todo lo que empiece por `buyer-`. */
+const PERSONAL = /^"?(ship-(city|state|postal-code|address-?\d*)|buyer-.*|recipient-name|ciudad|provincia|c[oó]digo[ _-]?postal|destinatario)"?$/i;
+const TABLAS = TODOS.map(f=>path.relative(RAIZ,f).replace(/\\/g,'/'))
+  .filter(f=>/\.(txt|csv|tsv)$/i.test(f) && !/^node_modules\//.test(f));
+const conPersonales = [];
+for(const rel of TABLAS){
+  let t; try{ t = fs.readFileSync(path.join(RAIZ, rel),'utf8'); }catch(e){ continue; }
+  const lineas = t.split(/\r?\n/).filter(x=>x.trim());
+  if(lineas.length < 2) continue;
+  /* El separador se deduce de la cabecera, igual que hace el importador: TAB si
+     lo hay, luego punto y coma, luego coma. */
+  const cab = lineas[0].replace(/^﻿/,'');
+  const delim = cab.indexOf('\t')>=0 ? '\t' : (cab.indexOf(';')>=0 ? ';' : ',');
+  const H = cab.split(delim).map(h=>h.trim());
+  const idx = H.map((h,i)=>PERSONAL.test(h)?i:-1).filter(i=>i>=0);
+  if(!idx.length) continue;
+  for(const l of lineas.slice(1)){
+    const c = l.split(delim);
+    const sucia = idx.some(i=>{
+      const v = (c[i]||'').trim().replace(/^"|"$/g,'');
+      return v!=='' && v!=='--';
+    });
+    if(sucia){ conPersonales.push(rel+' · columna '+idx.map(i=>H[i]).join('/')); break; }
+  }
+}
+check(TABLAS.length+' ficheros tabulares revisados, ninguno con datos de comprador',
+  conPersonales.length===0,
+  conPersonales.join(' | ') || 'ninguno');
+
 console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
 process.exit(fails===0 ? 0 : 1);

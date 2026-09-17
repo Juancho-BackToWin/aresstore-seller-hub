@@ -204,7 +204,19 @@ function check(label, cond, extra){
   await page.click('.nav-item[data-view="cumplimiento"]');
   await page.waitForTimeout(400);
   const compRows = await page.$$eval('#compTable tr', rs=>rs.length);
-  check('lista los 9 mercados', compRows===10, compRows+' filas');
+  /* Eran 9 hasta el 17-sep-2026. El carril 8 añadió Austria, Portugal y
+     Eslovaquia —los tres aparecen en los informes reales y no estaban— y
+     Chequia, que entra marcada como no confirmada. La comprobación ya no
+     lleva el número a mano: se ata a COUNTRIES, que es de donde sale la
+     tabla. Así deja de romperse cada vez que se añade un mercado legítimo,
+     y a cambio caza lo que el número fijo NO cazaba: un país que se cae de
+     COUNTRIES y desaparece de la pantalla sin que nadie se entere. */
+  const nPaises = await page.evaluate(()=>COUNTRIES.length);
+  const compCodes = await page.$$eval('#compTable tr td.name strong', els=>els.map(e=>e.textContent.trim()));
+  check('lista todos los mercados de COUNTRIES, uno por fila',
+    compRows===nPaises+1, compRows+' filas para '+nPaises+' países');
+  check('y entre ellos están los cuatro añadidos en septiembre de 2026',
+    ['AT','PT','SK','CZ'].every(c=>compCodes.indexOf(c)>=0), compCodes.join(','));
   await page.click('#compTable tr:nth-child(2) td:nth-child(1) input');
   await page.waitForTimeout(300);
   check('activar un mercado sin EPR dispara la alerta',

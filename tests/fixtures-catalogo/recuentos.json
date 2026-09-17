@@ -1,0 +1,15 @@
+{
+  "listings": {
+    "filas": 7,
+    "columnas": 49
+  },
+  "raros": {
+    "filas": 4
+  },
+  "pedidos": {
+    "filas": 60,
+    "dias": 12,
+    "unidades": 204,
+    "unidadesSinCoste": 108
+  }
+}

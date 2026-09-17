@@ -136,11 +136,36 @@ function fold(s){
     .replace(/ñ/g,'n').replace(/ç/g,'c');
 }
 function normHdr(h){ return fold(h).replace(/^﻿/,'').replace(/[^a-z0-9]/g,''); }
+/* De qué país habla esta celda.
+
+   ANTES CASABA POR SUBCADENA, y eso es una máquina de fabricar números creíbles
+   y falsos: `MKT_MAP` tiene claves de dos letras («de», «es», «it»…), así que
+   «United Kingdom» lleva «it» dentro y devolvía ITALIA, «Denmark» lleva «de» y
+   devolvía ALEMANIA, y «Estonia» lleva «es» y devolvía ESPAÑA. Ninguno de esos
+   tres es un mercado nuestro: lo correcto es no saberlo, no acertar por azar.
+   Una venta colocada en el país equivocado no da error en ningún sitio; se suma
+   al desglose por mercado y ahí se queda.
+
+   Ahora, en este orden:
+     1 · la celda entera, tal cual esté en el mapa («amazon.es», «es», «spain»);
+     2 · si parece un dominio de Amazon, SOLO vale el dominio: un «amazon.co.uk»
+         que no está en el mapa devuelve null y no se sigue mirando;
+     3 · por palabras completas, nunca por un trozo de palabra. */
 function countryOf(v){
   if(!v) return null;
   const s = String(v).toLowerCase().trim();
   if(MKT_MAP[s]) return MKT_MAP[s];
-  for(const k in MKT_MAP){ if(s.indexOf(k)>=0) return MKT_MAP[k]; }
+  const dom = s.match(/amazon\.[a-z][a-z.]{1,9}/);
+  if(dom){
+    let d = dom[0];
+    while(d.length > 'amazon'.length){
+      if(MKT_MAP[d]) return MKT_MAP[d];
+      d = d.replace(/\.[a-z]+$/, '');            // «amazon.com.be» → «amazon.com» → «amazon»
+    }
+    return null;
+  }
+  const piezas = s.split(/[^a-z0-9]+/).filter(Boolean);
+  for(let i=0;i<piezas.length;i++){ if(MKT_MAP[piezas[i]]) return MKT_MAP[piezas[i]]; }
   return null;
 }
 

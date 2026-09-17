@@ -1536,6 +1536,26 @@ function skuStats(){
   });
   return rows;
 }
+/* Días observados por debajo de los cuales una velocidad no es una medición.
+   Dos semanas es el mínimo para que un fin de semana flojo no mande el número.
+   No es una constante de Amazon: es un criterio del hub, y por eso la pantalla
+   dice «estimado sobre N días» en vez de dar la cifra a secas. */
+const INV_DIAS_MIN_VELOCIDAD = 14;
+
+/* El riesgo, con los tres «no se sabe» separados del «se sabe y está mal».
+
+   D3 · sin stock medido no hay cobertura: `nd`.
+   D4 · sin ventas no hay cobertura que medir: `sinventa`. Antes, el centinela
+        999 caía en `cover>154` y la referencia salía etiquetada SOBRESTOCK, con
+        su KPI y su recomendación de liquidar. Un SKU recién dado de alta que
+        todavía no ha vendido nada no es sobrestock: es un SKU sin historia. */
+function riesgoCobertura(cover, velocity, fbm){
+  if(cover===null || cover===undefined) return 'nd';
+  if(!(velocity>0)) return 'sinventa';
+  const bajo = fbm ? 14 : 28;
+  return cover<bajo ? 'low' : (cover>154 ? 'over' : 'ok');
+}
+
 /* Inventario consolidado: stock, cobertura y riesgo de tarifa */
 function invStats(){
   /* El stock de FBA es europeo y no se puede trocear por el desplegable de
@@ -1544,9 +1564,28 @@ function invStats(){
      rotura desaparecía de la pantalla junto con las 421 unidades que había que
      pedir. Aquí se mira siempre el conjunto, y la pantalla lo dice. */
   const S = salesRows({country:'ALL'}), pm = prodBySku();
-  const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
+  const sold={}, primera={};
+  S.forEach(r=>{
+    const k = String(r.sku);
+    sold[k]=(sold[k]||0)+r.qty;
+    /* D1 · cuándo empezó a vender ESTE SKU dentro de la ventana. */
+    if(r.qty>0 && r.date && (!primera[k] || r.date<primera[k])) primera[k]=r.date;
+  });
   /* Días OBSERVADOS, no días pedidos: ver salesSpan(). */
-  const days = Math.min(daysInPeriod(), salesSpan({country:'ALL'}).days || daysInPeriod());
+  const sp = salesSpan({country:'ALL'});
+  const days = Math.min(daysInPeriod(), sp.days || daysInPeriod());
+  const cubreHasta = sp.cubreHasta || startOfDay(today());
+  /* D1 · ¿el SKU es NUEVO, o solo lleva tiempo callado? La primera venta dentro
+     de la ventana no distingue las dos cosas, y confundirlas es caro en los dos
+     sentidos: estrechar la ventana de un SKU viejo que vendió una unidad
+     anteayer dispara su velocidad y manda comprar un contenedor. Quien lo
+     distingue es el histórico, que sabe si ese SKU ya vendía antes de que
+     empezara esta ventana. Sin histórico no se puede distinguir, así que se
+     aplica la ventana propia —que es el fallo declarado— pero la fila sale
+     marcada como estimada y la pantalla lo dice. */
+  const histPrimera = (typeof primerasVentasHistoricas==='function')
+    ? (function(){ try{ return primerasVentasHistoricas(); }catch(e){ return {}; } })() : {};
+  const hayHistorico = Object.keys(histPrimera).length>0;
   const stock={}, byCountry={}, mcTotal={};
   imp('inventory').forEach(r=>{
     const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
@@ -1559,21 +1598,49 @@ function invStats(){
     if(c) byCountry[k][c]=(byCountry[k][c]||0)+q;
     mcTotal[k]=(mcTotal[k]||0)+q;
   });
+  /* D3 · MEDIDO A CERO Y NO MEDIDO NO SON LO MISMO. `stock[k]||0` convertía
+     «este SKU no sale en ningún informe de inventario» en «este SKU tiene cero
+     unidades», y cero unidades con ventas es rotura: cobertura 0, riesgo bajo y
+     una orden de pedir el punto de pedido entero. Una cifra creíble, redonda y
+     completamente inventada. Aquí, lo que no se ha medido vale null. */
+  const medido = {};
+  Object.keys(stock).forEach(k=>medido[k]=1);
+  Object.keys(mcTotal).forEach(k=>medido[k]=1);
   /* Un SKU que solo aparece en el informe multipaís valía CERO unidades aquí y
      en el histórico, mientras la tabla de países de la misma pantalla enseñaba
      sus 1.400. Los lotes de coste ya hacían este respaldo; Inventario se quedó
      fuera de aquella corrección. Solo cuando el SKU no viene en el informe de
      inventario: sumar los dos contaría el mismo stock dos veces. */
   Object.keys(mcTotal).forEach(k=>{ if(!(k in stock)) stock[k]=mcTotal[k]; });
-  if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku) stock[r.sku]=toNum(r.available); });
+  if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku){ stock[r.sku]=toNum(r.available); medido[r.sku]=1; } });
   const plan={}; imp('planning').forEach(r=>{ if(r.sku) plan[r.sku]=r; });
   const keys = Array.from(new Set(Object.keys(stock).concat(Object.keys(sold)).concat(DB.products.map(p=>String(p.sku)))));
   return keys.map(k=>{
     const p=pm[k.toLowerCase()];
     const fbm = !!(p && p.channel==='FBM');
-    const velocity = (sold[k]||0)/days;
-    const qty = fbm ? toNum(p.fbmStock) : (stock[k]||0);
-    const cover = velocity>0 ? qty/velocity : (qty>0?999:0);
+    /* D1 · la ventana del SKU empieza en su primera venta cuando hay motivo
+       para creer que antes no existía. */
+    const desdeSku = primera[k] || null;
+    const hk = histPrimera[k] || histPrimera[k.toLowerCase()] || null;
+    const vieneDeAntes = hk ? (parseDate(hk) < (sp.from || cubreHasta)) : false;
+    const arrancaDespues = !!(desdeSku && sp.from && daysBetween(sp.from, desdeSku) > 0);
+    const nuevo = arrancaDespues && !vieneDeAntes;
+    const diasSku = nuevo ? Math.max(1, Math.min(days, daysBetween(desdeSku, cubreHasta)+1)) : days;
+    const velocity = (sold[k]||0)/diasSku;
+    /* E5 · una ventana corta no se puede presentar como una medición. El punto
+       de pedido proyecta plazo + colchón —del orden de ochenta días— hacia
+       delante; hacerlo desde cuatro días observados es multiplicar por veinte
+       el ruido de una semana floja. Se marca, no se esconde. */
+    const velocidadEstimada = velocity>0 && (diasSku < INV_DIAS_MIN_VELOCIDAD || (nuevo && !hayHistorico));
+    const stockMedido = fbm
+      ? !!(p && p.fbmStock!==undefined && p.fbmStock!==null && String(p.fbmStock).trim()!=='')
+      : !!medido[k];
+    const qty = !stockMedido ? null : (fbm ? toNum(p.fbmStock) : (stock[k]||0));
+    /* D4 · 999 es un centinela de «no se puede calcular», no una medición de
+       999 días. Se conserva para no romper lo que ya lo pinta como ∞, pero el
+       riesgo deja de llamarse sobrestock: sin venta no hay cobertura que medir.
+       D3 · sin stock medido no hay cobertura de ninguna clase. */
+    const cover = qty===null ? null : (velocity>0 ? qty/velocity : (qty>0?999:0));
     const lead = p&&p.supplierId ? (DB.suppliers.find(s=>s.id===p.supplierId)||{}).lead||45 : 45;
     const reorderPoint = Math.ceil(velocity*(toNum(lead)+TARGET.cover));
     /* Lo que ya está en un barco cuenta. Sin esto, el ejemplo mandaba pedir
@@ -1607,14 +1674,20 @@ function invStats(){
        pedido no tiene fecha prevista no se puede afirmar que llegue a tiempo,
        y entonces no mitiga nada: se dice y ya. */
     const etaConocida = posSku.length>0 && posSku.every(x=>!!parseDate(x.po.eta));
-    const diasHastaRotura = velocity>0 ? qty/velocity : 999;
+    const diasHastaRotura = (qty!==null && velocity>0) ? qty/velocity : 999;
     const llegaATiempo = etaConocida && posSku.every(x=>{
       const d = parseDate(x.po.eta); return d && daysBetween(today(), d) <= diasHastaRotura; });
     const pl = plan[k]||{};
-    const coverTransito = velocity>0 ? (qty+enCamino)/velocity : ((qty+enCamino)>0?999:0);
+    const coverTransito = qty===null ? null
+      : (velocity>0 ? (qty+enCamino)/velocity : ((qty+enCamino)>0?999:0));
     return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, coverTransito,
+      stockDesconocido: qty===null,
+      /* D1 / E5 · sobre cuántos días se ha medido esta velocidad, y si se puede
+         llamar medición. Lo lee la pantalla y lo lee M2. */
+      diasObservados: diasSku, diasVentana: days, skuNuevo: nuevo,
+      primeraVenta: desdeSku ? iso(desdeSku) : null, velocidadEstimada,
       lead:toNum(lead), enCamino, etaConocida, llegaATiempo,
-      reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
+      reorderPoint, need: qty===null ? null : Math.max(0, reorderPoint-qty-enCamino),
       byCountry: fbm ? {} : (byCountry[k]||{}),
       excess: toNum(pl.estimatedexcessquantity),
       aged: toNum(pl.invage271to365days)+toNum(pl.invage365plusdays),
@@ -1622,14 +1695,19 @@ function invStats(){
       /* Valorar el stock al coste del último lote comprado, no al coste base
          de hace un año: el capital inmovilizado es lo que costaría reponerlo. */
       unitCost: costNow(p),
-      value: qty*costNow(p),
-      risk: fbm ? (cover<14?'low':(cover>154?'over':'ok')) : (cover<28 ? 'low' : (cover>154 ? 'over' : 'ok')),
+      value: qty===null ? 0 : qty*costNow(p),
+      risk: riesgoCobertura(cover, velocity, fbm),
       /* El riesgo de COMPRA, que es el que manda pedir. El de tarifa sigue
          siendo `risk` y sigue avisando aunque este esté cubierto. */
-      riskCompra: fbm ? (coverTransito<14?'low':(coverTransito>154?'over':'ok'))
-                      : (coverTransito<28 ? 'low' : (coverTransito>154 ? 'over' : 'ok'))
+      riskCompra: riesgoCobertura(coverTransito, velocity, fbm)
     };
-  }).filter(r=>r.qty>0||r.velocity>0).sort((a,b)=>a.cover-b.cover);
+  }).filter(r=>r.qty>0||r.velocity>0)
+    /* Lo que no se ha podido medir va al principio: es lo que hay que ir a
+       mirar, no lo que se puede ignorar por salir al final de la lista. */
+    .sort((a,b)=>{
+      const av = a.cover===null ? -1 : a.cover, bv = b.cover===null ? -1 : b.cover;
+      return av-bv;
+    });
 }
 /* El P&L del negocio entero, sin el filtro de país de la interfaz. Lo necesita
    la comparativa por mercados: si el numerador es de un solo país y el

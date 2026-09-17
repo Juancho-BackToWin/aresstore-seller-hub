@@ -1399,6 +1399,35 @@ function pnl(){
   });
   const returnsCost = retIngreso - retComision - retCoste;
 
+  /* M1.2 · E4 · la TASA de devoluciones y el COSTE de devoluciones tienen que
+     contar lo mismo, o la pantalla se contradice consigo misma.
+
+     Estaban desacopladas: el coste se reparte por la cuota de ventas del
+     mercado filtrado (`cuotaDe`) y descarta las devoluciones de referencias que
+     no vendieron, mientras la tasa dividía las unidades BRUTAS del informe
+     entre las unidades del mercado filtrado. Medido con una fixture de 10 ud en
+     ES + 10 ud en DE y 4 devoluciones sin país: con el filtro en ES la tasa
+     decía 40,0 % y el coste cobraba 2 unidades, o sea un 20 %. Dos respuestas a
+     la misma pregunta, en la misma pantalla, con los mismos datos.
+
+     Ahora la tasa se calcula sobre las MISMAS unidades que se cobran, y lo que
+     no se ha podido imputar (`retDescartadas`) se declara aparte en vez de
+     colarse en el numerador.
+
+     Y sin informe de devoluciones la tasa no es 0 %: es desconocida. Un 0 %
+     ahí es tan falso como 0 € de publicidad, y por el mismo motivo. */
+  const hayDevoluciones = imp('returns').length > 0;
+  const retRate = units>0 ? retImputadas/units*100 : null;
+  const retRateCalidad = !hayDevoluciones ? 'desconocido'
+                       : units===0 ? 'desconocido'
+                       : (countryFilter!=='ALL' || retDescartadas>0) ? 'estimado' : 'medido';
+  /* E2 · una tasa por encima del 100 % puede ser REAL —devoluciones de ventas
+     anteriores al periodo, que el informe fecha por la devolución y no por la
+     venta— pero imprimirla a secas es un número creíble y falso: parece que
+     devuelves más de lo que vendes. Se marca para que la pantalla lo explique
+     en vez de recortarlo, que sería esconder un dato verdadero. */
+  const retRateExcede = retRate != null && retRate > 100;
+
   /* El IVA que Amazon no repercutió y que responde tu NIF sigue siendo tuyo
      ante Hacienda: es un coste real del periodo, no una advertencia. Sin esta
      línea todos los márgenes salían optimistas en unos once puntos. */
@@ -1421,7 +1450,7 @@ function pnl(){
     retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
-    measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
+    measured, retUnits, retRate, retRateCalidad, retRateExcede, hayDevoluciones,
     /* Sin ingreso no hay margen que calcular, y devolver 0 hacía que una
        pérdida de 900 € con cero ventas se presentara como «Margen neto 0,0 %».
        `null` es lo que hay: la pantalla escribe «—». */

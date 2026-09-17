@@ -249,9 +249,13 @@ const js = body => '(()=>{' + LAB + body + '})()';
       {id:'m3', cat:'gastos',      concept:'Seguro', amount:300,  date:dia(-3),  repeat:'month'}
     ]};
     const C = cashProjection();
-    let descuadre = 0, peor = null;
+    let descuadre = 0, peor = null, sinCat = 0;
     let prev = DB.settings.cash.start;
     C.forEach(c=>{
+      /* Sin categorías no se revienta con un TypeError: se cuenta y se dice.
+         Una prueba que escupe un stack no sobrevive a que alguien borre lo que
+         comprueba, porque nadie sabe leer qué falta en un stack. */
+      if(!c.cat){ sinCat++; prev = c.bal; return; }
       const k = c.cat;
       const neto = k.cobros - k.mercancia - k.gastos - k.inversiones - k.dividendos;
       const d = Math.abs((c.bal - prev) - neto);
@@ -260,18 +264,21 @@ const js = body => '(()=>{' + LAB + body + '})()';
       if(Math.abs(c.inflow - k.cobros) > 0.0001) descuadre = 1e9;
       if(Math.abs(c.outflow - (k.mercancia+k.gastos+k.inversiones+k.dividendos)) > 0.0001) descuadre = 1e9;
     });
-    const T = C.meta.totales;
-    return {descuadre, peor, T,
+    const T = C.meta.totales || {};
+    return {descuadre, peor, sinCat, T,
             inv:T.inversiones, div:T.dividendos,
             tieneCategorias: !!(C[0] && C[0].cat)};
   `));
-  check('cada día trae sus cinco categorías', cats.tieneCategorias===true,
-    'sin ellas la pantalla enseña un desglose que nadie ha comprobado contra la curva');
+  check('cada día trae sus cinco categorías', cats.tieneCategorias===true && cats.sinCat===0,
+    cats.sinCat+' de 90 días vienen sin desglose · sin él la pantalla enseña un reparto que nadie ha comprobado contra la curva');
   check('y las cinco suman exactamente la variación del saldo, los 90 días',
-    cats.descuadre < 0.0001, 'descuadre máximo '+cats.descuadre.toFixed(6)+' € (día '+cats.peor+')');
+    cats.sinCat===0 && cats.descuadre < 0.0001,
+    cats.sinCat ? 'no se ha podido comprobar: '+cats.sinCat+' días sin categorías'
+                : 'descuadre máximo '+cats.descuadre.toFixed(6)+' € (día '+cats.peor+')');
   check('la inversión programada cae dentro de la ventana y suma 8.000',
-    near(cats.inv, 8000, 0.5), cats.inv.toFixed(2)+' €');
-  check('y el dividendo programado, 2.500', near(cats.div, 2500, 0.5), cats.div.toFixed(2)+' €');
+    near(cats.inv, 8000, 0.5), (cats.inv==null?'sin totales por categoría':cats.inv.toFixed(2)+' €'));
+  check('y el dividendo programado, 2.500', near(cats.div, 2500, 0.5),
+    (cats.div==null?'sin totales por categoría':cats.div.toFixed(2)+' €'));
 
   console.log('\n=== COM-G · LA CURVA CON Y SIN DEPÓSITOS, EN LAS DOS DIRECCIONES ===');
   /* Aritmética del caso:
@@ -361,12 +368,14 @@ const js = body => '(()=>{' + LAB + body + '})()';
     go('tesoreria');
     const txt = document.getElementById('cashVerdict').textContent;
     const compras = (go('compras'), document.getElementById('poKpis').textContent);
+    const kpiTxt = (compras.match(/Sin calendario de pago[^A-ZÁÉÍÓÚ]*/)||[''])[0];
     po.payments.push({label:'Saldo', pct:70, basis:'fixed', dueDate:dia(-40), paid:false});
     const C2 = cashProjection();
     go('tesoreria');
     const txt2 = document.getElementById('cashVerdict').textContent;
     return {importe:poAmount(po), gap:C.meta.sinCalendario, enCurva:C.reduce((a,c)=>a+c.po,0),
-            avisa:/ning[uú]n vencimiento escrito/i.test(txt), kpiCompras:/Sin calendario/i.test(compras),
+            avisa:/ning[uú]n vencimiento escrito/i.test(txt),
+            kpiCompras:/Sin calendario/i.test(compras) && /35\.000/.test(kpiTxt), kpiTxt,
             gap2:C2.meta.sinCalendario, enCurva2:C2.reduce((a,c)=>a+c.po,0),
             avisa2:/ning[uú]n vencimiento escrito/i.test(txt2)};
   `));
@@ -377,7 +386,8 @@ const js = body => '(()=>{' + LAB + body + '})()';
     near(hueco.gap, 35000, 0.5),
     hueco.gap.toFixed(2)+' € · sin la medición el hub enseña 35.000 € de caja que no tiene');
   check('Tesorería lo canta en el veredicto', hueco.avisa===true, 'aviso en rojo, no una nota al pie');
-  check('y Compras lo lleva en un KPI propio', hueco.kpiCompras===true, '«Sin calendario de pago»');
+  check('y Compras lo lleva en un KPI propio, con el importe dentro',
+    hueco.kpiCompras===true, '«'+hueco.kpiTxt.trim()+'» · esperado el KPI con los 35.000 €');
   check('al completar el calendario al 100% el hueco desaparece',
     near(hueco.gap2, 0) && near(hueco.enCurva2, 50000, 0.5) && hueco.avisa2===false,
     hueco.gap2.toFixed(2)+' € de hueco · '+hueco.enCurva2.toFixed(0)+' € en la curva');
@@ -533,9 +543,17 @@ const js = body => '(()=>{' + LAB + body + '})()';
     let peor = 0;
     lineas.slice(1).forEach(l=>{
       const c = l.split(';');
+      if(idx('Cat. cobros')<0 || idx('Suma de categorías')<0){ peor = 1e9; return; }
       const suma = num(c[idx('Cat. cobros')]) - num(c[idx('Cat. mercancía')]) - num(c[idx('Cat. gastos')]) -
                    num(c[idx('Cat. inversiones')]) - num(c[idx('Cat. dividendos')]);
       peor = Math.max(peor, Math.abs(suma - num(c[idx('Suma de categorías')])));
+      /* Y contra las columnas de la curva, no solo contra sí mismas: cinco
+         categorías a cero cuadran perfectamente consigo mismas y no dicen nada
+         de los cobros y los pagos que la pantalla sí está enseñando. */
+      peor = Math.max(peor, Math.abs(num(c[idx('Cobros')]) - num(c[idx('Cat. cobros')])));
+      peor = Math.max(peor, Math.abs(num(c[idx('Pagos')]) -
+        (num(c[idx('Cat. mercancía')]) + num(c[idx('Cat. gastos')]) +
+         num(c[idx('Cat. inversiones')]) + num(c[idx('Cat. dividendos')]))));
     });
     return {cab:lineas[0], filas:lineas.length-1, peor,
             tieneDiv: idx('Cat. dividendos')>=0, tieneInv: idx('Cat. inversiones')>=0};
@@ -543,8 +561,10 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('el CSV de caja abre los 90 días por las cinco categorías',
     csvCaja.filas===90 && csvCaja.tieneDiv && csvCaja.tieneInv,
     csvCaja.filas+' filas · '+csvCaja.cab.slice(0,120));
-  check('y la columna de control cuadra en todas las filas',
-    csvCaja.peor < 0.02, 'descuadre máximo '+csvCaja.peor.toFixed(4)+' €');
+  check('y las categorías cuadran con la curva y con su columna de control, fila a fila',
+    csvCaja.peor < 0.02,
+    csvCaja.peor>1e8 ? 'el CSV no trae las columnas de categoría, así que no hay nada que cuadrar'
+                     : 'descuadre máximo '+csvCaja.peor.toFixed(4)+' €');
 
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));

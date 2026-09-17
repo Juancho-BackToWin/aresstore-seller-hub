@@ -93,15 +93,69 @@ function addDays(d,k){ const x=new Date(d.getTime()); x.setDate(x.getDate()+k); 
    `iso()`: mezclar un instante con una fecha. */
 function startOfDay(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
 function daysBetween(a,b){ return Math.round((startOfDay(b)-startOfDay(a))/86400000); }
+/* ═══ FECHAS · lo que entra y lo que se queda fuera ═════════════════════════
+
+   B2 · NADA ACOTABA LAS FECHAS. `new Date(2027, 12, 45)` no falla: desborda y
+   devuelve el 14 de febrero de 2028. Medido en esta base el 17-09-2026:
+   `'2027-13-45'` entraba como 2028-02-14 y `'45000'` —un serial de hoja de
+   cálculo, que en Excel es el 15-03-2023— entraba como el 1 de enero del año
+   45000. Ninguno de los dos da error: dan una fecha creíble y falsa, que es
+   exactamente el fallo que este hub tiene prohibido cometer. Aquí se rechaza
+   todo lo que no sea un día del calendario que exista de verdad.
+
+   El tope por arriba es GENEROSO a propósito (hoy + 5 años) porque parseDate()
+   la usan también las fechas previstas de los pedidos de compra y los
+   vencimientos de pago del carril 7, que son futuras por definición. Quien
+   descarta las ventas futuras es salesRows(), donde una venta con fecha de
+   mañana sí es un error del informe.
+
+   B3 · LA HORA Y EL HUSO SE TIRABAN. El informe de pedidos trae
+   `2026-09-17T23:30:00+00:00`, y la expresión regular se quedaba con
+   `2026-09-17`. En Madrid esas 23:30 UTC son la 01:30 del 18: todos los
+   pedidos entre las 22:00 y las 24:00 UTC —en verano; entre las 23:00 y las
+   24:00 en invierno— se archivaban en el día anterior al que el vendedor ve en
+   Seller Central. Es el mismo error de familia que tenía iso(): mezclar un
+   INSTANTE con una FECHA. Cuando la cadena declara hora Y huso, el día es el
+   del calendario del usuario, resuelto por el motor de fechas del navegador.
+   Cuando no declara huso, no hay nada que convertir y la fecha se lee tal cual.
+   ══════════════════════════════════════════════════════════════════════════ */
+const FECHA_ANIO_MIN    = 2000;   // antes de esto no hay negocio que archivar
+const FECHA_ANIOS_VISTA = 5;      // margen por arriba: ETA de pedidos, vencimientos
+
+/* Un día del calendario, o nada. Rechaza el mes 13, el 31 de febrero y los
+   años imposibles en vez de dejar que el constructor los desborde. */
+function fechaValida(y,m,d){
+  if(!(y>=FECHA_ANIO_MIN && y<=today().getFullYear()+FECHA_ANIOS_VISTA)) return null;
+  if(!(m>=1 && m<=12) || !(d>=1 && d<=31)) return null;
+  const x = new Date(y, m-1, d);
+  if(x.getFullYear()!==y || x.getMonth()!==m-1 || x.getDate()!==d) return null;
+  return x;
+}
 function parseDate(s){
-  if(!s) return null;
+  if(s==null || s==='') return null;
+  if(s instanceof Date) return isNaN(s.getTime()) ? null : startOfDay(s);
   s = String(s).trim();
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if(m) return new Date(+m[1], +m[2]-1, +m[3]);
+  if(!s) return null;
+  /* B3 · fecha + hora + huso declarado: se resuelve al día LOCAL del usuario. */
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})$/i);
+  if(m){
+    const t = Date.parse(s.replace(' ','T'));
+    if(isNaN(t)) return null;
+    const loc = new Date(t);
+    return fechaValida(loc.getFullYear(), loc.getMonth()+1, loc.getDate());
+  }
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m) return fechaValida(+m[1], +m[2], +m[3]);
   m = s.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{4})/);          // dd/mm/yyyy europeo
-  if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  if(m) return fechaValida(+m[3], +m[2], +m[1]);
+  m = s.match(/^(\d{4})(\d{2})(\d{2})$/);                       // aaaammdd compacto
+  if(m) return fechaValida(+m[1], +m[2], +m[3]);
+  /* B2 · un número suelto es un serial de hoja de cálculo o una referencia, no
+     una fecha. `new Date('45000')` devuelve el año 45000 sin pestañear. */
+  if(/^[\d.,]+$/.test(s)) return null;
   const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  if(isNaN(d.getTime())) return null;
+  return fechaValida(d.getFullYear(), d.getMonth()+1, d.getDate());
 }
 function toNum(v){
   if(v==null||v==='') return 0;
@@ -779,8 +833,19 @@ function salesRows(opt){
   opt = opt || {};
   const from = opt.from !== undefined ? opt.from : periodStart();
   const cf   = opt.country !== undefined ? opt.country : countryFilter;
+  /* B2 · las fechas que no pueden ser, se descartan, se cuentan y se enseñan.
+     Una venta con fecha de mañana no es una venta de mañana: es una celda mal
+     formada, un huso mal resuelto por el exportador o un serial de hoja de
+     cálculo. Dejarla pasar alarga el rango observado hacia delante y diluye la
+     velocidad de todo el catálogo, que es el mismo daño que B1 por el otro
+     lado. Se cuentan aparte de las que caen por divisa. */
+  const hoy0 = startOfDay(today());
+  const fechas = {futuras:0, ilegibles:0};
   const todas = imp('orders').map(r=>{
-    const d = parseDate(gv(r,'_date','purchasedate'));
+    const cruda = gv(r,'_date','purchasedate');
+    let d = parseDate(cruda);
+    if(!d){ if(String(cruda==null?'':cruda).trim()!=='') fechas.ilegibles++; }
+    else if(d > hoy0){ fechas.futuras++; d = null; }
     const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
     const ful = gv(r,'_fulfil','fulfillmentchannel');
     return {
@@ -835,7 +900,8 @@ function salesRows(opt){
   });
   const out = enDivisa.filter(r=>r.date && !r.cancelled && (!from || r.date>=from) &&
                (cf==='ALL' || r.country===cf));
-  out.meta = {otraDivisa, fueraPorDivisa:Object.keys(otraDivisa).reduce((a,k)=>a+otraDivisa[k],0)};
+  out.meta = {otraDivisa, fueraPorDivisa:Object.keys(otraDivisa).reduce((a,k)=>a+otraDivisa[k],0),
+              fechas, fueraPorFecha: fechas.futuras + fechas.ilegibles};
   return out;
 }
 /* =========================================================================

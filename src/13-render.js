@@ -694,6 +694,25 @@ function renderTesoreria(){
   const M = C.meta||{};
   if(M.fueraDeVentana>0)
     v+='<br><br>Hay '+fmt(M.fueraDeVentana,0)+' de vencimientos que caen más allá de los 90 días: cuentan en «pagos comprometidos» y no en esta curva.';
+  /* M3 · los tres agujeros por los que un pedido real deja la curva plausible y
+     equivocada. Van en el veredicto, no en un console.warn: quien decide si
+     cabe el pedido siguiente mira esta caja de texto. */
+  if(M.sinCalendario>0.5)
+    v+='<br><br><strong style="color:var(--stop)">Hay '+fmt(M.sinCalendario,0)+' de pedidos abiertos sin ningún vencimiento escrito.</strong> '+
+       'Esta curva NO los gasta, porque no hay fecha en la que ponerlos, así que enseña más caja de la que vas a tener. '+
+       'Repártelos en vencimientos dentro del pedido y vuelve a mirarla.';
+  else if(M.sinCalendario < -0.5)
+    v+='<br><br><strong style="color:var(--stop)">Hay pedidos cuyos vencimientos suman más del 100%:</strong> '+fmt(-M.sinCalendario,0)+' de más que esta curva sí está gastando.';
+  if(M.sinFecha>0.5)
+    v+='<br><br><strong style="color:var(--stop)">'+fmt(M.sinFecha,0)+' en vencimientos sin fecha resoluble</strong> (ancla en producción sin plazo de fabricación declarado, o fecha ilegible). '+
+       'Cuentan en «pagos comprometidos» y no en la curva. Declara el plazo de fabricación del proveedor o pon fecha fija.';
+  if(M.enDivisaSinTipo>0.5)
+    v+='<br><br><strong style="color:var(--stop)">'+num(M.posSinTipo)+' pedido(s) en divisa sin tipo de cambio.</strong> '+
+       'Sus importes entran en esta curva SIN convertir, o sea en su divisa leída como euros. Escribe el tipo a mano en cada pedido: el hub no consulta ninguno automático.';
+  if(M.planPasados>0.5)
+    v+='<br><br>Hay '+fmt(M.planPasados,0)+' en movimientos programados con fecha ya pasada. No se arrastran al día de hoy —a diferencia de un vencimiento de pedido, que es una deuda viva— así que si siguen pendientes, cámbiales la fecha.';
+  if(M.planFuera>0.5)
+    v+='<br><br>Y '+fmt(M.planFuera,0)+' en movimientos programados más allá de los 90 días, fuera de esta ventana.';
   v+='<br><br><span class="mut">Supuestos: las ventas se proyectan con la media del periodo seleccionado y sin estacionalidad, '+
      'el cobro de Amazon se libera cada ciclo reteniendo la reserva, y el IVA se paga el día 20 de cada mes. '+
      'La reposición de lo que vendes se descuenta a diario ('+fmt(M.dayCogsFlow||0)+'/día a coste puesto)'+
@@ -709,6 +728,11 @@ function renderTesoreria(){
       '<td><button class="icon-btn" onclick="delExpense(\''+e.id+'\')">✕</button></td></tr>').join('')+
       '<tr class="tot"><td class="name">Total mensual</td><td class="num">'+fmt(DB.expenses.reduce((a,e)=>a+toNum(e.amount),0),0)+'</td><td></td></tr>'
       : '<tr><td colspan="3" class="name mut">Sin gastos fijos. Añade gestoría, herramientas, almacén y cuota de Amazon.</td></tr>'));
+
+  /* M3 · las cinco categorías y los movimientos programados. Viven en un panel
+     que este render cuelga de la sección, porque `src/02-views.html` no es de
+     este carril y la tabla de propiedad no le da vista nueva. */
+  renderCashPlan(C);
 }
 function addExpense(){ DB.expenses.push({id:uid(),concept:'Nuevo gasto',amount:0}); saveDB(); renderTesoreria(); }
 function updExpense(id,f,v){ const e=DB.expenses.find(x=>x.id===id); if(e){e[f]=v; saveDB(); if(f==='amount') renderTesoreria();} }
@@ -1107,6 +1131,7 @@ function renderCompras(){
     plazoNum += toNum(sup.lead)*u; plazoDen += u;
   });
   const plazoMedio = plazoDen>0 ? plazoNum/plazoDen : null;
+  const sinCal = open.reduce((a,p)=>a+Math.max(0, poSinCalendario(p)), 0);
   document.getElementById('poKpis').innerHTML =
     kpi('Pedidos abiertos', num(open.length), DB.pos.length+' en total','accent')+
     kpi('Valor en curso', fmt(open.reduce((a,p)=>a+poAmount(p),0),0),'mercancía comprometida','')+
@@ -1118,7 +1143,13 @@ function renderCompras(){
        le has pedido nada bajara tu plazo de 33 a 23 días en pantalla, y con
        cero proveedores enseñaba «0 d» como si fuera una medición. */
     kpi('Plazo medio', plazoMedio===null ? '—' : num(plazoMedio,0)+' d',
-        plazoMedio===null ? 'sin pedidos que ponderar' : 'ponderado por unidades compradas','');
+        plazoMedio===null ? 'sin pedidos que ponderar' : 'ponderado por unidades compradas','')+
+    /* M3 · el trozo de los pedidos abiertos que NO tiene ningún vencimiento
+       escrito. La curva de caja no lo gasta —no hay fecha que inventar— y sin
+       este número la proyección sale plausible y sobrada. */
+    kpi('Sin calendario de pago', fmt(sinCal,0),
+        sinCal>0 ? 'no está en la curva de caja' : 'todos los pedidos cuadran al 100%',
+        sinCal>0?'neg':'pos');
 
   document.getElementById('poList').innerHTML = DB.pos.length ? DB.pos.map(po=>{
     const sup=DB.suppliers.find(s=>s.id===po.supplierId);
@@ -1129,41 +1160,56 @@ function renderCompras(){
         '<div style="flex:1;min-width:190px"><div class="s-name" style="font-size:14px">'+esc(po.ref||'Pedido')+
           ' <span class="pill '+(po.status==='closed'?'go':'core')+'">'+(PO_STATES.find(s=>s[0]===po.status)||['','?'])[1]+'</span></div>'+
           '<div class="mut" style="font-size:12px;margin-top:2px">'+(sup?esc(sup.name):'sin proveedor')+
-          ' · '+num(poUnits(po))+' ud · '+(po.eta?'llega '+esc(po.eta):'sin fecha')+'</div></div>'+
-        '<div style="text-align:right"><div style="font-family:var(--mono);font-weight:600;font-size:16px">'+fmt(poAmount(po),0)+'</div>'+
-          '<div class="mut" style="font-size:11.5px">pagado '+num(paid)+'%</div></div>'+
+          ' · '+num(poUnits(po))+' ud'+(poReceipts(po).length?' ('+num(poReceivedUnits(po))+' recibidas)':'')+
+          ' · '+(po.eta?'llega '+esc(po.eta):'sin fecha')+'</div></div>'+
+        '<div style="text-align:right"><div style="font-family:var(--mono);font-weight:600;font-size:16px">'+
+            (poFxMissing(po) ? num(poAmount(po),0)+' '+poCur(po) : fmt(poAmount(po),0))+'</div>'+
+          '<div class="mut" style="font-size:11.5px">pagado '+num(paid)+'%'+
+            (poCur(po)!=='EUR' ? ' · '+esc(poCur(po)) : '')+'</div></div>'+
         '<div style="display:flex;gap:6px"><button class="btn sm" onclick="editPO(\''+po.id+'\')">Editar</button>'+
-        '<button class="btn sm'+(po.received?'':' ')+'" onclick="applyPOCosts(DB.pos.find(x=>x.id===\''+po.id+'\'))" title="'+
-          (po.received ? 'Reparte el flete y crea un lote de coste por línea, fechado el '+esc(po.received)
-                       : 'Necesita fecha de recepción: sin ella el lote se aplicaría a ventas servidas con stock anterior')+
-          '">Crear lote de coste'+(po.received?'':' ⚠')+'</button></div>'+
+        '<button class="btn sm" onclick="applyPOCosts(DB.pos.find(x=>x.id===\''+po.id+'\'))" title="'+
+          (poReceipts(po).length
+            ? esc('Un lote por entrega, cada uno con su fecha y sus unidades. Flete repartido '+poFreightBasis(po).nombreUsado+' sobre el pedido completo.')
+            : (po.received ? 'Reparte el flete y crea un lote de coste por línea, fechado el '+esc(po.received)
+                           : 'Necesita fecha de recepción: sin ella el lote se aplicaría a ventas servidas con stock anterior'))+
+          '">Crear lote de coste'+((poReceipts(po).length ? poReceiptAudit(po).sinFecha.length===0 : !!po.received) ? '' : ' ⚠')+'</button></div>'+
       '</div>'+
       '<div class="po-status">'+PO_STATES.map((s,i)=>'<span class="st '+(i<=si?'on':'')+'" title="'+s[1]+'"></span>').join('')+'</div>'+
+      /* M3 · la base del reparto del flete, la recepción y la divisa, a la
+         vista. Un flete repartido sin decir cómo cambia el coste unitario y por
+         tanto el margen: no puede vivir solo dentro de una función. */
+      poAuditHTML(po)+
       '</div>';
   }).join('') : '<div class="empty"><strong>Sin pedidos de compra</strong>Aquí es donde el hub se diferencia de una hoja de cálculo: cada pedido reparte su flete al coste unitario de cada producto y coloca sus vencimientos en la curva de tesorería. El clásico 30% de anticipo y 70% contra documentos deja de vivir en un correo.<div style="margin-top:12px"><button class="btn sm primary" onclick="addPO()">Crear el primero</button></div></div>';
 
   tbl('supplierTable','<tr><th>Proveedor</th><th>País</th><th class="num">Plazo</th><th class="num">Pedido mínimo</th>'+
-    '<th>Condiciones</th><th>Incoterm</th><th style="width:70px"></th></tr>'+
+    '<th class="num">Fabricación</th><th>Condiciones</th><th>Incoterm</th><th style="width:70px"></th></tr>'+
     (DB.suppliers.length? DB.suppliers.map(s=>
       '<tr><td class="name"><strong>'+esc(s.name)+'</strong></td><td>'+esc(s.country||'—')+'</td>'+
       '<td class="num">'+num(toNum(s.lead))+' d</td><td class="num">'+num(toNum(s.moq))+'</td>'+
+      '<td class="num">'+(toNum(s.prod)>0 ? num(toNum(s.prod))+' d' : '—')+'</td>'+
       '<td class="name mut">'+esc(s.terms||'—')+'</td><td class="mut">'+esc(s.incoterm||'—')+'</td>'+
       '<td><button class="icon-btn" onclick="editSupplier(\''+s.id+'\')">✎</button></td></tr>').join('')
-      : '<tr><td colspan="7" class="name mut">Sin proveedores. El plazo de entrega que guardes aquí es lo que calcula tu punto de pedido en Inventario.</td></tr>'));
+      : '<tr><td colspan="8" class="name mut">Sin proveedores. El plazo de entrega que guardes aquí es lo que calcula tu punto de pedido en Inventario, y el de fabricación es el que sitúa el depósito de producción en la curva de caja.</td></tr>'));
 }
 function addSupplier(){ editSupplier(null); }
 function editSupplier(id){
-  const s = id ? DB.suppliers.find(x=>x.id===id) : {id:uid(),name:'',country:'CN',lead:45,moq:500,terms:'30% anticipo / 70% contra documentos',incoterm:'FOB',notes:''};
+  const s = id ? DB.suppliers.find(x=>x.id===id) : {id:uid(),name:'',country:'CN',lead:45,prod:30,moq:500,terms:'30% anticipo / 70% contra documentos',incoterm:'FOB',notes:''};
   openModal(id?'Editar proveedor':'Nuevo proveedor',
     'El plazo de entrega es el dato que más trabaja: define tu punto de pedido y, con las condiciones de pago, la forma de la curva de caja.',
     '<div class="row-2">'+fld('ms_name','Nombre','text',s.name)+fld('ms_country','País','text',s.country)+'</div>'+
-    '<div class="row-3">'+fld('ms_lead','Plazo total','number',s.lead,'d')+fld('ms_moq','Pedido mínimo','number',s.moq,'ud')+
-      fld('ms_inco','Incoterm','text',s.incoterm)+'</div>'+
+    '<div class="row-3">'+fld('ms_lead','Plazo total','number',s.lead,'d')+
+      /* M3 · el plazo de FABRICACIÓN, que no es el plazo total puerta a puerta.
+         Es el que sitúa el segundo depósito: el que se paga al cerrar
+         producción, semanas antes de que el barco salga. */
+      fld('ms_prod','Plazo de fabricación','number',s.prod,'d')+
+      fld('ms_moq','Pedido mínimo','number',s.moq,'ud')+'</div>'+
+    '<div class="row-2">'+fld('ms_inco','Incoterm','text',s.incoterm)+'</div>'+
     fld('ms_terms','Condiciones de pago','text',s.terms)+
     '<div class="field"><label>Notas <span class="hint">incidencias de calidad, precios negociados, contacto</span></label>'+
     '<textarea id="ms_notes" rows="3">'+esc(s.notes)+'</textarea></div>',
     ()=>{
-      s.name=val('ms_name'); s.country=val('ms_country'); s.lead=n('ms_lead'); s.moq=n('ms_moq');
+      s.name=val('ms_name'); s.country=val('ms_country'); s.lead=n('ms_lead'); s.prod=n('ms_prod'); s.moq=n('ms_moq');
       s.incoterm=val('ms_inco'); s.terms=val('ms_terms'); s.notes=val('ms_notes');
       if(!id) DB.suppliers.push(s);
       saveDB(); refreshAll(); toast('Proveedor guardado');
@@ -1173,29 +1219,52 @@ function addPO(){ editPO(null); }
 function editPO(id){
   const po = id ? DB.pos.find(x=>x.id===id) : {id:uid(),ref:'PO-'+iso(today()).slice(2).replace(/-/g,''),
     supplierId:(DB.suppliers[0]||{}).id||'', status:'draft', items:[], freight:0, alloc:'units',
+    cur:'EUR', fx:1, fxDate:'', prodDays:0, receipts:[],
     ordered:iso(today()), eta:iso(addDays(today(),45)),
-    payments:[{label:'Anticipo',pct:30,dueDate:iso(today()),paid:false},
-              {label:'Saldo contra documentos',pct:70,dueDate:iso(addDays(today(),40)),paid:false}]};
-  const itemRows = ()=> (po.items.length?po.items:[{sku:'',qty:0,unitCost:0}]).map((it,i)=>
+    payments:[{label:'Depósito de producción',pct:30,basis:'order',offset:0,dueDate:iso(today()),paid:false},
+              {label:'Saldo contra documentos',pct:70,basis:'production',offset:7,dueDate:iso(addDays(today(),40)),paid:false}]};
+  if(!Array.isArray(po.receipts)) po.receipts = [];
+  const cur = ()=> poCur(po);
+  const itemRows = ()=> (po.items.length?po.items:[{sku:'',qty:0,unitCost:0,weight:0}]).map((it,i)=>
     '<tr><td><select onchange="poItem('+i+',\'sku\',this.value)">'+
       '<option value="">— SKU —</option>'+
       DB.products.map(p=>'<option value="'+esc(p.sku)+'"'+(String(p.sku)===String(it.sku)?' selected':'')+'>'+esc(p.sku)+' · '+esc(p.name)+'</option>').join('')+
       '</select></td>'+
     '<td class="num" style="width:90px"><input type="number" value="'+toNum(it.qty)+'" onchange="poItem('+i+',\'qty\',this.value)"></td>'+
     '<td class="num" style="width:100px"><input type="number" step="0.01" value="'+toNum(it.unitCost)+'" onchange="poItem('+i+',\'unitCost\',this.value)"></td>'+
-    '<td class="num mut">'+fmt(poUnitCost(po,it.sku))+'</td>'+
+    /* M3 · el peso por unidad. Es lo único que le falta al reparto por peso, y
+       sin él ese reparto no se puede hacer: se dice, no se sustituye por otro. */
+    '<td class="num" style="width:95px"><input type="number" step="0.01" value="'+poLineWeight(it)+'" onchange="poItem('+i+',\'weight\',this.value)"></td>'+
+    '<td class="num mut">'+num(poUnitCostOf(po,it),4)+' '+cur()+'</td>'+
+    '<td class="num mut">'+num(poReceivedUnitsOf(po,i))+'</td>'+
     '<td><button class="icon-btn" onclick="poDelItem('+i+')">✕</button></td></tr>').join('');
   window.__po = po;
-  window.poItem=(i,f,v)=>{ if(!po.items[i]) po.items[i]={sku:'',qty:0,unitCost:0};
+  window.poItem=(i,f,v)=>{ if(!po.items[i]) po.items[i]={sku:'',qty:0,unitCost:0,weight:0};
     po.items[i][f]= f==='sku'?v:toNum(v); renderPOModal(); };
   window.poDelItem=(i)=>{ po.items.splice(i,1); renderPOModal(); };
-  window.poAddItem=()=>{ po.items.push({sku:'',qty:0,unitCost:0}); renderPOModal(); };
-  window.poPay=(i,f,v)=>{ po.payments[i][f]= f==='paid'?v:(f==='pct'?toNum(v):v); renderPOModal(); };
-  window.poAddPay=()=>{ po.payments.push({label:'Pago',pct:0,dueDate:iso(today()),paid:false}); renderPOModal(); };
+  window.poAddItem=()=>{ po.items.push({sku:'',qty:0,unitCost:0,weight:0}); renderPOModal(); };
+  window.poPay=(i,f,v)=>{ po.payments[i][f]= (f==='paid')?v:((f==='pct'||f==='offset')?toNum(v):v); renderPOModal(); };
+  window.poAddPay=()=>{ po.payments.push({label:'Pago',pct:0,basis:'fixed',offset:0,dueDate:iso(today()),paid:false}); renderPOModal(); };
   window.poDelPay=(i)=>{ po.payments.splice(i,1); renderPOModal(); };
+  /* M3 · entregas parciales */
+  window.poRec=(i,f,v)=>{ if(po.receipts[i]){ po.receipts[i][f]=v; renderPOModal(); } };
+  window.poRecQty=(i,idx,v)=>{ if(!po.receipts[i]) return;
+    if(!po.receipts[i].lines) po.receipts[i].lines={};
+    po.receipts[i].lines[idx]=toNum(v); renderPOModal(); };
+  window.poAddRec=()=>{
+    /* Por defecto, lo que falta por recibir: es lo que se teclea el 90 % de las
+       veces y así la entrega no nace con ceros que hay que rellenar a mano. */
+    const lines={};
+    (po.items||[]).forEach((it,idx)=>{ lines[idx]=Math.max(0, toNum(it.qty)-poReceivedUnitsOf(po,idx)); });
+    po.receipts.push({id:uid(), ref:'Entrega '+(po.receipts.length+1), date:iso(today()), lines});
+    renderPOModal(); };
+  window.poDelRec=(i)=>{ po.receipts.splice(i,1); renderPOModal(); };
 
   function body(){
     const pctTot=(po.payments||[]).reduce((a,p)=>a+toNum(p.pct),0);
+    const B = poFreightBasis(po);
+    const A = poReceiptAudit(po);
+    const fx = poFxRate(po);
     return '<div class="row-3">'+fld('mo_ref','Referencia','text',po.ref)+
       '<div class="field"><label>Proveedor</label><select id="mo_sup">'+
         DB.suppliers.map(s=>'<option value="'+s.id+'"'+(s.id===po.supplierId?' selected':'')+'>'+esc(s.name)+'</option>').join('')+
@@ -1205,44 +1274,105 @@ function editPO(id){
       '</div><div class="row-3">'+
         fld('mo_ord','Fecha de pedido','date',po.ordered)+fld('mo_eta','Llegada prevista','date',po.eta)+
         fld('mo_rec','Recibido el','date',po.received)+
-      '</div><div class="row-2">'+
-        fld('mo_fre','Flete + aranceles total','number',po.freight,'€')+
       '</div>'+
-      '<div class="field"><label>Reparto del flete al coste unitario</label><select id="mo_alloc">'+
-        '<option value="units"'+(po.alloc==='units'?' selected':'')+'>Por unidades (simple)</option>'+
-        '<option value="value"'+(po.alloc==='value'?' selected':'')+'>Proporcional al valor (mejor si mezclas productos caros y baratos)</option>'+
-      '</select></div>'+
-      '<div class="fieldset"><legend>Líneas <span class="note">la última columna es el coste real con el flete dentro</span></legend>'+
-      '<div class="tbl-wrap"><table class="grid"><tr><th>Producto</th><th class="num">Unid.</th><th class="num">€/ud fábrica</th><th class="num">€/ud real</th><th></th></tr>'+
+      /* ── Divisa · SOLO REGISTRO ──────────────────────────────────────── */
+      '<div class="fieldset"><legend>Divisa del pedido <span class="note">tipo de cambio a mano · el hub no consulta ninguno automático</span></legend>'+
+      '<div class="row-3">'+
+        '<div class="field"><label>Divisa</label><select id="mo_cur">'+
+          PO_CURRENCIES.map(c=>'<option value="'+c[0]+'"'+(c[0]===cur()?' selected':'')+'>'+c[1]+'</option>').join('')+
+        '</select></div>'+
+        fld('mo_fx','Tipo de cambio','number',toNum(po.fx)||(cur()==='EUR'?1:0),'€ por 1 '+cur())+
+        fld('mo_fxd','Fecha del tipo','date',po.fxDate)+
+      '</div>'+
+      '<div class="note-box '+(poFxMissing(po)?'warn':'info')+'" style="margin-bottom:0">'+esc(poFxNota(po))+
+        (cur()!=='EUR' && fx!==null
+          ? ' · Total en euros: <strong>'+fmt(poAmount(po),2)+'</strong>'
+          : '')+
+        '<br><span class="mut">La multidivisa está despriorizada a propósito: en el reparto que se traspasó pesaba un 1,19 % de las ventas — cifra HEREDADA, no medida contra esta base. '+
+        'Lo que el hub hace es registrar lo que tú has pactado, no adivinar un tipo.</span></div></div>'+
+      /* ── Flete y su base de reparto ──────────────────────────────────── */
+      '<div class="fieldset"><legend>Flete y reparto <span class="note">de aquí sale el coste unitario, y del coste unitario el margen</span></legend>'+
+      '<div class="row-3">'+
+        fld('mo_fre','Flete + aranceles total','number',po.freight,cur())+
+        '<div class="field"><label>Reparto del flete</label><select id="mo_alloc">'+
+          '<option value="units"'+(po.alloc==='units'?' selected':'')+'>Por unidades (simple)</option>'+
+          '<option value="value"'+(po.alloc==='value'?' selected':'')+'>Proporcional al valor</option>'+
+          '<option value="weight"'+(po.alloc==='weight'?' selected':'')+'>Por peso (lo que de verdad factura el transportista)</option>'+
+        '</select></div>'+
+        fld('mo_prod','Plazo de fabricación','number',po.prodDays,'d')+
+      '</div>'+
+      '<div class="note-box '+(B.degradado?'warn':'info')+'" style="margin-bottom:0"><strong>Base del reparto:</strong> '+esc(B.texto)+
+        (B.degradado?'<br>Se está repartiendo por un criterio distinto del que has elegido. Rellena la columna de peso, o cambia el criterio.':'')+'</div></div>'+
+      '<div class="fieldset"><legend>Líneas <span class="note">«coste puesto» = fábrica + flete repartido, en '+esc(cur())+'</span></legend>'+
+      '<div class="tbl-wrap"><table class="grid"><tr><th>Producto</th><th class="num">Unid.</th><th class="num">'+esc(cur())+'/ud fábrica</th>'+
+        '<th class="num">kg/ud</th><th class="num">coste puesto</th><th class="num">recibidas</th><th></th></tr>'+
       itemRows()+'</table></div>'+
       '<button class="btn sm" style="margin-top:9px" onclick="poAddItem()">+ Línea</button>'+
-      '<div style="margin-top:10px;font-family:var(--mono);font-size:13px">Total del pedido: <strong>'+fmt(poAmount(po),2)+'</strong> · '+num(poUnits(po))+' unidades</div></div>'+
-      '<div class="fieldset"><legend>Vencimientos de pago <span class="note">'+(Math.abs(pctTot-100)>0.5?'⚠ suman '+num(pctTot)+'%, no 100%':'suman 100%')+'</span></legend>'+
-      '<div class="tbl-wrap"><table class="grid"><tr><th>Concepto</th><th class="num">%</th><th class="num">€</th><th>Vence</th><th>Pagado</th><th></th></tr>'+
-      (po.payments||[]).map((p,i)=>
-        '<tr><td><input type="text" value="'+esc(p.label)+'" onchange="poPay('+i+',\'label\',this.value)"></td>'+
+      '<div style="margin-top:10px;font-family:var(--mono);font-size:13px">Total del pedido: <strong>'+
+        (poFxMissing(po) ? num(poAmount(po),2)+' '+esc(cur()) : fmt(poAmount(po),2))+'</strong> · '+num(poUnits(po))+' unidades'+
+        (poWeight(po)>0 ? ' · '+num(poWeight(po),2)+' kg' : '')+'</div></div>'+
+      /* ── Entregas parciales ──────────────────────────────────────────── */
+      '<div class="fieldset"><legend>Entregas <span class="note">'+
+        (A.entregas ? num(A.recibidas)+' de '+num(A.pedidas)+' ud recibidas · cada entrega es un lote con su fecha'
+                    : 'un contenedor que llega en dos veces son dos lotes, no uno')+'</span></legend>'+
+      poReceiptRowsHTML(po)+
+      '<button class="btn sm" style="margin-top:9px" onclick="poAddRec()">+ Entrega</button>'+
+      (A.entregas ? '<div class="note-box info" style="margin:10px 0 0">En cuanto hay una entrega declarada, «Recibido el» deja de crear lotes: '+
+        'mandan las entregas, o el mismo contenedor entraría dos veces en el stock. El flete por unidad se reparte sobre el pedido COMPLETO, '+
+        'así que partir el envío no cambia el coste unitario.</div>' : '')+
+      (A.excedidas.length ? '<div class="note-box warn" style="margin:10px 0 0">Hay '+A.excedidas.length+' línea(s) con más unidades recibidas que pedidas. '+
+        'No se recorta solo: si es un error, corrígelo; si de verdad llegó de más, sube las unidades pedidas, porque el flete se reparte sobre lo pedido.</div>' : '')+
+      '</div>'+
+      /* ── Vencimientos ────────────────────────────────────────────────── */
+      '<div class="fieldset"><legend>Vencimientos de pago <span class="note">'+(Math.abs(pctTot-100)>0.5?'⚠ suman '+num(pctTot,1)+'%, no 100%':'suman 100%')+'</span></legend>'+
+      '<div class="tbl-wrap"><table class="grid"><tr><th>Concepto</th><th class="num">%</th><th class="num">Importe</th>'+
+        '<th>Se cuenta desde</th><th class="num">± d</th><th>Vence</th><th>Pagado</th><th></th></tr>'+
+      (po.payments||[]).map((p,i)=>{
+        const base = String(p.basis||'fixed');
+        return '<tr><td><input type="text" value="'+esc(p.label)+'" onchange="poPay('+i+',\'label\',this.value)"></td>'+
         '<td class="num" style="width:70px"><input type="number" value="'+toNum(p.pct)+'" onchange="poPay('+i+',\'pct\',this.value)"></td>'+
-        '<td class="num mut">'+fmt(poAmount(po)*toNum(p.pct)/100)+'</td>'+
-        '<td style="width:140px"><input type="date" value="'+esc(p.dueDate)+'" onchange="poPay('+i+',\'dueDate\',this.value)"></td>'+
+        '<td class="num mut">'+(poFxMissing(po)?num(poAmount(po)*toNum(p.pct)/100,2)+' '+esc(cur()):fmt(poAmount(po)*toNum(p.pct)/100))+'</td>'+
+        '<td style="width:170px"><select onchange="poPay('+i+',\'basis\',this.value)">'+
+          PAY_ANCLAS.map(a=>'<option value="'+a[0]+'"'+(a[0]===base?' selected':'')+'>'+a[1]+'</option>').join('')+
+        '</select></td>'+
+        '<td class="num" style="width:70px">'+(base==='fixed' ? '<span class="mut">—</span>'
+          : '<input type="number" value="'+toNum(p.offset)+'" onchange="poPay('+i+',\'offset\',this.value)">')+'</td>'+
+        '<td style="width:150px">'+(base==='fixed'
+          ? '<input type="date" value="'+esc(p.dueDate)+'" onchange="poPay('+i+',\'dueDate\',this.value)">'
+          : '<span class="mut" style="font-size:12px">'+esc(poPayDateTexto(po,p))+'</span>')+'</td>'+
         '<td><input type="checkbox" style="width:auto" '+(p.paid?'checked':'')+' onchange="poPay('+i+',\'paid\',this.checked)"></td>'+
-        '<td><button class="icon-btn" onclick="poDelPay('+i+')">✕</button></td></tr>').join('')+
-      '</table></div><button class="btn sm" style="margin-top:9px" onclick="poAddPay()">+ Vencimiento</button></div>';
+        '<td><button class="icon-btn" onclick="poDelPay('+i+')">✕</button></td></tr>';
+      }).join('')+
+      '</table></div><button class="btn sm" style="margin-top:9px" onclick="poAddPay()">+ Vencimiento</button>'+
+      (Math.abs(pctTot-100)>0.5
+        ? '<div class="note-box warn" style="margin:10px 0 0"><strong>El calendario no cubre el pedido.</strong> Los vencimientos suman '+num(pctTot,1)+'%: '+
+          (pctTot<100 ? fmt(poAmount(po)*(100-pctTot)/100,0)+' de este pedido no aparecen en la proyección de caja, porque no hay ninguna fecha en la que ponerlos. La curva sale mejor de lo que es.'
+                      : fmt(poAmount(po)*(pctTot-100)/100,0)+' de más, que la curva sí gasta.')+'</div>'
+        : '')+
+      ((po.payments||[]).some(p=>!p.paid && !poPayDate(po,p))
+        ? '<div class="note-box warn" style="margin:10px 0 0">Hay vencimientos sin fecha resoluble (ancla en producción sin plazo de fabricación declarado, o fecha ilegible). '+
+          'Esos importes NO entran en la curva de caja y Tesorería los cuenta aparte.</div>'
+        : '')+
+      '</div>';
   }
   window.renderPOModal=()=>{
     const c=document.getElementById('modalBody'); if(!c) return;
     const keep={ref:val('mo_ref'),sup:val('mo_sup'),st:val('mo_st'),ord:val('mo_ord'),eta:val('mo_eta'),
-                rec:val('mo_rec'),fre:val('mo_fre'),alloc:val('mo_alloc')};
+                rec:val('mo_rec'),fre:val('mo_fre'),alloc:val('mo_alloc'),
+                cur:val('mo_cur'),fx:val('mo_fx'),fxd:val('mo_fxd'),prod:val('mo_prod')};
     if(keep.ref!=null){ po.ref=keep.ref; po.supplierId=keep.sup; po.status=keep.st;
-      po.ordered=keep.ord; po.eta=keep.eta; po.received=keep.rec; po.freight=toNum(keep.fre); po.alloc=keep.alloc; }
+      po.ordered=keep.ord; po.eta=keep.eta; po.received=keep.rec; po.freight=toNum(keep.fre); po.alloc=keep.alloc;
+      po.cur=keep.cur; po.fx=toNum(keep.fx); po.fxDate=keep.fxd; po.prodDays=toNum(keep.prod); }
     c.innerHTML=body();
   };
   openModal(id?'Editar pedido de compra':'Nuevo pedido de compra',
-    'Los vencimientos que pongas aquí aparecen directamente en la proyección de caja. «Aplicar coste» reparte el flete y crea un lote de coste por línea, fechado el día de RECEPCIÓN: la mercancía que sigue en un barco no puede haber surtido ninguna venta, así que rellena ese campo antes de aplicarlo.',
+    'Los vencimientos que pongas aquí aparecen directamente en la proyección de caja, y pueden colgar de la fecha de pedido o del cierre de producción en vez de ser fechas fijas que se quedan viejas. «Crear lote de coste» reparte el flete con la base que elijas y crea un lote por ENTREGA, fechado el día en que llegó de verdad: la mercancía que sigue en un barco no ha surtido ninguna venta.',
     body(),
     ()=>{
       po.ref=val('mo_ref'); po.supplierId=val('mo_sup'); po.status=val('mo_st');
       po.ordered=val('mo_ord'); po.eta=val('mo_eta'); po.received=val('mo_rec');
       po.freight=n('mo_fre'); po.alloc=val('mo_alloc');
+      po.cur=val('mo_cur'); po.fx=n('mo_fx'); po.fxDate=val('mo_fxd'); po.prodDays=n('mo_prod');
       po.items=(po.items||[]).filter(i=>i.sku&&toNum(i.qty)>0);
       if(!id) DB.pos.push(po);
       saveDB(); refreshAll(); toast('Pedido guardado');
@@ -1460,22 +1590,50 @@ function exportPublicidad(){
     A.terms.map(t=>[t.term, t.campaign, t.impr, t.clicks, r2(t.spend), r2(t.sales), t.orders,
                     t.sales>0 ? r2(t.spend/t.sales*100) : '']));
 }
+/* M3 · la exportación lleva la BASE del reparto del flete, no solo el flete.
+   Un CSV con una columna «flete por unidad» y sin decir de dónde sale es el
+   mismo número creíble y falso que en pantalla, pero además circulando por
+   correo. Y lleva la divisa y el tipo, dicho como introducido a mano. */
 function exportCompras(){
   const filas=[];
   DB.pos.forEach(po=>{
     const sup=(DB.suppliers.filter(s=>s.id===po.supplierId)[0]||{});
-    (po.items||[]).forEach(i=>filas.push([po.ref||po.id, sup.name||'', po.status||'', po.eta||'',
-      po.received||'', i.sku, i.qty, r2(i.unitCost), r2(toNum(i.qty)*toNum(i.unitCost)), r2(po.freight)]));
+    const B = poFreightBasis(po);
+    const fx = poFxRate(po);
+    (po.items||[]).forEach((i,idx)=>{
+      const fleteUd = poFreightShareOf(po, i);
+      filas.push([po.ref||po.id, sup.name||'', po.status||'', po.eta||'',
+        po.received||'', i.sku, i.qty, poReceivedUnitsOf(po, idx),
+        Math.max(0, toNum(i.qty)-poReceivedUnitsOf(po, idx)), poReceipts(po).length,
+        r2(i.unitCost), poLineWeight(i), r2(toNum(i.qty)*toNum(i.unitCost)), r2(po.freight),
+        B.nombrePedido, B.nombreUsado, r2(B.total), B.unidad,
+        r2(fleteUd), r2(toNum(i.unitCost)+fleteUd),
+        poCur(po), fx===null ? 'SIN TIPO' : r2(fx), poCur(po)==='EUR' ? 'no' : 'sí, a mano',
+        r2(poSinCalendario(po))]);
+    });
   });
   descargarCSV('compras',
-    ['Pedido','Proveedor','Estado','Llegada prevista','Recibido','SKU','Unidades',
-     'Coste de fábrica','Importe','Flete del pedido'], filas);
+    ['Pedido','Proveedor','Estado','Llegada prevista','Recibido','SKU','Unidades pedidas',
+     'Unidades recibidas','Pendientes','Entregas',
+     'Coste de fábrica','kg por unidad','Importe','Flete del pedido',
+     'Reparto pedido','Reparto aplicado','Total de la base','Unidad de la base',
+     'Flete por unidad','Coste puesto por unidad',
+     'Divisa','Tipo de cambio','Tipo introducido a mano','Importe sin calendario de pago'], filas);
 }
+/* M3 · la exportación abre cada día por las cinco categorías. Las cinco suman
+   la variación del saldo por construcción, así que el CSV se puede cuadrar
+   contra el extracto sin tener que fiarse de la pantalla. */
 function exportTesoreria(){
   const C = cashProjection();
   descargarCSV('caja-90-dias',
-    ['Día','Fecha','Cobros','Pagos','Pago de pedido','Saldo'],
-    C.map(c=>[c.k, iso(c.date), r2(c.inflow), r2(c.outflow), r2(c.po), r2(c.bal)]));
+    ['Día','Fecha','Cobros','Pagos','Pago de pedido','Saldo',
+     'Cat. cobros','Cat. mercancía','Cat. gastos','Cat. inversiones','Cat. dividendos','Suma de categorías'],
+    C.map(c=>{
+      const k = c.cat||{};
+      const suma = toNum(k.cobros)-toNum(k.mercancia)-toNum(k.gastos)-toNum(k.inversiones)-toNum(k.dividendos);
+      return [c.k, iso(c.date), r2(c.inflow), r2(c.outflow), r2(c.po), r2(c.bal),
+              r2(k.cobros), r2(k.mercancia), r2(k.gastos), r2(k.inversiones), r2(k.dividendos), r2(suma)];
+    }));
 }
 function exportHistorico(){
   const H = hist(), filas=[];

@@ -1633,11 +1633,16 @@ function cashProjection(){
   const dayCogsFlow = P.cogs/daysInPeriod();
   const skusVendidos = {};
   salesRows().forEach(r=>{ if(r.sku) skusVendidos[String(r.sku).toLowerCase()] = 1; });
+  /* M3 · ENTREGAS PARCIALES. Lo que cubre días es lo que todavía NO ha
+     llegado, y con entregas declaradas eso es aritmética —pedidas menos
+     recibidas— en vez de una lectura del estado del pedido. Un pedido de 1.500
+     unidades del que han llegado 600 y está marcado «recibido» cubría CERO
+     días, cuando quedan 900 navegando cuyo pago sí está en la curva.
+     Sin entregas declaradas, `poEnCursoUnits` conserva exactamente el criterio
+     anterior: «recibido» cubre cero, el resto cubre todo lo pedido. */
   const unidsEnCurso = DB.pos
-    .filter(po => po.status!=='closed' && po.status!=='received' && po.status!=='draft')
-    .reduce((a,po) => a + (po.items||[])
-      .filter(i => skusVendidos[String(i.sku).toLowerCase()])
-      .reduce((b,i) => b + toNum(i.qty), 0), 0);
+    .filter(po => po.status!=='closed' && po.status!=='draft')
+    .reduce((a,po) => a + poEnCursoUnits(po, sku=>!!skusVendidos[String(sku).toLowerCase()]), 0);
   const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
 
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
@@ -1647,43 +1652,108 @@ function cashProjection(){
      que pagas mañana. Antes el filtro `k>=0` lo tiraba de la curva mientras el
      KPI «Pagos comprometidos» seguía contándolo, así que la pantalla enseñaba
      una deuda que la proyección no gastaba nunca. Ahora cae en el día 0. */
+  /* M3 · DEPÓSITOS PROGRAMADOS. La fecha de un vencimiento deja de tener que
+     ser absoluta: puede colgar de la fecha de pedido, del CIERRE DE PRODUCCIÓN
+     —fecha de pedido más el plazo de fabricación real del proveedor— o de la
+     llegada prevista. `poPayDate()` (27-compras) resuelve las dos formas, y un
+     vencimiento antiguo sin `basis` sigue leyéndose por `dueDate` exactamente
+     igual que antes.
+
+     Y se miden tres agujeros por los que antes se escapaba dinero de la curva
+     sin que nada lo dijera:
+
+     · `sinFecha` — un vencimiento cuya fecha no se puede resolver (ancla en
+       producción sin plazo declarado, o `dueDate` ilegible). Antes se hacía
+       `return` en silencio y ese importe desaparecía de la proyección mientras
+       el KPI «Pagos comprometidos» seguía contándolo.
+
+     · `sinCalendario` — el trozo del pedido que NO tiene ningún vencimiento
+       escrito. Un pedido de 50.000 € con solo el anticipo del 30 % tecleado
+       gastaba 15.000 € en la curva, y los otros 35.000 no existían en ningún
+       sitio. La caja salía plausible y sobrada. No se coloca en un día
+       inventado —inventar la fecha es inventar el número—: se mide y se dice.
+
+     · `enDivisaSinTipo` — pedidos en divisa cuyo importe NO está en euros
+       porque nadie ha escrito el tipo de cambio. */
   const poFlows = {};
-  let fueraDeVentana = 0;
+  let fueraDeVentana = 0, sinFecha = 0, sinCalendario = 0, enDivisaSinTipo = 0, posSinTipo = 0;
   DB.pos.forEach(po=>{
     if(po.status==='closed') return;
+    if(poFxMissing(po)){ enDivisaSinTipo += poAmount(po); posSinTipo++; }
+    const hueco = poSinCalendario(po);
+    if(Math.abs(hueco) > 0.5) sinCalendario += hueco;
     (po.payments||[]).forEach(pay=>{
       if(pay.paid) return;
-      const d = parseDate(pay.dueDate); if(!d) return;
       const importe = poAmount(po)*(toNum(pay.pct)/100);
+      const d = poPayDate(po, pay);
+      if(!d){ sinFecha += importe; return; }
       const k = Math.max(0, daysBetween(start,d));
       if(k<days) poFlows[k] = (poFlows[k]||0) + importe;
       else fueraDeVentana += importe;      // vence más allá de los 90 días
     });
   });
+
+  /* M3 · movimientos programados que no son mercancía ni gasto mensual: el
+     depósito de una máquina, la devolución de un préstamo, el reparto anual de
+     dividendos. Son justo los que hunden la curva un día concreto y no
+     aparecían en ninguna parte. */
+  const plan = cashPlanFlows(start, days);
+
   let bal = toNum(cs.start), pending = 0;
   const out=[];
+  /* Las CINCO CATEGORÍAS. Cada día se reparte en cobros, mercancía, gastos,
+     inversiones y dividendos, y la suma de las cinco es, por construcción, la
+     variación del saldo: `inflow` y `outflow` se calculan DESDE las categorías
+     y no al lado de ellas, que es como se llega a un desglose que no cuadra
+     con la curva que está justo encima. */
+  const totales = {cobros:0, mercancia:0, gastos:0, inversiones:0, dividendos:0};
   for(let k=0;k<days;k++){
     const d = addDays(start,k);
-    let inflow=0, outflow=0;
+    const cat = {cobros:0, mercancia:0, gastos:0, inversiones:0, dividendos:0};
     pending += dayRev*(1-feeRate);
     if(k>0 && k % Math.max(1,Math.round(toNum(cs.cycle)||14)) === 0){
-      inflow = pending*(1 - toNum(cs.reserve)/100);
-      pending -= inflow;
+      const cobro = pending*(1 - toNum(cs.reserve)/100);
+      pending -= cobro;
+      cat.cobros += cobro;
     }
-    outflow += dayPpc;
-    if(k >= diasCubiertos) outflow += dayCogsFlow;   // ver «reponer lo que vendes»
-    if(d.getDate()===1) outflow += monthlyFixed;
-    if(d.getDate()===20) outflow += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
-    if(poFlows[k]) outflow += poFlows[k];
+    cat.gastos += dayPpc;
+    if(k >= diasCubiertos) cat.mercancia += dayCogsFlow;   // ver «reponer lo que vendes»
+    if(d.getDate()===1) cat.gastos += monthlyFixed;
+    if(d.getDate()===20) cat.gastos += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
+    if(poFlows[k]) cat.mercancia += poFlows[k];
+    const pl = plan.dias[k] || {};
+    cat.cobros      += toNum(pl.cobros);
+    cat.gastos      += toNum(pl.gastos);
+    cat.inversiones += toNum(pl.inversiones);
+    cat.dividendos  += toNum(pl.dividendos);
+
+    const inflow  = cat.cobros;
+    const outflow = cat.mercancia + cat.gastos + cat.inversiones + cat.dividendos;
+    Object.keys(totales).forEach(c=>{ totales[c] += cat[c]; });
     bal += inflow - outflow;
-    out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0});
+    out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0, cat});
   }
-  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana};
+  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana,
+              sinFecha, sinCalendario, enDivisaSinTipo, posSinTipo,
+              planFuera:plan.fuera, planPasados:plan.pasados, planN:plan.n,
+              totales};
   return out;
 }
+/* M3 · el importe de un pedido se da SIEMPRE en euros, porque en euros está
+   la caja, el margen y el colchón. Un pedido en divisa se convierte con el tipo
+   que haya escrito el usuario a mano (`poFxRate`, en 27-compras).
+
+   Si el pedido está en divisa y NO hay tipo, esta función devuelve el importe
+   SIN convertir —no hay nada mejor que devolver— y `poFxMissing(po)` queda en
+   cierto para que la pantalla y la curva de caja lo canten. Lo que no se hace
+   es asumir un tipo de 1: 45.000 USD leídos como 45.000 € son ocho mil euros
+   de diferencia en la curva que decide si cabe el pedido siguiente, y no salta
+   ningún aviso porque el número es perfectamente plausible. */
 function poAmount(po){
-  const items = po.items||[];
-  return items.reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0) + toNum(po.freight);
+  const items = (po&&po.items)||[];
+  const bruto = items.reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0) + toNum(po&&po.freight);
+  const fx = poFxRate(po);
+  return fx===null ? bruto : bruto*fx;
 }
 function poUnits(po){ return (po.items||[]).reduce((a,i)=>a+toNum(i.qty),0); }
 /* Reparto del flete al coste unitario, que es lo que cierra el círculo
@@ -1692,14 +1762,15 @@ function poUnits(po){ return (po.items||[]).reduce((a,i)=>a+toNum(i.qty),0); }
    —una reposición y una ampliación negociadas a precios distintos— y resolver
    el flete con la primera línea mientras el coste sale de la segunda producía
    fletes negativos y un 25 % de coste de menos, sin ningún aviso. */
+/* M3 · el reparto pasa a tener TRES bases —unidades, valor y peso— y, sobre
+   todo, a ser auditable: `poFreightBasis(po)` (27-compras) dice qué criterio se
+   pidió, cuál se ha podido aplicar de verdad, sobre qué total y en qué unidad,
+   y esa frase es la que se enseña en la ficha del pedido y sale en el CSV.
+   Aquí solo queda la aritmética, en la DIVISA DEL PEDIDO: la conversión a euros
+   la hace quien crea el lote, que es el único sitio donde hay que hacerla. */
 function poUnitCostOf(po, it){
   if(!it) return 0;
-  const totUnits = poUnits(po), totVal = (po.items||[]).reduce((a,i)=>a+toNum(i.qty)*toNum(i.unitCost),0);
-  const f = toNum(po.freight);
-  let share = 0;
-  if(po.alloc==='value' && totVal>0) share = f*(toNum(it.qty)*toNum(it.unitCost))/totVal/Math.max(1,toNum(it.qty));
-  else if(totUnits>0) share = f/totUnits;
-  return toNum(it.unitCost) + share;
+  return toNum(it.unitCost) + poFreightShareOf(po, it);
 }
 function poUnitCost(po, sku){
   return poUnitCostOf(po, (po.items||[]).find(i=>String(i.sku)===String(sku)));
@@ -1711,23 +1782,59 @@ function poUnitCost(po, sku){
    El coste base se sigue actualizando porque es la red de seguridad, pero ya
    no es lo que costea las ventas anteriores a esta compra. */
 function applyPOCosts(po){
-  /* Sin fecha de recepción no se crea nada. Antes se caía en la llegada
-     prevista y, si no la había, en la fecha del pedido: un pedido cursado hace
-     45 días y todavía en un barco fechaba el lote hace 45 días y subía un 61 %
-     el coste de ventas que se sirvieron con stock viejo. Y no saltaba ningún
-     aviso, porque el aviso solo miraba fechas futuras. */
-  if(!poLotDate(po)){
-    toast('Este pedido no tiene fecha de recepción. Ponla en «Recibido el»: es la que decide qué ventas se costean con este lote, y sin ella el coste se aplicaría a ventas que se sirvieron con stock anterior.');
+  /* M3 · DIVISA. Antes que nada: un pedido en divisa sin tipo de cambio escrito
+     no puede crear lotes, porque el coste entraría en el catálogo en dólares o
+     en yuanes tratados como euros. El hub no consulta ningún tipo automático a
+     propósito (la multidivisa está despriorizada), así que aquí solo cabe
+     pedirlo. */
+  if(poFxMissing(po)){
+    toast('Este pedido está en '+poCur(po)+' y no tiene tipo de cambio. Escríbelo a mano en el pedido: sin él, el coste entraría en el catálogo en '+poCur(po)+' tratado como euros, y el margen saldría bajo sin que nada avise.');
     return;
   }
-  let n2=0, lots=0;
-  const futuro = poLotDate(po) > iso(today());
-  (po.items||[]).forEach((i,idx)=>{
-    const p = findProd(i.sku);
-    if(!p) return;
-    if(lotFromPO(po, i, idx)) lots++;
-    n2++;
-  });
+
+  const recs = poReceipts(po);
+  let n2=0, lots=0, fecha='', futuro=false, saltadas=0;
+
+  if(recs.length){
+    /* M3 · ENTREGAS PARCIALES. Manda la lista de entregas: cada una crea su
+       propio lote, con SU fecha y SUS unidades. En cuanto hay una entrega
+       declarada, `po.received` deja de crear nada — si creara también su lote,
+       el mismo contenedor entraría dos veces en el stock. */
+    const conFecha = recs.filter(r=>poLotDate(po, r));
+    saltadas = recs.length - conFecha.length;
+    if(!conFecha.length){
+      toast('Ninguna de las '+recs.length+' entregas de este pedido tiene fecha de recepción. Ponla en cada entrega: es la que decide desde cuándo existe ese stock y qué ventas costea.');
+      return;
+    }
+    conFecha.forEach(r=>{
+      (po.items||[]).forEach((i,idx)=>{
+        if(!(poReceiptQty(r, idx) > 0)) return;
+        if(!findProd(i.sku)) return;
+        if(lotFromPO(po, i, idx, r)) lots++;
+        n2++;
+      });
+    });
+    const fechas = conFecha.map(r=>poLotDate(po, r)).sort();
+    fecha = fechas[0] + (fechas.length>1 ? ' … '+fechas[fechas.length-1] : '');
+    futuro = fechas[fechas.length-1] > iso(today());
+  }else{
+    /* Sin fecha de recepción no se crea nada. Antes se caía en la llegada
+       prevista y, si no la había, en la fecha del pedido: un pedido cursado hace
+       45 días y todavía en un barco fechaba el lote hace 45 días y subía un 61 %
+       el coste de ventas que se sirvieron con stock viejo. Y no saltaba ningún
+       aviso, porque el aviso solo miraba fechas futuras. */
+    if(!poLotDate(po)){
+      toast('Este pedido no tiene fecha de recepción. Ponla en «Recibido el»: es la que decide qué ventas se costean con este lote, y sin ella el coste se aplicaría a ventas que se sirvieron con stock anterior.');
+      return;
+    }
+    fecha = poLotDate(po);
+    futuro = fecha > iso(today());
+    (po.items||[]).forEach((i,idx)=>{
+      if(!findProd(i.sku)) return;
+      if(lotFromPO(po, i, idx)) lots++;
+      n2++;
+    });
+  }
   /* Ya NO se toca p.cogs. El coste base es lo que el producto valía antes de
      que hubiera registro de compras, y machacarlo con el precio del último
      pedido reescribía hacia atrás el margen de todo lo vendido: recibir un
@@ -1735,6 +1842,9 @@ function applyPOCosts(po){
      su lote, con su fecha, y ahí se queda. */
   saveDB(); refreshAll();
   if(!n2){ toast('Ningún SKU del pedido está en el catálogo'); return; }
-  toast(lots+' lote'+(lots===1?'':'s')+' de coste creado'+(lots===1?'':'s')+' con fecha '+poLotDate(po)+', flete repartido'+
-    (futuro ? ' · OJO: la fecha de recepción es futura, así que el lote no costeará ninguna venta todavía' : ''));
+  const A = poReceiptAudit(po);
+  toast(lots+' lote'+(lots===1?'':'s')+' de coste creado'+(lots===1?'':'s')+' con fecha '+fecha+', flete repartido '+poFreightBasis(po).nombreUsado+
+    (recs.length ? ' · '+num(A.recibidas)+' de '+num(A.pedidas)+' unidades recibidas' : '')+
+    (saltadas ? ' · '+saltadas+' entrega(s) sin fecha, sin lote' : '')+
+    (futuro ? ' · OJO: hay fecha de recepción futura, así que ese lote no costeará ninguna venta todavía' : ''));
 }

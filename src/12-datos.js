@@ -136,11 +136,36 @@ function fold(s){
     .replace(/ñ/g,'n').replace(/ç/g,'c');
 }
 function normHdr(h){ return fold(h).replace(/^﻿/,'').replace(/[^a-z0-9]/g,''); }
+/* De qué país habla esta celda.
+
+   ANTES CASABA POR SUBCADENA, y eso es una máquina de fabricar números creíbles
+   y falsos: `MKT_MAP` tiene claves de dos letras («de», «es», «it»…), así que
+   «United Kingdom» lleva «it» dentro y devolvía ITALIA, «Denmark» lleva «de» y
+   devolvía ALEMANIA, y «Estonia» lleva «es» y devolvía ESPAÑA. Ninguno de esos
+   tres es un mercado nuestro: lo correcto es no saberlo, no acertar por azar.
+   Una venta colocada en el país equivocado no da error en ningún sitio; se suma
+   al desglose por mercado y ahí se queda.
+
+   Ahora, en este orden:
+     1 · la celda entera, tal cual esté en el mapa («amazon.es», «es», «spain»);
+     2 · si parece un dominio de Amazon, SOLO vale el dominio: un «amazon.co.uk»
+         que no está en el mapa devuelve null y no se sigue mirando;
+     3 · por palabras completas, nunca por un trozo de palabra. */
 function countryOf(v){
   if(!v) return null;
   const s = String(v).toLowerCase().trim();
   if(MKT_MAP[s]) return MKT_MAP[s];
-  for(const k in MKT_MAP){ if(s.indexOf(k)>=0) return MKT_MAP[k]; }
+  const dom = s.match(/amazon\.[a-z][a-z.]{1,9}/);
+  if(dom){
+    let d = dom[0];
+    while(d.length > 'amazon'.length){
+      if(MKT_MAP[d]) return MKT_MAP[d];
+      d = d.replace(/\.[a-z]+$/, '');            // «amazon.com.be» → «amazon.com» → «amazon»
+    }
+    return null;
+  }
+  const piezas = s.split(/[^a-z0-9]+/).filter(Boolean);
+  for(let i=0;i<piezas.length;i++){ if(MKT_MAP[piezas[i]]) return MKT_MAP[piezas[i]]; }
   return null;
 }
 
@@ -367,7 +392,23 @@ const REPORTS = [
      _ttype :{req:0, type:null,   alias:[/^transactiontype$/]},
      _event :{req:0, type:null,   alias:[/transactioneventid/,/activitytransactionid/]},
      _sku   :{req:0, type:'code', alias:[/sellersku/,/^sku$/]},
-     _juris :{req:0, type:null,   alias:[/taxablejurisdiction/,/salearrivalcountry/,/arrivalcountry/]},
+     /* EL ORDEN DE ESTOS TRES ALIAS ES EL NÚMERO.
+
+        `TAXABLE_JURISDICTION` trae el NOMBRE del país en inglés —SPAIN, ITALY,
+        GERMANY—, y `vatReport()` se queda con sus dos primeras letras para
+        buscar el tipo general. Con esa columna delante, España salía como «SP»,
+        Alemania como «GE», Austria como «AU» y Polonia y Portugal LAS DOS como
+        «PO». Ninguno de esos códigos está en `VAT_GENERAL`, así que el detector
+        de tipo reducido no comparaba nada en esos países y la diferencia de IVA
+        que sí existe se quedaba a cero, sin un solo aviso. Y «PO» es peor
+        todavía: dos países distintos sumando en el mismo cajón.
+
+        `SALE_ARRIVAL_COUNTRY` trae el código ISO de dos letras —ES, IT, DE—,
+        que es lo que `VAT_GENERAL` espera, y además viene poblada en más filas.
+        Va primero. `vatReport()` es función congelada: no se toca; se le da la
+        columna correcta, que es lo que estaba mal. */
+     _juris :{req:0, type:null,   alias:[/^salearrivalcountry$/,/^arrivalcountry$/,
+                                         /taxablejurisdiction/,/arrivalcountry/]},
      /* Ojo: viene en FRACCIÓN DECIMAL. `0.1` es el 10 %, no el 0,1 %. */
      _rate  :{req:0, type:null,   alias:[/priceofitemsvatratepercent/,/vatratepercent/]},
      _base  :{req:0, type:'money',alias:[/totalpriceofitemsamtvatexcl/,/totalactivityvalueamtvatexcl/]},
@@ -413,9 +454,17 @@ function readSmart(file){
 function parseDelimited(text){
   const nl = text.indexOf('\n');
   const firstLine = text.slice(0, nl>0 ? nl : 400);
-  const tabs=(firstLine.match(/\t/g)||[]).length,
-        commas=(firstLine.match(/,/g)||[]).length,
-        semis=(firstLine.match(/;/g)||[]).length;
+  /* Los separadores se cuentan FUERA DE LAS COMILLAS. Un CSV cuya primera
+     celda sea un texto entrecomillado con comas dentro —«Incluye pedidos,
+     devoluciones y ajustes»— parecía tener siete columnas y ganaba la coma
+     aunque el fichero fuera de tabuladores. Contar dentro de las comillas es
+     contar el texto del usuario, no la forma del fichero. */
+  const fuera = sep => { let n=0, q=false;
+    for(let i=0;i<firstLine.length;i++){ const ch=firstLine[i];
+      if(ch==='"'){ if(q && firstLine[i+1]==='"'){ i++; } else q=!q; }
+      else if(ch===sep && !q) n++; }
+    return n; };
+  const tabs=fuera('\t'), commas=fuera(','), semis=fuera(';');
   const D = tabs >= Math.max(commas,semis) && tabs>0 ? '\t' : (semis>commas ? ';' : ',');
   const rows=[]; let row=[], cur='', q=false;
   for(let i=0;i<text.length;i++){
@@ -430,11 +479,42 @@ function parseDelimited(text){
   }
   if(cur!==''||row.length){ row.push(cur); rows.push(row); }
   if(!rows.length) return {headers:[],rows:[],delim:D};
-  // Los informes de Publicidad llevan líneas de título antes de la cabecera:
-  // se toma como cabecera la primera fila con 3+ celdas no vacías.
+  /* Dónde está la cabecera. Varios informes llevan líneas de aviso antes.
+     La regla vieja miraba SEIS líneas y se conformaba con «3+ celdas no
+     vacías»; el informe de transacciones personalizadas trae SIETE líneas de
+     preámbulo, así que se quedaba con la última de ellas —una sola celda— y
+     todo lo demás salía desalineado. Ahora se busca en treinta líneas y se
+     exige que la fila tenga tantas celdas como la mayoría del fichero, que es
+     lo que distingue una cabecera de una línea de aviso.
+     `registrarPreproceso` ya recorta el preámbulo antes de llegar aquí; esto
+     es la red por si un fichero se cuela por otro camino. */
   let hi=0;
-  for(let i=0;i<Math.min(6,rows.length);i++){
-    if(rows[i].filter(x=>String(x).trim()!=='').length>=3){ hi=i; break; }
+  const frec={};
+  for(let i=0;i<Math.min(40,rows.length);i++){ const n=rows[i].length; if(n>1) frec[n]=(frec[n]||0)+1; }
+  let modo=0, veces=0;
+  for(const n in frec){ if(frec[n]>veces || (frec[n]===veces && +n>modo)){ modo=+n; veces=frec[n]; } }
+  let hallado=false;
+  if(modo>=3){
+    for(let i=0;i<Math.min(30,rows.length);i++){
+      if(rows[i].length!==modo) continue;
+      const llenas = rows[i].map(x=>String(x).trim()).filter(x=>x!=='');
+      if(llenas.length<3) continue;
+      /* Y TIENE QUE PARECER UNA CABECERA. Sin esta condición, un CSV en español
+         con coma decimal y coma de separador —donde las filas de datos llevan
+         MÁS celdas que la cabecera— haría que la mayoría fuese la de los datos
+         y se cogería la primera fila de datos como cabecera. El fichero
+         quedaría «alineado», nadie vería el desajuste y las cifras saldrían
+         desplazadas de columna: exactamente el fallo que este parser existe
+         para no cometer. Una cabecera son nombres; una fila de datos, números. */
+      const numericas = llenas.filter(x=>/^[-+]?[\d.,]+%?$/.test(x)).length;
+      if(numericas > llenas.length*0.4) continue;
+      hi=i; hallado=true; break;
+    }
+  }
+  if(!hallado){
+    for(let i=0;i<Math.min(6,rows.length);i++){
+      if(rows[i].filter(x=>String(x).trim()!=='').length>=3){ hi=i; break; }
+    }
   }
   const headers = rows[hi].map(h=>String(h).trim());
   const out=[]; let bad=0;
@@ -637,16 +717,60 @@ async function handleFiles(files){
   }
   refreshAll();
 }
+/* Guardar una importación.
+
+   YA NO PISA LO QUE HUBIERA. Amazon parte un mismo informe en varios ficheros
+   cuando lo pides por tramos, y hasta ahora el segundo borraba al primero sin
+   decir nada: soltabas tres trozos de «Todos los pedidos» y te quedabas con el
+   último, con las cuentas del mes hechas sobre un tercio de las ventas y la
+   pantalla en verde. Ahora cada fichero es una aportación con nombre propio y
+   las filas se FUSIONAN (ver `impFusionar`, en src/20-importador.js).
+
+   Dos cosas que se comprueban ANTES de guardar nada, porque después ya no se
+   ven: si una columna de importe o de cantidad obligatoria se ha elegido solo
+   por la forma de su contenido (C3), y si al informe le falta una columna sin
+   la cual el número que alimenta no está medido aunque lo parezca (C1). */
 function saveImport(rep, headers, rows, map, fileName, el, how){
+  /* «Confirmado» es tanto lo que el usuario acaba de asignar a mano como la
+     asignación que guardó en su día para estas mismas columnas. Si no se
+     contara la segunda, un informe en italiano confirmado una vez volvería a
+     preguntar en cada importación, y el asistente prometía justo lo contrario:
+     «se hace una vez y queda guardado». */
+  const comoDicho = how || 'asignación manual';
+  const manual = comoDicho === 'asignación manual' || comoDicho === 'asignación que guardaste';
+  /* C3 · cabeceras en un idioma que no reconocemos.
+     Cuando el importe o la cantidad se han deducido del CONTENIDO y no del
+     nombre de la columna, la elección es posicional: entre varias columnas de
+     dinero, `resolveFields` se queda con la primera. Con las cabeceras en
+     italiano, francés o alemán eso cruza el precio del artículo con el del
+     envío o con el descuento, se importa en verde y nadie se entera. Se para y
+     se pide confirmación, que es barata; deshacer un trimestre mal contado, no. */
+  if(!manual && typeof impCamposInciertos==='function'){
+    const inciertos = impCamposInciertos(rep, map);
+    if(inciertos.length && el){
+      const lista = inciertos.map(x=>'<strong>'+esc(FIELD_LABEL[x.campo]||x.campo)+'</strong> ← «'+esc(x.columna)+'»').join(', ');
+      el.innerHTML = '<span class="f-dot wait"></span><span class="f-name">'+esc(fileName)+'</span>'+
+        '<span class="f-meta"><strong>'+esc(rep.label)+', pero no me fío de '+inciertos.length+
+        ' columna'+(inciertos.length===1?'':'s')+'.</strong> '+lista+'. '+
+        'Ese emparejamiento no sale del nombre de la columna —no lo reconozco en este idioma— sino de la '+
+        'forma de lo que hay dentro, y entre varias columnas de números la elección es el orden. '+
+        'Confírmame cuál es cada una y no te lo vuelvo a preguntar.</span>'+
+        '<span class="f-right"><button class="btn sm primary">Revisar columnas</button></span>';
+      el.querySelector('button').onclick = ()=>openMapper(fileName, headers, rows, sheetSig(headers), el, rep, map);
+      return null;
+    }
+  }
   const norm = normalizeRows(rows, map);
-  DB.imports[rep.id] = {rows:norm, count:norm.length, file:fileName, map:map,
-                        loadedAt:new Date().toISOString(), cols:headers.length, how:how||'asignación manual'};
+  const avisos = (typeof impAvisos==='function') ? impAvisos(rep, map, norm) : [];
+  const res = impAnadirFichero(rep.id, norm, fileName, headers.length,
+                               how||'asignación manual', map, avisos);
+  const store = res.store, ent = res.entrada || {};
   if(!DB.mappings) DB.mappings={};
   DB.mappings[sheetSig(headers)] = {reportId:rep.id, map:map};
   /* M0 · antes de guardar, la importación deja su huella en el histórico.
      Esto es lo que convierte una foto del presente en historia propia. */
   const hg = (typeof captureHistory==='function')
-    ? captureHistory(rep, norm.length, fileName, how||'asignación manual') : null;
+    ? captureHistory(rep, store.count, fileName, how||'asignación manual') : null;
   saveDB();
   let hnote = '';
   if(hg){
@@ -654,10 +778,25 @@ function saveImport(rep, headers, rows, map, fileName, el, how){
     else if(hg.stock && hg.stock.skus) hnote = ' · <span class="pos">foto de stock de '+num(hg.stock.skus)+' SKU</span>';
     else if(hg.fees && hg.fees.skus) hnote = ' · <span class="pos">tarifas de '+num(hg.fees.skus)+' SKU</span>';
   }
-  if(el) el.innerHTML='<span class="f-dot ok"></span><span class="f-name">'+esc(fileName)+'</span>'+
-    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+hnote+'</span>'+
-    '<span class="f-right"><strong>'+num(norm.length)+'</strong> filas · '+headers.length+' col.</span>';
+  const grave = avisos.filter(a=>a.nivel==='stop').length>0;
+  const punto = grave ? 'wait' : 'ok';
+  let detalle;
+  if(res.yaEstaba){
+    detalle = '<strong>ya estaba importado</strong> · nada ha cambiado';
+  } else {
+    detalle = '<strong>'+num(ent.nuevas||0)+'</strong> fila'+((ent.nuevas||0)===1?'':'s')+' nueva'+((ent.nuevas||0)===1?'':'s')+
+      (ent.duplicadas ? ' · '+num(ent.duplicadas)+' ya estaba'+(ent.duplicadas===1?'':'n')+' por otro fichero' : '')+
+      (res.reemplazado ? ' · sustituye a la versión anterior del mismo nombre' : '');
+  }
+  const nFich = (store.ficheros||[]).length;
+  if(el) el.innerHTML='<span class="f-dot '+punto+'"></span><span class="f-name">'+esc(fileName)+'</span>'+
+    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+' · '+detalle+
+    (nFich>1 ? ' · el informe se fusiona a partir de '+nFich+' ficheros' : '')+hnote+
+    (avisos.length ? '<br>'+avisos.map(a=>'<span class="'+(a.nivel==='stop'?'neg':'warn')+'">⚠ </span>'+a.txt).join('<br>') : '')+
+    '</span>'+
+    '<span class="f-right"><strong>'+num(store.count)+'</strong> filas · '+headers.length+' col.</span>';
   refreshAll();
+  return store;
 }
 
 /* ---------- Asistente manual: se hace una vez y queda guardado ---------- */
@@ -707,7 +846,11 @@ function openMapper(fileName, headers, rows, sig, el, repPre, mapPre){
 
 function wipeImports(){
   if(!confirm('Se borran los informes importados. Tus productos, proveedores, pedidos y el HISTÓRICO se conservan.')) return;
-  DB.imports={}; saveDB(); refreshAll(); toast('Datos importados vaciados · el histórico sigue intacto');
+  DB.imports={};
+  /* Las notas de los preprocesos hablan de ficheros que ya no están: dejarlas
+     sería enseñar la trazabilidad de unos datos borrados. */
+  try{ if(typeof REGISTRO==='object' && REGISTRO) REGISTRO.notas.length = 0; }catch(e){}
+  saveDB(); refreshAll(); toast('Datos importados vaciados · el histórico sigue intacto');
 }
 function forgetMappings(){
   if(!confirm('Se olvidan las asignaciones de columnas que guardaste. Los datos importados se conservan.')) return;

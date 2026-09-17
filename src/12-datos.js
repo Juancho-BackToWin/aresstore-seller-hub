@@ -334,6 +334,18 @@ const REPORTS = [
      _country:{req:0, type:'country',alias:[/country/,/pais/]},
      _qty    :{req:0, type:'int',    alias:[/quantity/,/cantidad/]},
      _event  :{req:0, type:null,     alias:[/eventtype/,/tipodeevento/,/evento/]}
+     /* El carril 3 necesita `disposition`, `reason` y `reference-id` para
+        distinguir una unidad DAÑADA en el almacén —que Amazon debe compensar—
+        de una devolución vendible que vuelve al stock. NO se declaran como
+        campos: `normalizeRows` conserva las cabeceras normalizadas tal cual, y
+        `gv(r,'_disp','disposition','disposicion')` las encuentra igual.
+
+        Y declararlas ROMPÍA LA DETECCIÓN, medido el 17-09-2026: con los alias
+        `/^motivo$/` y `/disposicion/` dentro de `ledger`, el fixture español
+        de devoluciones (`devoluciones-es.txt`, 38 filas) se reconocía como
+        libro mayor de inventario y la tasa de devolución del hub pasaba de
+        3,02 % a 0 %. Dos suites en rojo por cuatro alias de más: los alias de
+        un informe compiten con los de todos los demás. */
    },
    sig:P => P.has.fnsku && P.has.date && P.cols<=20},
 
@@ -352,8 +364,33 @@ const REPORTS = [
    hdr:['sellthrough','daysofsupply'], onlyEn:true, fields:{}, sig:()=>false},
 
   {id:'reimb', label:'Reembolsos de Logística de Amazon', en:'FBA Reimbursements',
-   path:'Informes › Logística de Amazon › Pagos', feeds:'Dinero recuperado',
-   hdr:['reimbursementid'], onlyEn:true, fields:{}, sig:()=>false},
+   path:'Informes › Logística de Amazon › Pagos', feeds:'Dinero recuperado, y qué reclamaciones ya están compensadas',
+   /* EL KPI «REEMBOLSOS» SALÍA 0 € CON EL INFORME CARGADO, y el traspaso lo
+      daba por un fallo de `pnl()`. No lo es del todo: `normalizeRows` conserva
+      las cabeceras normalizadas tal cual, así que en el fichero INGLÉS
+      `approval-date` → `approvaldate` sí existe y `pnl()` lo encuentra.
+      Comprobado en esta base el 17-09-2026: con el fichero inglés el KPI se
+      mueve; con la versión en español del informe, no, porque `fields` estaba
+      vacío y no había un solo alias que tradujera «fecha de aprobación».
+
+      Los campos van todos con `req:0` a propósito: el camino rápido de
+      detección es `hdr`, y después `resolveFields` exige que no falte ningún
+      obligatorio. Un campo obligatorio aquí bloquearía la importación del
+      fichero inglés, que hoy funciona. */
+   hdr:['reimbursementid'], onlyEn:true,
+   fields:{
+     _date  :{req:0, type:'date',  alias:[/approvaldate/,/fechadeaprobacion/,/^fecha/]},
+     _rid   :{req:0, type:null,    alias:[/^reimbursementid$/,/iddereembolso/]},
+     _case  :{req:0, type:null,    alias:[/^caseid$/,/iddelcaso/,/numerodecaso/]},
+     _oid   :{req:0, type:'orderId',alias:[/amazonorderid/,/numerodepedido/]},
+     _reason:{req:0, type:null,    alias:[/^reason$/,/^motivo$/]},
+     _sku   :{req:0, type:'code',  alias:[/^sku$/,/sellersku/,/referencia/]},
+     _asin  :{req:0, type:'asin',  alias:[/^asin$/]},
+     _amount:{req:0, type:'money', alias:[/amounttotal/,/importetotal/,/^total$/]},
+     _unit  :{req:0, type:'money', alias:[/amountperunit/,/importeporunidad/]},
+     _qty   :{req:0, type:'int',   alias:[/quantityreimbursedtotal/,/cantidadreembolsadatotal/,/^cantidad/]}
+   },
+   sig:()=>false},
 
   {id:'vat', label:'Transacciones sujetas a IVA', en:'VAT Transactions',
    path:'Informes › Biblioteca de documentos fiscales',
@@ -941,7 +978,7 @@ function vatReport(){
      esto, 14 días de comisiones se restaban a 90 días de ingresos. */
 function settlementFees(){
   const from = periodStart();
-  let referral=0, fba=0, storage=0, other=0, promo=0, rows=0, matched=0;
+  let referral=0, refCredito=0, fba=0, storage=0, other=0, promo=0, rows=0, matched=0;
   let desde=null, hasta=null;
   imp('settlement').forEach(r=>{
     const d = parseDate(r.posteddate)||parseDate(r.settlementstartdate);
@@ -955,14 +992,91 @@ function settlementFees(){
     if(!desde || d<desde) desde=d;
     if(!hasta || d>hasta) hasta=d;
     const tl = t.toLowerCase();
-    if(tl.indexOf('commission')>=0||tl.indexOf('referral')>=0) referral += amt;
+    if(tl.indexOf('commission')>=0||tl.indexOf('referral')>=0){
+      /* E6 · EL CRÉDITO DE COMISIÓN DE UN REEMBOLSO, CONTADO DOS VECES.
+
+         En la liquidación, la comisión de una venta viene NEGATIVA (te la
+         cobran) y la del reembolso de esa venta viene POSITIVA (te la
+         devuelven). Sumando las dos en el mismo saco, `referral` salía ya neto
+         de reembolsos. Y `pnl()`, por su cuenta, vuelve a acreditar esa misma
+         comisión en la línea de devoluciones (`retComision`), que estima desde
+         el informe de devoluciones. El mismo crédito, dos veces.
+
+         MEDIDO EN ESTA BASE el 17-09-2026, antes del arreglo: 10 ventas de
+         100 €, comisión liquidada −150,00 €, crédito del reembolso +12,00 €,
+         una devolución. Sin liquidación el beneficio salía 507,996 €; con
+         ella, 519,996 €. Doce euros exactos de más sobre 1.000 € de venta
+         —un 2,4 %— por un fichero que solo añade información.
+
+         EL ARREGLO, DEL LADO DE `settlementFees()`: `referral` pasa a ser lo
+         que Amazon COBRA de comisión, y el crédito sale aparte en
+         `refCredito`. Así `pnl()` acredita el reembolso una sola vez, por la
+         puerta que ya tenía. Si el informe de devoluciones no está cargado, el
+         crédito no se aplica y la comisión sale ALTA: el beneficio queda corto,
+         que es el lado por el que equivocarse no cuesta dinero.
+
+         COSTURA → carril 5: lo ideal es que `pnl()` prefiera `sf.refCredito`
+         —medido, viene de la liquidación— sobre `retComision` —estimado desde
+         el informe de devoluciones— cuando la liquidación cubre el periodo.
+         Eso es cuerpo de `pnl()`, que no es mío. Queda documentado en
+         `docs/carriles/3-reclamaciones.md` y el dato ya está publicado aquí. */
+      if(amt > 0) refCredito += amt;
+      else referral += amt;
+    }
     else if(tl.indexOf('fba')>=0||tl.indexOf('fulfil')>=0) fba += amt;
     else if(tl.indexOf('storage')>=0) storage += amt;
     else other += amt;
     promo += toNum(r.promotionamount);
   });
-  return {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo,
-          rows, matched, desde, hasta};
+  const out = {referral:-referral, fba:-fba, storage:-storage, other:-other, promo:-promo,
+               refCredito, rows, matched, desde, hasta,
+               txRows:0, txMatched:0, dupPagos:0, dupFilas:0,
+               fuente: matched>0 ? 'liquidación' : (rows>0 ? 'liquidación sin leer' : 'ninguna')};
+  /* ── La segunda fuente · el informe de transacciones (22-transacciones.js) ──
+     La liquidación plana cubre una quincena y Amazon la retira el 11-nov-2026.
+     El informe de transacciones cubre el rango que le pidas. Se suman las dos,
+     DEDUPLICANDO por identificador de pago: cada fila de transacciones lleva el
+     `settlement-id` de la liquidación a la que pertenece, así que lo que ya
+     viene en el fichero plano no se vuelve a contar. Sin eso, cargar los dos
+     ficheros duplicaría las comisiones de la quincena solapada. */
+  if(typeof txHay === 'function' && txHay()){
+    /* Las tarifas medidas tienen que venir del mismo intervalo que las ventas
+       contra las que se van a restar. Con el botón «Todo», `periodStart()` es
+       el año 2000 y el informe de transacciones trae cuatro años de tarifas:
+       sin este tope se restaban a las ventas que hubiera cargado el informe de
+       pedidos, cubrieran lo que cubrieran. */
+    const sp = (typeof salesSpan === 'function') ? salesSpan() : null;
+    const desdeVentas = (sp && sp.from && sp.from > from) ? sp.from : from;
+    const cont = txContraste(desdeVentas);
+    out.txContraste = cont;
+    if(!cont.ok){
+      /* Las dos fuentes no hablan del mismo negocio. Las tarifas del informe de
+         transacciones NO entran en la cuenta de resultados: `pnl()` las estimará
+         desde las ventas que sí conoce, que es coherente aunque sea menos
+         preciso. Siguen alimentando las reclamaciones, que no dependen del
+         informe de pedidos. Medido contra ficheros reales: sin esto, el margen
+         salía −867,6 %. */
+      out.fuente = matched>0 ? 'liquidación · transacciones sin contrastar'
+                             : 'transacciones sin contrastar';
+      return out;
+    }
+    const t = txFees({from:desdeVentas, ventanaLiq:{desde, hasta}});
+    out.referral   += t.referral;
+    out.refCredito += t.refCredito;
+    out.fba        += t.fba;
+    out.storage    += t.storage;
+    out.other      += t.other;
+    out.rows       += t.rows;
+    out.matched    += t.matched;
+    out.txRows      = t.rows;
+    out.txMatched   = t.matched;
+    out.dupPagos    = t.dupPagos;
+    out.dupFilas    = t.dupFilas;
+    if(t.desde && (!out.desde || t.desde < out.desde)) out.desde = t.desde;
+    if(t.hasta && (!out.hasta || t.hasta > out.hasta)) out.hasta = t.hasta;
+    out.fuente = (matched>0 ? 'liquidación + transacciones' : 'transacciones');
+  }
+  return out;
 }
 /* Gasto y desperdicio publicitario */
 function adStats(){

@@ -1,0 +1,9 @@
+identificativo-ordine-amazon	data-acquisto	data-ultimo-aggiornamento	stato-ordine	canale-di-gestione	canale-di-vendita	nome-prodotto	sku	asin	stato-articolo	quantita	valuta	spese-di-spedizione	prezzo-articolo	imposta-articolo	sconto-promozione	citta-spedizione	provincia-spedizione	cap-spedizione	paese-spedizione
+171-0000001-1234567	2026-08-01	2026-08-11	Spedito	Amazon	Amazon.it	Braccialetto 1	FBA0101	B00FBA0101	Spedito	1	EUR	3.99	11.99	2.42	0.00				IT
+171-0000002-1234567	2026-08-02	2026-08-12	Spedito	Amazon	Amazon.it	Braccialetto 2	FBA0102	B00FBA0102	Spedito	1	EUR	3.99	12.99	2.42	0.00				IT
+171-0000003-1234567	2026-08-03	2026-08-13	Spedito	Amazon	Amazon.it	Braccialetto 3	FBA0103	B00FBA0103	Spedito	1	EUR	3.99	13.99	2.42	0.00				IT
+171-0000004-1234567	2026-08-04	2026-08-14	Spedito	Amazon	Amazon.it	Braccialetto 4	FBA0104	B00FBA0104	Spedito	1	EUR	3.99	14.99	2.42	0.00				IT
+171-0000005-1234567	2026-08-05	2026-08-15	Spedito	Amazon	Amazon.it	Braccialetto 5	FBA0105	B00FBA0105	Spedito	1	EUR	3.99	15.99	2.42	0.00				IT
+171-0000006-1234567	2026-08-06	2026-08-16	Spedito	Amazon	Amazon.it	Braccialetto 6	FBA0106	B00FBA0106	Spedito	1	EUR	3.99	16.99	2.42	0.00				IT
+171-0000007-1234567	2026-08-07	2026-08-17	Spedito	Amazon	Amazon.it	Braccialetto 7	FBA0107	B00FBA0107	Spedito	1	EUR	3.99	17.99	2.42	0.00				IT
+171-0000008-1234567	2026-08-08	2026-08-18	Spedito	Amazon	Amazon.it	Braccialetto 8	FBA0108	B00FBA0108	Spedito	1	EUR	3.99	18.99	2.42	0.00				IT

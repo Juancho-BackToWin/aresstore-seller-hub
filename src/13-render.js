@@ -130,6 +130,13 @@ function freshness(){
 }
 function renderPanel(){
   const P = pnl(), F = freshness();
+  /* Red por si `25-metricas.js` no estuviera: la pantalla degrada a «—» y a
+     sin insignia en vez de reventar y dejar el Panel entero en blanco. Un
+     módulo ausente tiene que notarse en lo que falta, no en lo que se rompe. */
+  const _pct  = (typeof pctSeguro==='function') ? pctSeguro
+              : function(){ return {texto:'—', ok:false, razon:'falta el módulo de métricas'}; };
+  const _pill = (typeof pillCalidad==='function') ? pillCalidad : function(){ return ''; };
+
   const stale = F.filter(f=>f.age>10);
   const nav=document.getElementById('navDatos'); if(nav) nav.textContent=F.length;
   let fresh='';
@@ -155,12 +162,36 @@ function renderPanel(){
   document.getElementById('panelKpis').innerHTML =
     kpi('Ventas '+(periodDays?periodDays+' d':'histórico'), fmt(P.grossInc,0), num(P.units)+' unidades','accent')+
     kpi('Beneficio neto', fmt(P.profit,0), tag+' · '+num(P.units?P.profit/P.units:0,2)+' €/ud', P.profit>0?'pos':'neg')+
-    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
-        P.margin===null?'sin ingreso en el periodo':'objetivo ≥'+TARGET.net+'%',
-        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
+    /* M1.2 · el margen del titular también necesita muestra. Con cuatro ventas
+       un «38 %» no es el margen del negocio: es lo que dieron cuatro ventas, y
+       este es el número que más se mira de todo el hub. */
+    (function(){ const m = _pct(P.profit, P.net, P.units);
+      return kpi('Margen neto', m.texto,
+        m.ok ? 'objetivo ≥'+TARGET.net+'%' : m.razon,
+        m.ok ? (P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')) : ''); })()+
     kpi('ROI', num(P.roi,0)+'%', 'sobre coste de producto', P.roi>=TARGET.roi?'pos':(P.roi>0?'warn':'neg'))+
     kpi('TACOS', num(P.tacos,1)+'%', 'objetivo <'+TARGET.tacos+'%', P.tacos<=TARGET.tacos?'pos':'warn')+
-    kpi('Precio medio', fmt(P.avgPrice), 'devoluciones '+num(P.retRate,1)+'%','');
+    /* M1.2 · E2 y E4 · la tasa de devoluciones ya no se imprime a secas.
+       · Sin informe de devoluciones no es 0 %: es desconocida, y un 0 % ahí
+         hace creer que no te devuelven nada.
+       · Por encima del 100 % se explica en vez de recortarse: puede ser real
+         —devoluciones de ventas de un periodo anterior, que el informe fecha
+         por la devolución— pero enseñar «225 %» sin decir por qué es un número
+         creíble y falso.
+       · Y cuenta las MISMAS unidades que cobra la línea de devoluciones del
+         P&L, que antes no. Ver el porqué largo en `pnl()`. */
+    (function(){
+      const d = P.retRate===null ? '—'
+              : P.retRateCalidad==='desconocido' ? '—'
+              : num(P.retRate,1)+'%';
+      const sub = P.retRateCalidad==='desconocido'
+          ? 'devoluciones — · sin informe de devoluciones no se sabe'
+        : P.retRateExcede
+          ? 'devoluciones '+d+' · MÁS devoluciones que ventas: son de ventas anteriores al periodo'
+        : 'devoluciones '+d+(P.retRateCalidad==='estimado' ? ' (estimada)' : '');
+      return kpi('Precio medio', fmt(P.avgPrice), sub,
+                 P.retRateCalidad==='desconocido' || P.retRateExcede ? 'warn' : '');
+    })();
 
   // ---- alertas ordenadas por coste de no actuar ----
   const A=[];
@@ -236,16 +267,54 @@ function renderPanel(){
     '<span class="a-body"><strong>'+esc(a.t)+'</strong><span>'+a.s+'</span></span>'+
     (a.go?'<span class="a-go"><button class="btn sm" onclick="go(\''+a.go+'\')">Ver</button></span>':'')+'</div>').join('');
 
+  /* M1.2 · A2 · el grupo de ventas sin país asignado se pintaba aquí sin una
+     sola marca, en verde, con el margen más alto de la tabla. Medido con una
+     fixture de 10 ud a 100 € por un canal que el hub no reconoce: 82,0 % de
+     margen y «aporta al año 9.971 €», porque a esas ventas no se les podía
+     deducir el IVA —no se sabe de qué país son— y encima su coste de producto
+     no llegaba a la fila. Las dos cosas están arregladas en `countryStats()`;
+     lo que faltaba aquí era decirlo en pantalla, que es donde se decide.
+
+     Ahora cada fila lleva su procedencia y el grupo sin país lleva además la
+     suya propia, porque su problema no es que el dato sea flojo: es que el
+     mercado es desconocido y con él todo lo que depende del mercado. */
   const CS = countryStats().filter(c=>c.units>0 || c.active);
+  const hayCiego = CS.some(x=>x.sinPais && x.units>0);
   tbl('panelCountries','<tr><th>Mercado</th><th class="num">Unid.</th><th class="num">Ventas</th>'+
-    '<th class="num">€/ud</th><th class="num">Margen</th><th class="num">Aporta al año</th></tr>'+
-    (CS.length? CS.map(x=>'<tr class="'+(x.active?'':'dim')+'"><td class="name"><strong>'+x.c.code+'</strong> '+x.c.name+
-      ' '+(x.c.storage?'<span class="pill core">stock</span>':'<span class="pill">EFN</span>')+'</td>'+
+    '<th class="num">€/ud</th><th class="num">Margen</th><th class="num">Aporta al año</th><th>Procedencia</th></tr>'+
+    (CS.length? CS.map(x=>{
+      const p = _pct(x.profit, x.netRev, x.units);
+      return '<tr class="'+(x.active?'':'dim')+'" data-calidad="'+x.calidad+'"><td class="name"><strong>'+x.c.code+'</strong> '+x.c.name+
+      ' '+(x.c.storage?'<span class="pill core">stock</span>':'<span class="pill">EFN</span>')+
+      (x.sinPais?' <span class="pill stop">incluye ventas sin país</span>':'')+'</td>'+
       '<td class="num">'+num(x.units)+'</td><td class="num">'+fmt(x.rev,0)+'</td>'+
       '<td class="num '+(x.perUnit>0?'pos':'neg')+'">'+fmt(x.perUnit)+'</td>'+
-      '<td class="num '+(x.margin>=TARGET.net?'pos':x.margin>0?'warn':'neg')+'">'+num(x.margin,1)+'%</td>'+
-      '<td class="num '+(x.annual>0?'pos':'neg')+'" style="font-weight:600">'+fmt(x.annual,0)+'</td></tr>').join('')
-    : '<tr><td colspan="6" class="name mut">Importa el informe de pedidos para ver el desglose por país.</td></tr>'));
+      '<td class="num '+(p.ok ? (x.margin>=TARGET.net?'pos':x.margin>0?'warn':'neg') : 'mut')+
+        '" title="'+esc(p.ok?'':p.razon)+'">'+p.texto+'</td>'+
+      '<td class="num '+(x.annual>0?'pos':'neg')+'" style="font-weight:600">'+fmt(x.annual,0)+'</td>'+
+      '<td>'+_pill(x.calidad)+'</td></tr>';
+    }).join('')
+    : '<tr><td colspan="7" class="name mut">Importa el informe de pedidos para ver el desglose por país.</td></tr>'));
+  // COSTURA → integración: el hueco de esta nota no existe en `src/02-views.html`,
+  // que no es de este carril, así que se crea el nodo aquí una sola vez en vez
+  // de abrir un fichero compartido que tocarían los diez. Al integrar, un
+  // `<div id="panelCountriesNote">` bajo la tabla de mercados y esto sobra.
+  /* Mismo criterio que las costuras de `19-registro.js`. */
+  let notaPaises = document.getElementById('panelCountriesNote');
+  if(!notaPaises){
+    const t = document.getElementById('panelCountries');
+    const caja = t && (t.closest ? t.closest('.tbl-wrap') || t.parentNode : t.parentNode);
+    if(caja && caja.parentNode){
+      notaPaises = document.createElement('div');
+      notaPaises.id = 'panelCountriesNote';
+      caja.parentNode.insertBefore(notaPaises, caja.nextSibling);
+    }
+  }
+  if(notaPaises) notaPaises.innerHTML = !hayCiego ? '' :
+    '<div class="note warn" style="margin-top:10px"><strong>Hay ventas cuyo mercado no se reconoce</strong>, agrupadas en «Otros mercados». '+
+    'De ellas no se puede saber el tipo de IVA, así que su ingreso neto es el ingreso CON IVA y su margen sale más alto del real. '+
+    'Suele ser un canal que el hub no tiene en el mapa (Reino Unido, ventas fuera de Amazon) o líneas sin canal ni país en el informe. '+
+    'Su coste de producto sí está imputado: lo que falta es el IVA, y no se inventa.</div>';
 }
 
 /* =========================================================================
@@ -439,6 +508,18 @@ function renderHistorico(){
    ========================================================================= */
 function renderRent(){
   const P = pnl();
+  /* Red por si `25-metricas.js` no estuviera: la pantalla degrada a «—» y a
+     sin insignia en vez de reventar y dejar el Panel entero en blanco. Un
+     módulo ausente tiene que notarse en lo que falta, no en lo que se rompe. */
+  const _pct  = (typeof pctSeguro==='function') ? pctSeguro
+              : function(){ return {texto:'—', ok:false, razon:'falta el módulo de métricas'}; };
+  const _pill = (typeof pillCalidad==='function') ? pillCalidad : function(){ return ''; };
+  const _casc = (typeof cascada==='function') ? cascada
+              : function(p){ return {lineas:[], resultado:{valor:p.profit, calidad:'desconocido'},
+                                     calidad:'desconocido', hayFijos:DB.expenses.length>0,
+                                     etiquetaResultado: DB.expenses.length>0 ? 'Beneficio neto' : 'Margen de contribución',
+                                     avisoFijos:'', cuenta:{}, faltan:[], suma:p.profit}; };
+
   /* «Medido» solo cuando la liquidación cubre el periodo entero. Cubriendo una
      parte, el número es una mezcla y decirlo medido es justo lo que hace que
      alguien se lo crea sin mirarlo. */
@@ -462,12 +543,13 @@ function renderRent(){
   document.getElementById('pnlKpis').innerHTML =
     kpi('Ingresos', fmt(P.grossInc,0), 'con IVA · '+num(P.units)+' ud','accent')+
     kpi('Beneficio', fmt(P.profit,0), covFull?'comisiones reales':(cov>0?'comisiones '+cov+'% reales':'comisiones estimadas'), P.profit>0?'pos':'neg')+
-    kpi('Margen neto', P.margin===null?'—':num(P.margin,1)+'%',
-        P.margin===null ? 'sin ingreso en el periodo'
+    (function(){ const m = _pct(P.profit, P.net, P.units);
+      return kpi('Margen neto', m.texto,
+        !m.ok ? m.razon
         : (P.baseQuality==='medida' ? 'sobre ingreso sin IVA'
           : P.baseQuality==='estimada' ? 'sobre ingreso sin IVA · IVA DEDUCIDO del tipo de cada país, no leído del informe'
           : 'sobre ingreso sin IVA · hay ventas sin país: su IVA no se puede deducir'),
-        P.margin===null?'':(P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')))+
+        m.ok ? (P.margin>=TARGET.net?'pos':(P.margin>0?'warn':'neg')) : ''); })()+
     kpi('Coste de producto', fmt(P.cogs,0),
         P.cogsKnown<P.units ? (num(P.units-P.cogsKnown)+' ud sin coste cargado')
                             : (costMethodInfo().name.toLowerCase()+' · '+num(P.costMeasuredPct||0,0)+' % con lote'),
@@ -477,44 +559,45 @@ function renderRent(){
       ? kpi('Reparto de canal', num(P.fbaUnits)+' / '+num(P.fbmUnits),'unidades FBA / FBM','')
       : kpi('Reembolsos', fmt(P.reimb,0),'recuperado de Amazon',''));
 
-  const line=(name,val,note,neg)=>'<tr><td class="name">'+name+(note?' <span class="mut" style="font-size:11px">'+note+'</span>':'')+
-    '</td><td class="num '+(neg?'neg':'')+'">'+fmt(neg?-Math.abs(val):val,0)+'</td></tr>';
+  /* M1.2 · la cuenta de resultados se PINTA desde `cascada()`, que es la misma
+     descomposición que enseña la pantalla de Cascada. Antes esta tabla se
+     construía a mano, línea por línea, con sus propias etiquetas de «estimado»
+     decididas aquí: dos sitios calculando lo mismo acaban siempre divergiendo,
+     que es la lección de `iso()` y la de `refPctOf()`. Ahora hay una sola
+     descomposición y dos pantallas que la enseñan.
+
+     Y las líneas ya no desaparecen cuando valen cero. Una línea que no está es
+     invisible; una línea que pone «—» y «desconocido» se ve, y es lo que
+     distingue «no tuve devoluciones» de «no tengo el informe de devoluciones».
+     El importe que se suma sigue siendo el de `pnl()`: el desglose y el total
+     no pueden separarse ni un céntimo. */
+  const K = _casc(P);
+  const filaK = x => {
+    const vacia = x.calidad==='desconocido' && Math.abs(x.valor) < 0.005;
+    return '<tr'+(x.total?' class="tot"':'')+' data-linea="'+x.id+'" data-calidad="'+x.calidad+'">'+
+      '<td class="name">'+esc(x.etiqueta)+' '+_pill(x.calidad)+
+        (x.nota?'<br><span class="mut" style="font-size:11px">'+x.nota+'</span>':'')+'</td>'+
+      '<td class="num '+(x.total ? (x.valor>0?'pos':'neg') : (x.valor<0?'neg':''))+'">'+
+        (vacia ? '—' : fmt(x.valor,0))+'</td></tr>';
+  };
   tbl('pnlTable','<tr><th>Concepto '+badge+'</th><th class="num">Importe</th></tr>'+
-    line('Ingresos con IVA',P.grossInc)+
-    line('IVA repercutido',P.tax,'',true)+
-    '<tr class="tot"><td class="name">Ingreso neto</td><td class="num">'+fmt(P.net,0)+'</td></tr>'+
-    line('Comisión de Amazon',P.referral,cobTxt,true)+
-    line('Tarifas FBA',P.fba,(P.fbaMedido && covFull)?'':'estimadas con recargo 1,5%',true)+
-    (P.ship>0 ? line('Envío propio (FBM)',P.ship,num(P.fbmUnits)+' ud',true) : '')+
-    (P.retUnits>0 ? line('Devoluciones',P.returnsCost,
-        num(P.retImputadas,1)+' ud imputadas de '+num(P.retUnits)+
-        (P.retRepartidas?' · repartidas por la cuota de ventas de este mercado':'')+
-        ' · ingreso devuelto menos comisión reintegrada'+
-        (P.retVendibles>0?' y '+num(P.retVendibles)+' ud recuperadas vendibles':''), true) : '')+
-    (P.vatShortfall>0 ? line('IVA no repercutido',P.vatShortfall,
-        num(P.vatVentasReducidas)+' ventas a tipo reducido · lo debes tú, no Amazon', true) : '')+
-    line('Almacenaje',P.storage,'',true)+
-    line('Otras tarifas',P.otherFee,'',true)+
-    line('Coste de producto',P.cogs,'',true)+
-    line('Publicidad',P.ppc,
-        P.ppcSource==='informe' ? (P.adFactor===1?'':'prorrateado desde un informe de '+num(P.adDays)+' días')
-      : P.ppcSource==='informe-sin-fechas' ? 'el informe no dice qué periodo cubre · cargado ENTERO, sin prorratear'
-      : P.ppcSource==='diario' ? 'estimado a diario'
-      : '', true)+
-    line('Gastos fijos',P.fixed,'prorrateados',true)+
-    line('Reembolsos recuperados',P.reimb)+
-    '<tr class="tot"><td class="name">Beneficio neto</td><td class="num '+(P.profit>0?'pos':'neg')+'">'+fmt(P.profit,0)+'</td></tr>');
+    K.lineas.map(filaK).join('')+
+    (K.hayFijos ? '' :
+      '<tr><td colspan="2" class="name" style="padding-top:10px">'+
+      '<span class="mut" style="font-size:11.5px">'+K.avisoFijos+'</span></td></tr>'));
 
   const rows=[['IVA'+(P.baseQuality==='medida'?'':' (deducido)'),P.tax,'#9aa8ac'],['Comisión Amazon',P.referral,'#c2410c'],['Tarifas FBA',P.fba,'#ea580c'],
     ['Envío propio (FBM)',P.ship,'#b45309'],
     ['Almacenaje y otras',P.storage+P.otherFee,'#64748b'],['Coste de producto',P.cogs,'#7c3aed'],
     ['Publicidad',P.ppc,'#0284c7'],['Gastos fijos',P.fixed,'#475569'],
-    ['Beneficio',P.profit,P.profit>0?'#15803D':'#B91C1C']];
+    /* Regla 4 · la barra de abajo se llama como la llama la cascada: sin gastos
+       fijos cargados, lo que queda no es beneficio. */
+    [K.etiquetaResultado,P.profit,P.profit>0?'#15803D':'#B91C1C']];
   const max = Math.max.apply(null,rows.map(r=>Math.abs(r[1])).concat([1]));
   document.getElementById('pnlWaterfall').innerHTML = rows.map(r=>
     '<div class="wrow"><span class="wname">'+r[0]+'</span><span class="wbar"><i style="width:'+
     Math.min(100,Math.abs(r[1])/max*100).toFixed(1)+'%;background:'+r[2]+'"></i></span>'+
-    '<span class="wval" style="color:'+(r[0]==='Beneficio'?r[2]:'#516066')+'">'+fmt(r[1],0)+'</span></div>').join('');
+    '<span class="wval" style="color:'+(r[0]===K.etiquetaResultado?r[2]:'#516066')+'">'+fmt(r[1],0)+'</span></div>').join('');
 
   const S = skuStats();
   tbl('skuTable','<tr><th>ABC</th><th>SKU</th><th class="num">Unid.</th><th class="num">Ventas</th>'+
@@ -524,7 +607,14 @@ function renderRent(){
       '<td class="name"><strong>'+esc(r.sku)+'</strong>'+(r.hasCost?'':' <span class="pill warn">sin coste</span>')+'</td>'+
       '<td class="num">'+num(r.units)+'</td><td class="num">'+fmt(r.revenue,0)+'</td>'+
       '<td class="num mut">'+fmt(r.cogs,0)+'</td>'+
-      '<td class="num '+(r.margin>=TARGET.net?'pos':r.margin>0?'warn':'neg')+'">'+num(r.margin,1)+'%</td>'+
+      /* M1.2 · con menos de diez unidades el porcentaje no se enseña: un margen
+         del 38 % sacado de cuatro ventas no es información, es ruido con forma
+         de dato, y es sobre esta columna sobre la que se decide qué producto se
+         empuja y cuál se retira. El motivo va en el `title`, para que el hueco
+         no parezca un fallo de la pantalla. */
+      (function(){ const p = _pct(r.profit, r.netRev, r.units);
+        return '<td class="num '+(p.ok ? (r.margin>=TARGET.net?'pos':r.margin>0?'warn':'neg') : 'mut')+
+               '" title="'+esc(p.ok?'':p.razon)+'">'+p.texto+'</td>'; })()+
       '<td class="num '+(r.profit>0?'pos':'neg')+'" style="font-weight:600">'+fmt(r.profit,0)+'</td>'+
       '<td><div class="bar"><i style="width:'+Math.min(100,r.cum).toFixed(0)+'%"></i></div></td></tr>').join('')
       : '<tr><td colspan="8" class="name mut">Importa el informe de pedidos para ver la rentabilidad por SKU.</td></tr>'));
@@ -1422,11 +1512,22 @@ function descargarCSV(nombre, cabeceras, filas){
 }
 function exportRentabilidad(){
   const S = skuStats();
+  /* M1.2 · el CSV lleva las mismas reservas que la pantalla: un margen que no
+     se enseña porque la muestra no da no puede salir aquí como un número
+     limpio, o el hueco se pierde en cuanto alguien abre el fichero en Excel y
+     ordena por esa columna. Se escribe vacío, con la razón al lado, y se añade
+     el IVA imputado y su procedencia para que el ingreso neto sea auditable. */
   descargarCSV('rentabilidad',
-    ['SKU','Producto','Clase ABC','Unidades','Ventas con IVA','Ingreso neto','Coste de producto',
-     'Coste unitario','Beneficio','Margen %','% del beneficio','% acumulado'],
-    S.map(r=>[r.sku, r.name, r.abc, r.units, r2(r.revenue), r2(r.netRev), r2(r.cogs),
-              r2(r.unitCost), r2(r.profit), r2(r.margin), r2(r.share), r2(r.cum)]));
+    ['SKU','Producto','Clase ABC','Unidades','Ventas con IVA','IVA imputado','Procedencia del IVA',
+     'Ingreso neto','Coste de producto','Coste unitario','Beneficio','Margen %',
+     'Por qué no hay margen','% del beneficio','% acumulado'],
+    S.map(r=>{
+      const p = (typeof pctSeguro==='function') ? pctSeguro(r.profit, r.netRev, r.units)
+                                                 : {ok:false, razon:'falta el módulo de métricas'};
+      return [r.sku, r.name, r.abc, r.units, r2(r.revenue), r2(r.iva), r.ivaCalidad,
+              r2(r.netRev), r2(r.cogs), r2(r.unitCost), r2(r.profit),
+              p.ok ? r2(r.margin) : '', p.ok ? '' : p.razon, r2(r.share), r2(r.cum)];
+    }));
 }
 function exportInventario(){
   const I = invStats();

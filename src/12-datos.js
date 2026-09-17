@@ -1086,14 +1086,58 @@ function taxBasis(S){
 
   let observed = 0, estimated = 0, revSeen = 0, revEst = 0, revBlind = 0;
   const paises = {};
+  /* M1.2 · el MISMO reparto del IVA que usa el total, abierto por SKU y por
+     país.
+
+     Antes cada pantalla se lo calculaba a su manera y las tres no cuadraban:
+     `pnl()` deduce el IVA que falta en la columna, pero `skuStats()` y
+     `countryStats()` hacían `revenue - tax` con la columna en crudo. Con un
+     informe sin columna de impuesto —el caso normal, y el que avisa Datos— el
+     P&L restaba el IVA y el desglose no, así que la suma del desglose salía por
+     encima del total en todo el IVA del periodo y los márgenes por SKU y por
+     mercado, que son con los que se decide qué empujar, salían inflados en ese
+     mismo importe.
+
+     Aquí se anota, fila a fila, el IVA imputado y CÓMO: leído, deducido o
+     imposible de saber. La suma de `porSku` y la de `porPais` son, por
+     construcción, el mismo número que `tax`. */
+  const porSku = {}, porPais = {}, porMes = {};
+  /* Si `25-metricas.js` no estuviera —alguien lo borra, o el build se lo deja—,
+     no hay vocabulario de calidad y esto reventaría con un ReferenceError en
+     mitad del P&L, dejando el hub entero sin números y a las pruebas con un
+     stack en vez de un mensaje. Sin ese módulo lo honesto no es suponer que
+     todo está medido: es que no se sabe. Degradar a «desconocido» es el único
+     lado que nunca infla un margen. */
+  const peor = (typeof peorCalidad==='function') ? peorCalidad : function(){ return 'desconocido'; };
+  const anota = (r, iva, cal) => {
+    const sk = String(r.sku||'');
+    const a = porSku[sk] || (porSku[sk] = {rev:0, tax:0, calidad:'medido'});
+    a.rev += r.revenue; a.tax += iva; a.calidad = peor(a.calidad, cal);
+    /* Sin país conocido el grupo se llama «??» y NO desaparece: es justo el que
+       más falseaba la tabla de mercados. */
+    const pk = r.country || '??';
+    const b = porPais[pk] || (porPais[pk] = {rev:0, tax:0, calidad:'medido'});
+    b.rev += r.revenue; b.tax += iva; b.calidad = peor(b.calidad, cal);
+    /* Y por mes, para que el corte mensual no tenga que prorratear el IVA del
+       SKU por ingreso: un SKU que vende en España un mes y en Alemania el
+       siguiente tiene tipos distintos, y prorratear le pondría a cada mes un
+       IVA que no es el suyo. El total cuadraría igual y cada mes estaría mal,
+       que es la peor de las dos maneras de equivocarse. */
+    const mk = iso(r.date).slice(0,7);
+    const c = porMes[mk] || (porMes[mk] = {rev:0, tax:0, calidad:'medido'});
+    c.rev += r.revenue; c.tax += iva; c.calidad = peor(c.calidad, cal);
+  };
   S.forEach(r => {
     const f = ivaFiscalDe(r);
-    if(f != null){ medidoFiscal += f; revFiscal += r.revenue; observed += f; revSeen += r.revenue; return; }
-    if(r.taxSeen){ observed += r.tax; revSeen += r.revenue; return; }
+    if(f != null){ medidoFiscal += f; revFiscal += r.revenue; observed += f; revSeen += r.revenue;
+                   anota(r, f, 'medido'); return; }
+    if(r.taxSeen){ observed += r.tax; revSeen += r.revenue; anota(r, r.tax, 'medido'); return; }
     const pct = r.country != null ? rateFor(r.country) : null;
-    if(pct == null){ revBlind += r.revenue; return; }   /* sin país: no deducible */
-    estimated += r.revenue - r.revenue/(1 + pct/100);
+    if(pct == null){ revBlind += r.revenue; anota(r, 0, 'desconocido'); return; }   /* sin país: no deducible */
+    const iva = r.revenue - r.revenue/(1 + pct/100);
+    estimated += iva;
     revEst += r.revenue;
+    anota(r, iva, 'estimado');
     if(r.country) paises[r.country] = pct;
   });
 
@@ -1103,6 +1147,7 @@ function taxBasis(S){
     observed, estimated,
     revSeen, revEst, revBlind, rev,
     medidoFiscal, revFiscal, fiscal: V,
+    porSku, porPais, porMes,
     paisesDeducidos: paises,
     coverPct: rev > 0 ? revSeen/rev*100 : 100,
     known: revEst === 0 && revBlind === 0,   /* toda la base viene del informe */
@@ -1354,6 +1399,35 @@ function pnl(){
   });
   const returnsCost = retIngreso - retComision - retCoste;
 
+  /* M1.2 · E4 · la TASA de devoluciones y el COSTE de devoluciones tienen que
+     contar lo mismo, o la pantalla se contradice consigo misma.
+
+     Estaban desacopladas: el coste se reparte por la cuota de ventas del
+     mercado filtrado (`cuotaDe`) y descarta las devoluciones de referencias que
+     no vendieron, mientras la tasa dividía las unidades BRUTAS del informe
+     entre las unidades del mercado filtrado. Medido con una fixture de 10 ud en
+     ES + 10 ud en DE y 4 devoluciones sin país: con el filtro en ES la tasa
+     decía 40,0 % y el coste cobraba 2 unidades, o sea un 20 %. Dos respuestas a
+     la misma pregunta, en la misma pantalla, con los mismos datos.
+
+     Ahora la tasa se calcula sobre las MISMAS unidades que se cobran, y lo que
+     no se ha podido imputar (`retDescartadas`) se declara aparte en vez de
+     colarse en el numerador.
+
+     Y sin informe de devoluciones la tasa no es 0 %: es desconocida. Un 0 %
+     ahí es tan falso como 0 € de publicidad, y por el mismo motivo. */
+  const hayDevoluciones = imp('returns').length > 0;
+  const retRate = units>0 ? retImputadas/units*100 : null;
+  const retRateCalidad = !hayDevoluciones ? 'desconocido'
+                       : units===0 ? 'desconocido'
+                       : (countryFilter!=='ALL' || retDescartadas>0) ? 'estimado' : 'medido';
+  /* E2 · una tasa por encima del 100 % puede ser REAL —devoluciones de ventas
+     anteriores al periodo, que el informe fecha por la devolución y no por la
+     venta— pero imprimirla a secas es un número creíble y falso: parece que
+     devuelves más de lo que vendes. Se marca para que la pantalla lo explique
+     en vez de recortarlo, que sería esconder un dato verdadero. */
+  const retRateExcede = retRate != null && retRate > 100;
+
   /* El IVA que Amazon no repercutió y que responde tu NIF sigue siendo tuyo
      ante Hacienda: es un coste real del periodo, no una advertencia. Sin esta
      línea todos los márgenes salían optimistas en unos once puntos. */
@@ -1376,7 +1450,7 @@ function pnl(){
     retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
-    measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
+    measured, retUnits, retRate, retRateCalidad, retRateExcede, hayDevoluciones,
     /* Sin ingreso no hay margen que calcular, y devolver 0 hacía que una
        pérdida de 900 € con cero ventas se presentara como «Margen neto 0,0 %».
        `null` es lo que hay: la pantalla escribe «—». */
@@ -1409,16 +1483,33 @@ function skuStats(){
        beneficio, y el alemán, que era el mejor de los dos, se etiquetaba «C»
        mientras el español se llevaba la «A». Es la pantalla con la que se
        decide qué producto se empuja. */
-    const netRev = x.revenue - x.tax;
+    /* M1.2 · y el IVA sale del MISMO reparto que el total, no de la columna en
+       crudo. `x.revenue - x.tax` solo coincide con el P&L cuando el informe
+       trae la columna de impuesto; cuando no la trae —el caso que avisa
+       Datos— el P&L deducía el IVA del tipo del país y aquí no se deducía
+       nada, así que el ingreso neto por SKU era el ingreso CON IVA y la suma
+       del desglose no cuadraba con el total de la pantalla de al lado. */
+    const tbk = (P.taxBasis.porSku||{})[k] || {tax:x.tax, calidad:'medido'};
+    const iva = tbk.tax;
+    const netRev = x.revenue - iva;
     /* El coste sale del mismo cálculo que el P&L, no de una fórmula paralela.
        Dos maneras de calcular lo mismo es como los números dejan de cuadrar
        entre pantallas, que es precisamente la queja que tiene la competencia. */
     const cb = P.costBySku[k] || {cogs:0, units:0};
     const cogs = cb.cogs || 0;
     const profit = netRev - x.revenue*feeRate - x.revenue*ppcRate - cogs;
-    return Object.assign(x,{netRev, cogs, profit, hasCost:!!p,
+    return Object.assign(x,{netRev, iva, ivaCalidad:tbk.calidad, cogs, profit, hasCost:!!p,
       unitCost: x.units>0 ? cogs/x.units : 0,
-      margin: netRev>0?profit/netRev*100:0, share:0, cum:0, abc:'C'});
+      /* M1.2 · `0 %` con cero ingreso no es un margen del cero por ciento: es
+         que no hay margen que calcular. `null` es lo que hay, y la pantalla
+         escribe «—». Y por debajo del umbral de unidades el porcentaje no se
+         enseña: con cuatro ventas un 38 % no significa nada. */
+      margin: netRev>0 ? profit/netRev*100 : null,
+      /* Sin `25-metricas.js` no hay umbral que aplicar; `Infinity` esconde
+         todos los porcentajes, que es el lado que no invita a decidir sobre
+         ruido. */
+      pctFiable: x.units >= (typeof umbralUnidades==='function' ? umbralUnidades() : Infinity),
+      share:0, cum:0, abc:'C'});
   }).sort((a,b)=>b.profit-a.profit);
   const totPos = rows.filter(r=>r.profit>0).reduce((a,r)=>a+r.profit,0) || 1;
   let cum=0;
@@ -1553,6 +1644,25 @@ function countryStats(){
      mejor—, que es justo al revés y es la pantalla con la que se decide en qué
      mercado empujar. */
   const C = costOfSales(rows);
+  /* M1.2 · A2 · el coste de las ventas SIN país no lo indexa `C.byCountry`,
+     que solo anota las filas que traen país. Ese coste sí está en el total
+     `C.cogs`, así que el grupo «??» salía con 0 € de coste de producto y un
+     margen altísimo: medido con una fixture de 10 ud a 100 € sin canal
+     reconocible, la fila «Otros mercados» daba 82,0 % de margen y «aporta al
+     año 9.971 €», en verde y sin una sola marca.
+
+     El residuo —total menos lo imputado a países— es exactamente el coste de
+     esas ventas, así que se le devuelve a su grupo y el desglose vuelve a sumar
+     el total. Es la regla de la casa: lo que no se puede imputar se declara
+     aparte, no se reparte ni se pierde. */
+  // COSTURA → carril 2: `costOfSales().byCountry` (src/12c-lotes.js) solo indexa
+  // las filas que traen país, así que el coste de las ventas sin mercado
+  // reconocible no tiene dónde caer y esta tabla lo daba por cero. Aquí se
+  // reconstruye por diferencia, que es exacto pero indirecto: lo que toca al
+  // integrar es que `byCountry` tenga su propio grupo '??', como ya lo tiene el
+  // reparto del IVA en `taxBasis()`. Mientras tanto, esta resta cuadra.
+  const cogsImputado = Object.keys(C.byCountry).reduce((a,k)=>a+(C.byCountry[k].cogs||0), 0);
+  const cogsSinPais = C.cogs - cogsImputado;
   const m={};
   rows.forEach(r=>{ const c=r.country||'??'; if(!m[c]) m[c]={code:c,units:0,rev:0,tax:0};
     m[c].units+=r.qty; m[c].rev+=r.revenue; m[c].tax+=r.tax; });
@@ -1565,7 +1675,16 @@ function countryStats(){
                               .map(k=>m[k]).filter(x=>x.units>0);
   const listado = COUNTRIES.slice();
   if(otros.length) listado.push({code:'··', name:'Otros mercados', vat:0, storage:false, vatCost:0, cur:'EUR', otros:true});
+  /* El IVA por mercado sale del mismo reparto que el total (ver `taxBasis`), no
+     de la columna en crudo. Con un informe sin columna de impuesto, `x.rev -
+     x.tax` devolvía el ingreso CON IVA para TODOS los mercados, no solo para el
+     grupo sin país: el desglose por mercado no sumaba el ingreso neto del P&L y
+     cada margen de esta tabla salía inflado en el IVA de su mercado. */
+  const TP = P.taxBasis.porPais || {};
+  const ivaDe = code => (TP[code] || {tax:0}).tax;
+  const calDe = code => (TP[code] || {calidad:'desconocido'}).calidad;
   return listado.map(c=>{
+    const codigos = c.otros ? otros.map(o=>o.code) : [c.code];
     const x = c.otros
       ? otros.reduce((a,o)=>({units:a.units+o.units, rev:a.rev+o.rev, tax:a.tax+o.tax}), {units:0,rev:0,tax:0})
       : (m[c.code]||{units:0,rev:0,tax:0});
@@ -1574,15 +1693,28 @@ function countryStats(){
     /* IVA realmente cobrado, no el nominal del país: una venta a Alemania
        facturada con IVA español existe, y con el nominal salían 50 € de
        ingreso neto inventados por mercado. */
-    const netRev = x.rev - x.tax;
-    const cogs = c.otros
-      ? otros.reduce((a,o)=>a+((C.byCountry[o.code]||{cogs:0}).cogs||0), 0)
-      : (C.byCountry[c.code]||{cogs:0}).cogs;
+    const iva = codigos.reduce((a,k)=>a+ivaDe(k), 0);
+    const peor = (typeof peorCalidad==='function') ? peorCalidad : function(){ return 'desconocido'; };
+    const calidad = x.units>0
+      ? codigos.reduce((a,k)=>peor(a, calDe(k)), 'medido')
+      : 'medido';
+    const netRev = x.rev - iva;
+    const cogs = codigos.reduce((a,k)=>
+      a + (k==='??' ? cogsSinPais : ((C.byCountry[k]||{cogs:0}).cogs||0)), 0);
     const gross = netRev - x.rev*feeRate - cogs;
     const vatShare = vatCost*(daysInPeriod()/365);
     const profit = gross - vatShare;
-    return {c, units:x.units, rev:x.rev, netRev, profit, annual:profit*scale,
-            margin: netRev>0?profit/netRev*100:0, active:!!conf.active,
+    return {c, units:x.units, rev:x.rev, iva, netRev, cogs, profit, annual:profit*scale,
+            calidad, sinPais: codigos.indexOf('??')>=0,
+            /* Cero ventas no es «margen 0 %», y por debajo del umbral un
+               porcentaje no significa nada: las dos cosas se dicen aquí y la
+               pantalla escribe «—». */
+            margin: netRev>0 ? profit/netRev*100 : null,
+            /* Sin `25-metricas.js` no hay umbral que aplicar; `Infinity` esconde
+         todos los porcentajes, que es el lado que no invita a decidir sobre
+         ruido. */
+      pctFiable: x.units >= (typeof umbralUnidades==='function' ? umbralUnidades() : Infinity),
+            active:!!conf.active,
             perUnit: x.units>0?profit/x.units:0, vatCost};
   });
 }

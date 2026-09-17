@@ -10,6 +10,10 @@
             <div class="panel">
               <h2>Validar un producto antes de comprarlo</h2>
               <p class="desc">Todos los costes que Amazon te cobra realmente por unidad, no solo la comisión y el FBA. El veredicto exige cinco criterios a la vez y te dice cuál falla.</p>
+              <!-- Avisos del motor: configuraciones con las que el veredicto sale
+                   creíble sobre una cuenta que no se sostiene. Vacío cuando no hay
+                   ninguno, y se rellena desde `renderAvisos()`. -->
+              <div id="calcAvisos"></div>
 
               <fieldset class="fieldset">
                 <legend>Mercado y precio</legend>
@@ -25,7 +29,7 @@
                 </div>
                 <div class="field">
                   <label>Precio de venta <span class="hint">(PVP con IVA incluido)</span></label>
-                  <div class="input-wrap"><input type="number" id="price" step="0.01" value="24.99" oninput="calc()"><span class="unit">€</span></div>
+                  <div class="input-wrap"><input type="number" id="price" step="0.01" value="24.99" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                 </div>
               </fieldset>
 
@@ -34,11 +38,11 @@
                 <div class="row-2">
                   <div class="field">
                     <label>Coste de fábrica <span class="hint">/ud</span></label>
-                    <div class="input-wrap"><input type="number" id="cogs" step="0.01" value="4.50" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="cogs" step="0.01" value="4.50" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                   <div class="field">
                     <label>Transporte + aranceles <span class="hint">/ud</span></label>
-                    <div class="input-wrap"><input type="number" id="freight" step="0.01" value="1.20" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="freight" step="0.01" value="1.20" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                 </div>
               </fieldset>
@@ -63,7 +67,7 @@
                   </div>
                   <div class="field">
                     <label id="fbaLabel">Tarifa FBA base <span class="hint">/ud</span></label>
-                    <div class="input-wrap"><input type="number" id="fba" step="0.01" value="3.20" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="fba" step="0.01" value="3.20" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                 </div>
                 <label class="toggle" id="fuelRow">
@@ -85,7 +89,7 @@
                   </div>
                   <div class="field">
                     <label>Tarifa <span class="hint">€/m³/mes</span></label>
-                    <div class="input-wrap"><input type="number" id="storageRate" step="0.01" value="27.54" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="storageRate" step="0.01" value="27.54" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                 </div>
                 <div class="seg" style="margin-bottom:10px">
@@ -126,7 +130,7 @@
                 </div>
                 <div class="field" id="retProcField" style="display:none">
                   <label>Return processing fee manual <span class="hint">categorías de alta tasa de devolución</span></label>
-                  <div class="input-wrap"><input type="number" id="retProcEur" step="0.01" value="3.44" oninput="calc()"><span class="unit">€</span></div>
+                  <div class="input-wrap"><input type="number" id="retProcEur" step="0.01" value="3.44" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                 </div>
               </fieldset>
 
@@ -146,11 +150,11 @@
                 <div class="row-2">
                   <div class="field">
                     <label>EPR + envase <span class="hint">/ud</span></label>
-                    <div class="input-wrap"><input type="number" id="epr" step="0.01" value="0.02" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="epr" step="0.01" value="0.02" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                   <div class="field">
                     <label>Gestoría IVA <span class="hint">€/año de este país</span></label>
-                    <div class="input-wrap"><input type="number" id="vatAnnual" step="10" value="1500" oninput="calc()"><span class="unit">€</span></div>
+                    <div class="input-wrap"><input type="number" id="vatAnnual" step="10" value="1500" oninput="calc()"><span class="unit" data-money="1">€</span></div>
                   </div>
                 </div>
               </fieldset>
@@ -260,7 +264,7 @@
             </div>
 
             <div class="assumptions">
-              <strong>Cómo está calculado.</strong> El PVP se toma con IVA incluido: el ingreso que retienes es PVP÷(1+IVA). La comisión referral se calcula sobre el importe <strong>con IVA</strong>, que es la base contractual europea ("Fee Base Amount … including any taxes and customs duties"). Las devoluciones no se descuentan como un porcentaje del precio: por cada unidad devuelta pierdes la tarifa FBA (Amazon no la reembolsa), pagas una tarifa de administración de reembolso del menor entre 5 € o el 20% del referral, más la return processing fee si tu categoría la tiene, y solo recuperas el coste del producto en la fracción que vuelve revendible. La gestoría de IVA se reparte entre las unidades anuales de ese país, así que un país de bajo volumen puede ser deficitario aunque su margen unitario parezca bueno. <strong>No modelado:</strong> Storage Utilization Surcharge, Aged Inventory Surcharge, retiradas, prep, coste financiero del capital y devoluciones fraudulentas. Ajusta referral, FBA y volumen a tu rate card real en Seller Central antes de decidir nada.
+              <strong>Cómo está calculado.</strong> El PVP se toma con IVA incluido: el ingreso que retienes es PVP÷(1+IVA). La comisión referral se calcula sobre el importe <strong>con IVA</strong>, que es la base contractual europea ("Fee Base Amount … including any taxes and customs duties"). Las devoluciones no se descuentan como un porcentaje del precio: por cada unidad devuelta pierdes la tarifa FBA (Amazon no la reembolsa), pagas una tasa de gestión del reembolso del menor entre 5 € o el 20% de la comisión por referencia, más la tarifa por procesamiento de devoluciones si tu categoría la tiene, y solo recuperas el coste del producto en la fracción que vuelve revendible. <strong>Esa mecánica está escrita una sola vez</strong>, en <code>costeDevolucion()</code>, con las cuatro reglas contrastadas contra la documentación de Amazon y la fuente citada en el propio módulo; es la misma que tiene que usar la cuenta de resultados, para que las dos pantallas no den dos márgenes distintos del mismo producto. La gestoría de IVA se reparte entre las unidades anuales de ese país, así que un país de bajo volumen puede ser deficitario aunque su margen unitario parezca bueno. <strong>No modelado:</strong> Storage Utilization Surcharge, Aged Inventory Surcharge, retiradas, prep, coste financiero del capital y devoluciones fraudulentas. Ajusta referral, FBA y volumen a tu rate card real en Seller Central antes de decidir nada.
             </div>
           </div>
         </div>

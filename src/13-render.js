@@ -1253,44 +1253,12 @@ function editPO(id){
    14 · PUBLICIDAD
    ========================================================================= */
 function renderPub(){
-  const a = adStats(), P = pnl();
-  document.getElementById('adKpis').innerHTML =
-    kpi('Inversión', fmt(a.spend,0), a.terms.length+' términos','accent')+
-    kpi('Ventas atribuidas', fmt(a.sales,0),'ACOS '+num(a.acos,1)+'%', a.acos>0&&a.acos<35?'pos':'warn')+
-    kpi('TACOS', num(P.tacos,1)+'%','objetivo <'+TARGET.tacos+'%', P.tacos<=TARGET.tacos?'pos':'warn')+
-    kpi('Gasto sin conversión', fmt(a.waste,0), a.wasteTerms+' términos a negativizar', a.waste>0?'neg':'pos')+
-    kpi('Clics', num(a.clicks), a.clicks?'CPC '+fmt(a.spend/a.clicks):'','')+
-    kpi('CTR', num(a.impr? a.clicks/a.impr*100:0,2)+'%','decente por encima de 0,3%', (a.impr&&a.clicks/a.impr*100>=0.3)?'pos':'warn');
-
-  tbl('stTable','<tr><th>Término de búsqueda</th><th>Campaña</th><th class="num">Impr.</th><th class="num">Clics</th>'+
-    '<th class="num">Gasto</th><th class="num">Ventas</th><th class="num">Pedidos</th><th class="num">ACOS</th><th>Acción</th></tr>'+
-    (a.terms.length? a.terms.slice(0,60).map(t=>{
-      const acos = t.sales>0 ? t.spend/t.sales*100 : 0;
-      const bad = t.orders===0 && t.spend>0;
-      return '<tr><td class="name"><strong>'+esc(t.term)+'</strong></td>'+
-        '<td class="name mut" style="font-size:11.5px">'+esc(t.campaign)+'</td>'+
-        '<td class="num mut">'+num(t.impr)+'</td><td class="num">'+num(t.clicks)+'</td>'+
-        '<td class="num '+(bad?'neg':'')+'" style="font-weight:600">'+fmt(t.spend)+'</td>'+
-        '<td class="num">'+fmt(t.sales)+'</td><td class="num">'+num(t.orders)+'</td>'+
-        '<td class="num '+(acos===0?'':acos<35?'pos':'warn')+'">'+(t.sales>0?num(acos,0)+'%':'—')+'</td>'+
-        '<td>'+(bad?'<span class="pill stop">negativizar</span>':acos>0&&acos<25?'<span class="pill go">subir puja</span>':'<span class="pill">mantener</span>')+'</td></tr>';
-    }).join('') : '<tr><td colspan="9" class="name mut">Importa el informe de términos de búsqueda desde la consola de publicidad.</td></tr>'));
-
-  let v;
-  if(!a.terms.length){
-    v='Sin informe de términos de búsqueda cargado. Es el fichero con mejor relación entre esfuerzo y dinero recuperado de todo el PPC: '+
-      'la revisión semanal de términos suele recortar entre un 15% y un 30% del desperdicio.';
-  } else {
-    v='<strong>'+fmt(a.waste,0)+' gastados en '+a.wasteTerms+' términos que no han vendido nada.</strong> ';
-    if(P.avgPrice) v+='Como regla, negativiza todo lo que haya gastado más de '+fmt(P.avgPrice)+' —tu precio medio— sin una sola conversión. ';
-    v+='Pero mira antes el número de clics: un término con dos clics y sin venta no ha demostrado nada todavía, y matarlo por impaciencia te cuesta descubrimiento. '+
-      'El caso claro es el que acumula muchos clics y ninguna venta.<br><br>'+
-      '<span class="mut">No decidas sobre los últimos tres días: los clics inválidos se depuran durante 72 horas y las conversiones se reatribuyen a 1, 7 y 28 días, '+
-      'así que un dato puede seguir moviéndose seis semanas después del clic.</span>';
-  }
-  document.getElementById('stVerdict').innerHTML=v;
+  /* CARRIL 4 · El cuerpo vive en `src/24-publicidad.js`. Aquí queda el nombre
+     que llaman `refreshAll()` y `go('publicidad')`. La pantalla mantiene sus
+     tres huecos de siempre —#adKpis, #stTable, #stVerdict— y el carril añade
+     los suyos por DOM, sin abrir `src/02-views.html`, que comparten todos. */
+  return pubRenderPublicidad();
 }
-
 /* =========================================================================
    15 · CUMPLIMIENTO
    ========================================================================= */
@@ -1454,11 +1422,8 @@ function exportCatalogo(){
     filas);
 }
 function exportPublicidad(){
-  const A = adStats();
-  descargarCSV('publicidad',
-    ['Término de búsqueda','Campaña','Impresiones','Clics','Gasto','Ventas atribuidas','Pedidos','ACOS %'],
-    A.terms.map(t=>[t.term, t.campaign, t.impr, t.clicks, r2(t.spend), r2(t.sales), t.orders,
-                    t.sales>0 ? r2(t.spend/t.sales*100) : '']));
+  /* CARRIL 4 · cuerpo en `src/24-publicidad.js`. */
+  return pubExportPublicidad();
 }
 function exportCompras(){
   const filas=[];

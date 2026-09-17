@@ -313,6 +313,19 @@ const REPORTS = [
    hdr:['customersearchterm'],
    fields:{
      _term    :{req:1, type:null,  alias:[/customersearchterm/,/searchterm/,/termino.*busqueda/,/terminodebusqueda/]},
+     /* CARRIL 4 · Las dos columnas de fecha que este informe SÍ trae y que esta
+        definición no declaraba. Sin declararlas, `adStats()` tenía que ir a
+        buscarlas por su nombre en crudo y el gasto de publicidad acababa
+        dependiendo de que el nombre de la columna fuera el que alguien puso en
+        una lista. Van con `type:null` a propósito: el perfilador clasifica
+        «ago 20, 2026» como texto, no como fecha, así que exigir `type:'date'`
+        dejaría la columna sin asignar justo en los informes en español. Y con
+        alias anclados `^…$` sobre el nombre YA NORMALIZADO por `normHdr()`,
+        que es quien quita el espacio final que Amazon deja en cabeceras como
+        «Coste publicitario de las ventas (ACOS) total »: anclar contra el
+        nombre sin recortar no casaría nunca. */
+     _from    :{req:0, type:null,  alias:[/^startdate$/,/^fechadeinicio$/,/^fechainicio$/,/^start$/,/^desde$/]},
+     _to      :{req:0, type:null,  alias:[/^enddate$/,/^fechadefinalizacion$/,/^fechadefin$/,/^fechafin$/,/^end$/,/^hasta$/]},
      _spend   :{req:1, type:'money',alias:[/^spend/,/^cost$/,/gasto/,/inversion/]},
      _sales   :{req:0, type:'money',alias:[/totalsales/,/attributedsales/,/ventastotales/,/^ventas/]},
      _orders  :{req:0, type:'int',  alias:[/totalorders/,/attributedconversions/,/pedidostotales/,/^pedidos/,/conversiones/]},
@@ -966,64 +979,29 @@ function settlementFees(){
 }
 /* Gasto y desperdicio publicitario */
 function adStats(){
-  const rows = imp('searchterm');
-  let spend=0, sales=0, clicks=0, impr=0, waste=0, wasteTerms=0;
-  const terms=[];
-  rows.forEach(r=>{
-    const sp = toNum(gv(r,'_spend','spend','cost','totalspend'));
-    const sa = toNum(gv(r,'_sales','sales','attributedsales7d','sales7d','totalsales'));
-    const or_ = toNum(gv(r,'_orders','orders','attributedconversions7d','totalorders','purchases'));
-    const cl = toNum(gv(r,'_clicks','clicks')), im = toNum(gv(r,'_impr','impressions'));
-    spend+=sp; sales+=sa; clicks+=cl; impr+=im;
-    const term = gv(r,'_term','customersearchterm','searchterm')||'';
-    if(sp>0 && or_===0){ waste+=sp; wasteTerms++; }
-    if(term) terms.push({term, campaign:gv(r,'_campaign','campaignname')||'', spend:sp, sales:sa, orders:or_, clicks:cl, impr:im});
-  });
-  terms.sort((a,b)=> (a.orders===0?1:0)-(b.orders===0?1:0) || b.spend-a.spend);
-  /* El informe de términos de búsqueda no trae fecha por fila, pero sí trae su
-     propio rango en «Start Date» y «End Date». Sin usarlo, el gasto entero se
-     cargaba a cualquier periodo que estuvieras mirando: con ventas idénticas
-     día a día, el margen iba de −58,6 % a 30 días a −13,6 % con «Todo». El
-     mismo gasto, el mismo negocio, tres respuestas.
+  /* CARRIL 4 · El cuerpo entero vive en `src/24-publicidad.js`, que es el
+     fichero de este carril. Aquí queda el nombre por el que lo llaman `pnl()`
+     y la pantalla.
 
-     Ahora se prorratea a los días del periodo. Prorratear supone que gastaste
-     parejo, que es una suposición, así que la pantalla lo dice: es una cifra
-     ajustada, no medida. */
-  let d0=null, d1=null;
-  rows.forEach(r=>{
-    const a = parseDate(gv(r,'_from','startdate','fechadeinicio','start'));
-    const b = parseDate(gv(r,'_to','enddate','fechadefin','fechadefinalizacion','end')) || a;
-    if(a && (!d0 || a<d0)) d0=a;
-    if(b && (!d1 || b>d1)) d1=b;
-  });
-  const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
-  const factor = adDays ? daysInPeriod()/adDays : 1;
-  /* Y si el informe NO trae su rango, el prorrateo no se puede hacer: `factor`
-     se queda en 1 y el gasto entero se carga al periodo que estés mirando, sea
-     cual sea. Es el fallo original entero, sobreviviendo por la puerta de
-     atrás. Mirando 7 días sobra gasto —conservador—, pero mirando un año
-     falta, y ahí el beneficio se infla sin que nada chirríe: el aviso de
-     solape estaba detrás de `adDays>0`, así que no aparecía, y la etiqueta
-     que se pintaba era «estimado a diario», que describe otro camino distinto
-     del código.
+     Lo que hacía antes, y por qué no podía quedarse: buscaba UN rango para
+     todo el informe —el mínimo y el máximo de las columnas de fecha— y
+     multiplicaba el gasto entero por `díasDelPeriodo / díasDelInforme`. Dos
+     fallos medidos sobre el informe real de agosto de 2026:
 
-     No se puede inventar la duración. Lo que sí se puede es no callarla. */
-  const spanUnknown = spend>0 && !(d0&&d1);
-  /* Cuánto del periodo cubre de verdad ese informe. Prorratear un informe de
-     junio sobre el mes de agosto da un número utilizable —mejor que cero, que
-     inflaría el margen— pero no es una medición de agosto, y la diferencia
-     tiene que verse en pantalla. */
-  let solape = 0;
-  if(d0 && d1){
-    const pi = periodStart(), pf = today();
-    const a = d0>pi ? d0 : pi, b = d1<pf ? d1 : pf;
-    solape = Math.max(0, daysBetween(a,b)+1);
-  }
-  return {spend: spend*factor, spendBruto: spend, adDays, factor, spanUnknown,
-          desde:d0, hasta:d1, solape,
-          solapePct: daysInPeriod()>0 ? Math.min(100, solape/daysInPeriod()*100) : 0,
-          sales: sales*factor, clicks, impr, waste: waste*factor, wasteTerms, terms,
-          acos: sales>0?spend/sales*100:0};
+       · `parseDate()` no entiende «ago 20, 2026» (ni ene, ni abr, ni dic),
+         así que el rango salía de 65 días reales a 43, y el gasto imputado al
+         periodo era un 51 % más alto de lo que tocaba. Con la etiqueta
+         «medido» puesta.
+       · 205 de las 1.222 filas de ese informe no son de un día, sino de tramos
+         de hasta 65 días naturales. Con un factor único, el gasto de un término
+         que solo corrió en junio se cargaba a un periodo de septiembre.
+
+     Ahora cada fila se reparte entre sus días y se corta con el periodo, y el
+     prorrateo se dice en pantalla. `pubAdStats()` devuelve todo lo que este
+     objeto devolvía —`spend`, `spendBruto`, `adDays`, `factor`, `spanUnknown`,
+     `desde`, `hasta`, `solape`, `solapePct`, `sales`, `clicks`, `impr`,
+     `waste`, `wasteTerms`, `terms`, `acos`— y añade el desglose. */
+  return pubAdStats();
 }
 /* IVA · la base sobre la que se calcula TODO margen.
 

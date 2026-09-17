@@ -717,16 +717,60 @@ async function handleFiles(files){
   }
   refreshAll();
 }
+/* Guardar una importación.
+
+   YA NO PISA LO QUE HUBIERA. Amazon parte un mismo informe en varios ficheros
+   cuando lo pides por tramos, y hasta ahora el segundo borraba al primero sin
+   decir nada: soltabas tres trozos de «Todos los pedidos» y te quedabas con el
+   último, con las cuentas del mes hechas sobre un tercio de las ventas y la
+   pantalla en verde. Ahora cada fichero es una aportación con nombre propio y
+   las filas se FUSIONAN (ver `impFusionar`, en src/20-importador.js).
+
+   Dos cosas que se comprueban ANTES de guardar nada, porque después ya no se
+   ven: si una columna de importe o de cantidad obligatoria se ha elegido solo
+   por la forma de su contenido (C3), y si al informe le falta una columna sin
+   la cual el número que alimenta no está medido aunque lo parezca (C1). */
 function saveImport(rep, headers, rows, map, fileName, el, how){
+  /* «Confirmado» es tanto lo que el usuario acaba de asignar a mano como la
+     asignación que guardó en su día para estas mismas columnas. Si no se
+     contara la segunda, un informe en italiano confirmado una vez volvería a
+     preguntar en cada importación, y el asistente prometía justo lo contrario:
+     «se hace una vez y queda guardado». */
+  const comoDicho = how || 'asignación manual';
+  const manual = comoDicho === 'asignación manual' || comoDicho === 'asignación que guardaste';
+  /* C3 · cabeceras en un idioma que no reconocemos.
+     Cuando el importe o la cantidad se han deducido del CONTENIDO y no del
+     nombre de la columna, la elección es posicional: entre varias columnas de
+     dinero, `resolveFields` se queda con la primera. Con las cabeceras en
+     italiano, francés o alemán eso cruza el precio del artículo con el del
+     envío o con el descuento, se importa en verde y nadie se entera. Se para y
+     se pide confirmación, que es barata; deshacer un trimestre mal contado, no. */
+  if(!manual && typeof impCamposInciertos==='function'){
+    const inciertos = impCamposInciertos(rep, map);
+    if(inciertos.length && el){
+      const lista = inciertos.map(x=>'<strong>'+esc(FIELD_LABEL[x.campo]||x.campo)+'</strong> ← «'+esc(x.columna)+'»').join(', ');
+      el.innerHTML = '<span class="f-dot wait"></span><span class="f-name">'+esc(fileName)+'</span>'+
+        '<span class="f-meta"><strong>'+esc(rep.label)+', pero no me fío de '+inciertos.length+
+        ' columna'+(inciertos.length===1?'':'s')+'.</strong> '+lista+'. '+
+        'Ese emparejamiento no sale del nombre de la columna —no lo reconozco en este idioma— sino de la '+
+        'forma de lo que hay dentro, y entre varias columnas de números la elección es el orden. '+
+        'Confírmame cuál es cada una y no te lo vuelvo a preguntar.</span>'+
+        '<span class="f-right"><button class="btn sm primary">Revisar columnas</button></span>';
+      el.querySelector('button').onclick = ()=>openMapper(fileName, headers, rows, sheetSig(headers), el, rep, map);
+      return null;
+    }
+  }
   const norm = normalizeRows(rows, map);
-  DB.imports[rep.id] = {rows:norm, count:norm.length, file:fileName, map:map,
-                        loadedAt:new Date().toISOString(), cols:headers.length, how:how||'asignación manual'};
+  const avisos = (typeof impAvisos==='function') ? impAvisos(rep, map, norm) : [];
+  const res = impAnadirFichero(rep.id, norm, fileName, headers.length,
+                               how||'asignación manual', map, avisos);
+  const store = res.store, ent = res.entrada || {};
   if(!DB.mappings) DB.mappings={};
   DB.mappings[sheetSig(headers)] = {reportId:rep.id, map:map};
   /* M0 · antes de guardar, la importación deja su huella en el histórico.
      Esto es lo que convierte una foto del presente en historia propia. */
   const hg = (typeof captureHistory==='function')
-    ? captureHistory(rep, norm.length, fileName, how||'asignación manual') : null;
+    ? captureHistory(rep, store.count, fileName, how||'asignación manual') : null;
   saveDB();
   let hnote = '';
   if(hg){
@@ -734,10 +778,25 @@ function saveImport(rep, headers, rows, map, fileName, el, how){
     else if(hg.stock && hg.stock.skus) hnote = ' · <span class="pos">foto de stock de '+num(hg.stock.skus)+' SKU</span>';
     else if(hg.fees && hg.fees.skus) hnote = ' · <span class="pos">tarifas de '+num(hg.fees.skus)+' SKU</span>';
   }
-  if(el) el.innerHTML='<span class="f-dot ok"></span><span class="f-name">'+esc(fileName)+'</span>'+
-    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+hnote+'</span>'+
-    '<span class="f-right"><strong>'+num(norm.length)+'</strong> filas · '+headers.length+' col.</span>';
+  const grave = avisos.filter(a=>a.nivel==='stop').length>0;
+  const punto = grave ? 'wait' : 'ok';
+  let detalle;
+  if(res.yaEstaba){
+    detalle = '<strong>ya estaba importado</strong> · nada ha cambiado';
+  } else {
+    detalle = '<strong>'+num(ent.nuevas||0)+'</strong> fila'+((ent.nuevas||0)===1?'':'s')+' nueva'+((ent.nuevas||0)===1?'':'s')+
+      (ent.duplicadas ? ' · '+num(ent.duplicadas)+' ya estaba'+(ent.duplicadas===1?'':'n')+' por otro fichero' : '')+
+      (res.reemplazado ? ' · sustituye a la versión anterior del mismo nombre' : '');
+  }
+  const nFich = (store.ficheros||[]).length;
+  if(el) el.innerHTML='<span class="f-dot '+punto+'"></span><span class="f-name">'+esc(fileName)+'</span>'+
+    '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+' · '+detalle+
+    (nFich>1 ? ' · el informe se fusiona a partir de '+nFich+' ficheros' : '')+hnote+
+    (avisos.length ? '<br>'+avisos.map(a=>'<span class="'+(a.nivel==='stop'?'neg':'warn')+'">⚠ </span>'+a.txt).join('<br>') : '')+
+    '</span>'+
+    '<span class="f-right"><strong>'+num(store.count)+'</strong> filas · '+headers.length+' col.</span>';
   refreshAll();
+  return store;
 }
 
 /* ---------- Asistente manual: se hace una vez y queda guardado ---------- */
@@ -787,7 +846,11 @@ function openMapper(fileName, headers, rows, sig, el, repPre, mapPre){
 
 function wipeImports(){
   if(!confirm('Se borran los informes importados. Tus productos, proveedores, pedidos y el HISTÓRICO se conservan.')) return;
-  DB.imports={}; saveDB(); refreshAll(); toast('Datos importados vaciados · el histórico sigue intacto');
+  DB.imports={};
+  /* Las notas de los preprocesos hablan de ficheros que ya no están: dejarlas
+     sería enseñar la trazabilidad de unos datos borrados. */
+  try{ if(typeof REGISTRO==='object' && REGISTRO) REGISTRO.notas.length = 0; }catch(e){}
+  saveDB(); refreshAll(); toast('Datos importados vaciados · el histórico sigue intacto');
 }
 function forgetMappings(){
   if(!confirm('Se olvidan las asignaciones de columnas que guardaste. Los datos importados se conservan.')) return;

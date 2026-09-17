@@ -237,8 +237,8 @@ en un mensaje. Ninguna depende de una fecha absoluta.
 | FECHA-P · exportación | el CSV deja la celda vacía donde no se ha medido | `falta exportReposicion()` |
 
 Las 16 suites de la base, verdes antes y después: `16 suites · 462
-comprobaciones OK · 0 FALLO` antes, y con la suite nueva **17 suites · 509
-comprobaciones**. `test:pnl`, `test:m0`, `test:inv` y `test:iva` en verde en
+comprobaciones OK · 0 FALLO` antes, y con la suite nueva **17 suites · 531
+comprobaciones OK · 0 FALLO**. `test:pnl`, `test:m0`, `test:inv` y `test:iva` en verde en
 todas las iteraciones, que es la frontera de este carril (`test:coherencia` y
 `test:sesionb` **no existen** en esta base, como dice `PROPIEDAD.md`).
 

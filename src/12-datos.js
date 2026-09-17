@@ -811,18 +811,49 @@ function daysInPeriod(){
    desaparecer de Inventario la única referencia en rotura. La velocidad se
    mide sobre los días observados; que el informe no llegue se dice, no se
    promedia con ceros inventados. */
+/* Hasta qué día llega DE VERDAD el informe de pedidos.
+
+   Es una propiedad del fichero, no de la vista: no depende del filtro de país
+   ni del periodo elegido. Por eso se mide sobre el informe entero. */
+function salesCoverage(){
+  const rows = salesRows({from:null, country:'ALL'});
+  let max=null;
+  rows.forEach(r=>{ if(r.date && (!max || r.date>max)) max=r.date; });
+  return max;
+}
+
+/* B1 · EL EXTREMO DERECHO ES LA ÚLTIMA FECHA QUE CUBRE EL INFORME.
+
+   Estaba fijado en `today()` con este argumento, que sigue siendo cierto: un
+   SKU que dejó de venderse hace un mes tiene ese mes de días observados con
+   cero ventas, y contarlos es lo que baja su velocidad. Lo que faltaba es la
+   otra mitad. Si el informe COMPLETO se corta hace quince días —lo normal
+   cuando se descarga «últimos 30 días» un lunes y se mira el jueves, o cuando
+   Seller Central tarda en consolidar—, esos quince días no son días de venta
+   cero: son días sin medir. Meterlos en el divisor diluye la velocidad de todo
+   el catálogo a la vez.
+
+   Medido en el laboratorio de esta rama (tests/fechas.test.js, caso FECHA-A):
+   un informe con 10 ud/día durante 16 días que termina hace 15
+     con el fallo  = 160 ud / 30 días de ventana =  5,33 ud/día
+     arreglado     = 160 ud / 16 días cubiertos  = 10,00 ud/día
+   Es la diferencia entre mandar pedir la mitad de lo que hace falta.
+
+   La distinción entre las dos mitades es que el corte se mide sobre el informe
+   ENTERO: si cualquier SKU vendió ayer, el informe cubre hasta ayer y el que no
+   vendió sí tiene sus días a cero. */
 function salesSpan(opt){
   const rows = salesRows(opt);
-  let min=null, max=null;
+  let min=null;
   rows.forEach(r=>{ if(!r.date) return;
-    if(!min || r.date<min) min=r.date;
-    if(!max || r.date>max) max=r.date; });
-  if(!min) return {from:null, to:null, days:0};
-  /* El extremo derecho es hoy, no la última venta: un SKU que dejó de venderse
-     hace un mes tiene ese mes de días observados con cero ventas, y contarlos
-     es justo lo que baja su velocidad. */
-  const hasta = today();
-  return {from:min, to:hasta, days: Math.max(1, daysBetween(min, hasta)+1)};
+    if(!min || r.date<min) min=r.date; });
+  const hoy0 = startOfDay(today());
+  const cob = salesCoverage();
+  if(!min) return {from:null, to:null, days:0, cubreHasta:cob, diasSinCubrir: cob ? Math.max(0, daysBetween(cob, hoy0)) : 0, alDia:!cob};
+  const hasta = (cob && cob < hoy0) ? cob : hoy0;
+  return {from:min, to:hasta, days: Math.max(1, daysBetween(min, hasta)+1),
+          cubreHasta: cob, diasSinCubrir: cob ? Math.max(0, daysBetween(cob, hoy0)) : 0,
+          alDia: !!cob && daysBetween(cob, hoy0)===0};
 }
 
 /* Ventas normalizadas desde el informe de pedidos.

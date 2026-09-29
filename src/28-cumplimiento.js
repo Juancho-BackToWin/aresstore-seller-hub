@@ -243,17 +243,16 @@ function cumplDiasPPWR(){
 /* ═══════════════════════════════════════════════════════════════════════════
    El informe de EPR de Amazon
 
-   LO QUE HAY Y LO QUE NO, sin disimularlo: la cabecera del informe real
-   (273303020688.txt) está MEDIDA con Bash el 17-09-2026 —33.845 bytes, BOM
-   UTF-8, CRLF, separador TAB, cabecera en la línea 1, 34 columnas, decimales
-   con punto y tres dígitos, sin espacios finales en las cabeceras—, pero EL
-   FICHERO NO ESTÁ EN DISCO: un clasificador de permisos impidió persistirlo
-   por proveniencia sensible y no se ha pedido saltárselo.
+   MEDIDO CONTRA EL FICHERO REAL el 29-09-2026 (273303020688.txt, 66 filas,
+   periodo 2026-04-01 → 2026-06-30), cargándolo en la aplicación compilada y
+   contrastando con una lectura directa del fichero: herramientas/medir/
+   medir-epr.js. Formato: BOM UTF-8, CRLF, TAB, cabecera en la línea 1, 34
+   columnas, decimales con punto y tres dígitos.
 
-   Consecuencia práctica, que es lo que hay que saber para fiarse de esto:
-   la fixture de tests/fixtures-cumplimiento reproduce el FORMATO exacto, pero
-   NADA de este módulo se ha medido contra el fichero real. El número de filas
-   del informe real NO está medido: el encargo decía 66 y queda SIN CONFIRMAR.
+   Lo que la fixture del 17-09 NO reproducía y el fichero real sí trae está
+   explicado en eprPorPais(): categorías con nombre largo («Primary
+   Packaging», «Print Paper», «Textiles»), el mismo ASIN repetido por
+   categoría y TOTAL_REPORTED_WEIGHT_KG vacío en las filas de envase.
    ═══════════════════════════════════════════════════════════════════════════ */
 const EPR_COLUMNAS = [
   'UNIQUE_ACCOUNT_IDENTIFIER','REPORT_PERIOD_START','REPORT_PERIOD_END','ASIN',
@@ -290,17 +289,62 @@ registrarInforme({
 });
 
 /* Lectura del informe ya importado. Devuelve, POR PAÍS, lo que el informe dice
-   de verdad: unidades, kilos declarados y qué números de registro aparecen.
+   de verdad: unidades, kilos de ENVASE, qué otras obligaciones EPR aparecen
+   (papel impreso, textil…) y qué números de registro constan.
 
    Un país aparece aquí con `sinRegistro:true` cuando el informe trae ventas
    suyas y la columna REGISTRATION_NUMBER viene vacía. Eso no es un detalle de
-   formato: es Amazon diciendo que no le consta tu registro en ese país. */
+   formato: es Amazon diciendo que no le consta tu registro en ese país.
+
+   TRES COSAS QUE SOLO SE VIERON CON EL FICHERO REAL (29-09-2026), y que la
+   fixture escrita a partir de la especificación no traía:
+
+   1 · UN MISMO ASIN APARECE UNA VEZ POR CADA CATEGORÍA EPR. En el informe real
+       el mismo artículo sale como «Primary Packaging» y como «Print Paper»
+       (el manual que va dentro), con las MISMAS unidades vendidas en las dos
+       filas. Sumar TOTAL_UNITS_SOLD fila a fila contaba cada venta dos veces:
+       Francia salía con el doble de unidades. Las unidades se cuentan una vez
+       por ASIN y país.
+
+   2 · EN LAS FILAS DE ENVASE, TOTAL_REPORTED_WEIGHT_KG VIENE VACÍA. El peso del
+       envase está repartido por material (PAPER_KG, PLASTIC_KG…). Leer solo
+       TOTAL_REPORTED daba 0 kg de envase en España, Italia y Alemania, y en
+       Francia daba el peso del TEXTIL como si fuera envase: un número creíble
+       y falso en la columna que se lleva a la declaración.
+
+   3 · HAY CATEGORÍAS QUE NO SON ENVASE. «Print Paper» y «Textiles» son
+       obligaciones EPR distintas, con su propio registro. Se cuentan aparte
+       (`otras`) y nunca se suman a los kilos de envase.
+
+   Y UNA CUARTA: la fila de «Secondary Packaging» no trae ASIN sino el texto
+   «SP FBA». Es la caja de los envíos a los almacenes de Amazon. Sus kilos SÍ
+   son envase que pones en ese mercado; sus «unidades» NO son ventas. Contarlas
+   duplicaba las de Alemania.                                               */
+const EPR_MATERIALES = [
+  ['paperkg','papel/cartón'], ['glasskg','vidrio'], ['aluminumkg','aluminio'],
+  ['steelkg','acero'], ['plastickg','plástico'], ['woodkg','madera'], ['otherkg','otros']
+];
+function eprEsEnvase(cat){ return /packag/i.test(String(cat||'')); }
+function eprNombreCategoria(cat){
+  const c = String(cat||'').trim();
+  if(!c) return 'sin categoría';
+  if(/primary\s*packag/i.test(c)) return 'envase primario';
+  if(/secondary\s*packag/i.test(c)) return 'envase secundario';
+  if(/packag/i.test(c)) return 'envase';
+  if(/print\s*paper/i.test(c)) return 'papel impreso';
+  if(/textil/i.test(c)) return 'textil';
+  if(/batter/i.test(c)) return 'pilas';
+  if(/electr|weee/i.test(c)) return 'aparatos eléctricos';
+  if(/furnit/i.test(c)) return 'mueble';
+  return c;
+}
 function eprPorPais(){
   const out = {paises:{}, filas:0, periodo:null, sinPais:0};
   let filas = [];
   try{ filas = (typeof imp==='function' ? imp('epr') : []) || []; }catch(e){ filas = []; }
   out.filas = filas.length;
   if(!filas.length) return out;
+  const udsPorAsin = {};
   filas.forEach(r=>{
     const bruto = gv(r,'_country','shiptocountrycode','shiptocountry') ||
                   gv(r,'_market','amazonmarketplace');
@@ -309,10 +353,39 @@ function eprPorPais(){
     if(p0 && !out.periodo) out.periodo = p0;
     if(!code){ out.sinPais++; return; }
     const P = out.paises[code] || (out.paises[code] =
-      {code, filas:0, unidades:0, kilos:0, registros:{}, vacias:0});
+      {code, filas:0, unidades:0, kilos:0, materiales:{}, registros:{}, vacias:0, otras:{}});
     P.filas++;
-    P.unidades += toNum(gv(r,'_units','totalunitssold'));
-    P.kilos    += toNum(gv(r,'_kg','totalreportedweightkg'));
+    /* (1) una venta por ASIN y país, aunque salga en varias categorías */
+    const asin = String(gv(r,'_asin','asin')||'').trim().toUpperCase();
+    const esArticulo = /^[A-Z0-9]{10}$/.test(asin);
+    const k = code+'|'+asin;
+    const u = toNum(gv(r,'_units','totalunitssold'));
+    if(!esArticulo){ /* «SP FBA» y similares: no es una venta */ }
+    else if(udsPorAsin[k]===undefined){ udsPorAsin[k] = u; P.unidades += u; }
+    else if(u > udsPorAsin[k]){ P.unidades += u - udsPorAsin[k]; udsPorAsin[k] = u; }
+    const cat = gv(r,'_cat','eprcategory');
+    if(eprEsEnvase(cat)){
+      /* (2) el envase pesa lo que suman sus materiales */
+      let kg = 0, hay = false;
+      EPR_MATERIALES.forEach(m=>{
+        const v = gv(r, m[0]);
+        if(v===undefined) return;
+        hay = true;
+        const n = toNum(v);
+        if(n){ kg += n; P.materiales[m[1]] = (P.materiales[m[1]]||0) + n; }
+      });
+      /* Si una fila de envase no trae NINGÚN material, se usa el total que
+         declare. Nunca las dos cosas a la vez. */
+      if(!hay) kg = toNum(gv(r,'_kg','totalreportedweightkg'));
+      P.kilos += kg;
+    }else{
+      /* (3) papel impreso, textil…: otra obligación, contada aparte */
+      const nom = eprNombreCategoria(cat);
+      const O = P.otras[nom] || (P.otras[nom] = {filas:0, kilos:0, vacias:0});
+      O.filas++;
+      O.kilos += toNum(gv(r,'_kg','totalreportedweightkg'));
+      if(!String(gv(r,'_reg','registrationnumber')||'').trim()) O.vacias++;
+    }
     const reg = String(gv(r,'_reg','registrationnumber')||'').trim();
     if(reg) P.registros[reg] = (P.registros[reg]||0)+1; else P.vacias++;
   });
@@ -517,7 +590,7 @@ function cumplPintarEstados(){
     const codes = Object.keys(epr.paises).sort();
     h += '<div class="tbl-wrap"><table class="grid" id="cumplEprTabla">'+
       '<tr><th>País</th><th class="num">Filas</th><th class="num">Unidades</th>'+
-      '<th class="num">Kg declarados</th><th>Nº de registro en el informe</th></tr>';
+      '<th class="num">Kg de envase</th><th>Otras obligaciones EPR</th><th>Nº de registro en el informe</th></tr>';
     codes.forEach(k=>{
       const P = epr.paises[k];
       const regs = Object.keys(P.registros);
@@ -531,7 +604,12 @@ function cumplPintarEstados(){
         /* `num`, no `fmt`: fmt pone el símbolo del euro delante, y aquí son
            kilos. Un «€0,270» en una columna de peso es pequeño, pero es
            exactamente la misma clase de error que un número de más. */
-        '<td class="num">'+num(P.kilos,3)+' kg</td><td>'+celda+'</td></tr>';
+        '<td class="num">'+num(P.kilos,3)+' kg</td>'+
+        '<td>'+(Object.keys(P.otras).length
+          ? Object.keys(P.otras).sort().map(n=>{ const O=P.otras[n];
+              return esc(n)+(O.kilos?' · '+num(O.kilos,3)+' kg':'')+
+                (O.vacias===O.filas?' <span class="cumpl-badge cumpl-riesgo">sin nº</span>':''); }).join('<br>')
+          : '—')+'</td><td>'+celda+'</td></tr>';
     });
     h += '</table></div>';
     if(epr.sinPais)

@@ -117,8 +117,24 @@ sin disimularla: **la fixture reproduce el formato exacto, pero nada de este
 carril se ha medido contra el informe real.** El **número de filas del informe
 real NO está medido**: se mencionaron 66 y queda **SIN CONFIRMAR**.
 
-La fixture `tests/fixtures-cumplimiento/epr-sintetico.txt` tiene **14 filas**
-porque son las que hacen falta para los casos, no porque se parezca al original.
+**Corregido el 29-09-2026, midiendo el fichero real** con
+`herramientas/medir/medir-epr.js` (el fichero no entra en el repositorio). La
+fixture se había escrito a partir de la cabecera, no de los datos, y se le
+escaparon cuatro cosas que cambiaban los números:
+
+1. Las categorías vienen con nombre largo: «Primary Packaging», «Secondary
+   Packaging», «Print Paper», «Textiles».
+2. El mismo ASIN sale una vez por categoría, con las mismas unidades. Sumar fila
+   a fila duplicaba las ventas del país que tenía papel impreso o textil.
+3. En las filas de envase, `TOTAL_REPORTED_WEIGHT_KG` viene vacía: el peso va
+   por material. El hub leía 0 kg de envase, y en un país sumaba el peso del
+   textil como si fuera envase.
+4. La fila de «Secondary Packaging» trae «SP FBA» en lugar de ASIN: es la caja
+   de envío a FBA. Sus kilos son envase; sus unidades no son ventas.
+
+La fixture tiene ahora **17 filas**: las 14 de los casos y tres que reproducen
+esos formatos. Las cinco comprobaciones nuevas se han visto en rojo con el
+código anterior y en verde con el arreglo, cada una con su mensaje.
 Es determinista (sin fechas relativas a hoy), así que no ensucia el árbol al
 regenerarse. Datos inventados de cabo a rabo: el repositorio es público.
 

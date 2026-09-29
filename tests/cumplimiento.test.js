@@ -24,8 +24,14 @@
    reproduce, y hay que decirlo: el informe real no está en disco en este
    entorno, así que nada de esto está medido contra él. El número de filas del
    informe real tampoco está medido: se habló de 66 y queda SIN CONFIRMAR.
-   Esta fixture tiene 14 filas porque son las que hacen falta para los casos,
-   no porque se parezca al original.
+
+   CORREGIDO EL 29-09-2026, midiendo el fichero real (66 filas, sí): la
+   fixture se escribió a partir de la cabecera y no de los datos, y se le
+   escaparon tres cosas que cambiaban los números — categorías con nombre
+   largo, el mismo ASIN repetido por categoría, y TOTAL_REPORTED_WEIGHT_KG
+   vacío en las filas de envase. Ahora tiene 17 filas: las 14 de los casos,
+   dos que repiten ASIN en «Print Paper» y «Textiles», y la caja de envío a
+   FBA («Secondary Packaging», ASIN «SP FBA»).
 
    Los datos son inventados de cabo a rabo: el repositorio es público.
    ========================================================================= */
@@ -76,27 +82,40 @@ const FILAS_EPR = [
   ['amazon.com.be','BE','BELGIUM',       '',                 1],
   /* Y una fila cuyo país el hub NO sabe interpretar: tiene que quedarse
      fuera, no repartirse entre los demás. */
-  ['amazon.sa',    'SA','SAUDI ARABIA',  '',                 1]
+  ['amazon.sa',    'SA','SAUDI ARABIA',  '',                 1],
+  /* Lo que trae el informe REAL (medido el 29-09-2026) y la fixture del 17
+     no traía: el MISMO ASIN repetido en otra categoría EPR, con las mismas
+     unidades. La fila 15 repite el ASIN de la 7 como «Print Paper» (el
+     manual que va en la caja) y la 16 repite el de la 8 como «Textiles».
+     Sumadas fila a fila, Francia contaría sus ventas dos veces. */
+  ['amazon.fr',    'FR','FRANCE',        '',                 3, 'Print Paper', 6],
+  ['amazon.fr',    'FR','FRANCE',        '',                 1, 'Textiles',    7],
+  /* Y la caja de los envíos a FBA: «Secondary Packaging», con el texto
+     «SP FBA» donde iría el ASIN. Pesa como envase; sus unidades no son
+     ventas. */
+  ['amazon.de',    'DE','GERMANY',       '',                 3, 'Secondary Packaging', 'SP FBA']
 ];
 
 function generarFixtureEPR(){
   const filas = FILAS_EPR.map((f, i) => {
-    const [mkt, code, nombre, reg, uds] = f;
+    const [mkt, code, nombre, reg, uds, cat, deFila] = f;
     const kg = (0.150 + i*0.010);
+    const envase = !cat || /Packaging/.test(cat);
+    const idx = (deFila!==undefined ? deFila : i);
     const v = {};
     EPR_COLS.forEach(c => v[c] = '');
     v.UNIQUE_ACCOUNT_IDENTIFIER = 'DEMO-ACCOUNT-0000';
     v.REPORT_PERIOD_START = '2026-07-01';
     v.REPORT_PERIOD_END   = '2026-07-31';
-    v.ASIN = 'B0DEMO' + String(1000 + i);
+    v.ASIN = typeof idx==='string' ? idx : 'B0DEMO' + String(1000 + idx);
     v.AMAZON_MARKETPLACE  = mkt;
     v.SHIP_TO_COUNTRY_CODE = code;
     v.SHIP_TO_COUNTRY      = nombre;
     v.ITEM_NAME_IN_ENGLISH        = 'Demo article ' + (i + 1);
     v.ITEM_NAME_AS_IN_MARKETPLACE = 'Articulo de prueba ' + (i + 1);
     v.REGISTRATION_NUMBER = reg;
-    v.EPR_CATEGORY = 'PACKAGING';
-    v.EPR_SUBCATEGORY1 = 'HOUSEHOLD';
+    /* Los nombres de categoría, tal cual los escribe Amazon en el real. */
+    v.EPR_CATEGORY = cat || 'Primary Packaging';
     v.GL_PRODUCT_GROUP_DESCRIPTION = 'gl_demo';
     v.PRODUCT_TYPE = 'DEMO_TYPE';
     v.TOTAL_UNITS_SOLD = String(uds);
@@ -105,16 +124,19 @@ function generarFixtureEPR(){
     /* Decimales con punto y TRES dígitos, como el informe real. */
     v.ITEM_WEIGHT_WITHOUT_PACKAGE_KG = (kg).toFixed(3);
     v.ITEM_WEIGHT_WITH_PACKAGE_KG    = (kg + 0.040).toFixed(3);
-    v.TOTAL_REPORTED_WEIGHT_KG       = ((kg + 0.040) * uds).toFixed(3);
+    /* En el real, las filas de ENVASE traen esta columna VACÍA (57 de 66): el
+       peso va por material. Solo la llenan papel impreso y textil. */
+    v.TOTAL_REPORTED_WEIGHT_KG       = envase ? '' : ((kg + 0.040) * uds).toFixed(3);
     v.ITEM_WIDTH_CM    = '10.000'; v.PACKAGE_WIDTH_CM  = '12.000';
     v.ITEM_HEIGHT_CM   = '20.000'; v.PACKAGE_HEIGHT_CM = '22.000';
-    v.PAPER_KG    = (0.020 * uds).toFixed(3);
-    v.GLASS_KG    = '0.000';
-    v.ALUMINUM_KG = '0.000';
-    v.STEEL_KG    = '0.000';
-    v.PLASTIC_KG  = (0.015 * uds).toFixed(3);
-    v.WOOD_KG     = '0.000';
-    v.OTHER_KG    = '0.000';
+    /* Y al revés: las filas que no son envase traen los materiales VACÍOS. */
+    v.PAPER_KG    = envase ? (0.020 * uds).toFixed(3) : '';
+    v.GLASS_KG    = envase ? '0.000' : '';
+    v.ALUMINUM_KG = envase ? '0.000' : '';
+    v.STEEL_KG    = envase ? '0.000' : '';
+    v.PLASTIC_KG  = envase ? (0.015 * uds).toFixed(3) : '';
+    v.WOOD_KG     = envase ? '0.000' : '';
+    v.OTHER_KG    = envase ? '0.000' : '';
     return EPR_COLS.map(c => v[c]).join('\t');
   });
   /* Cabecera en la línea 1, sin espacios finales; CRLF en todo el fichero;
@@ -441,22 +463,44 @@ function generarFixtureEPR(){
       itSinRegistro: por && por.paises.IT ? por.paises.IT.sinRegistro : null,
       frMixto: por && por.paises.FR ? por.paises.FR.mixto : null,
       esRegistro: por && por.paises.ES ? Object.keys(por.paises.ES.registros).join(',') : null,
-      kilosES: por && por.paises.ES ? Math.round(por.paises.ES.kilos*1000)/1000 : null
+      kilosES: por && por.paises.ES ? Math.round(por.paises.ES.kilos*1000)/1000 : null,
+      kilosDE: por && por.paises.DE ? Math.round(por.paises.DE.kilos*1000)/1000 : null,
+      kilosFR: por && por.paises.FR ? Math.round(por.paises.FR.kilos*1000)/1000 : null,
+      otrasFR: por && por.paises.FR && por.paises.FR.otras ? Object.keys(por.paises.FR.otras).sort().map(n=>
+        n+':'+por.paises.FR.otras[n].filas+'/'+(Math.round(por.paises.FR.otras[n].kilos*1000)/1000)).join(' ') : '(sin «otras»)'
     };
   });
   check('el hub reconoce el informe de EPR por sus cabeceras inglesas',
     G.ids==='epr', G.ids || '(no se ha importado nada)');
-  check('lee las 14 filas de la fixture', G.filas===14, G.filas+' filas');
-  check('y las reparte por país usando el código de envío, no el nombre del fichero',
+  check('lee las 17 filas de la fixture', G.filas===17, G.filas+' filas');
+  /* DE: 3, no 6. La fila de «SP FBA» dice 3 «unidades» y no son ventas.
+     FR: 3 + 1 = 4. Las filas 15 y 16 repiten los ASIN de la 7 y la 8 con las
+     mismas unidades; sumarlas daría 3 + 1 + 3 + 1 = 8, el doble. */
+  check('y las reparte por país contando cada venta UNA vez aunque el ASIN salga en varias categorías',
     G.resumen==='AT:1 BE:1 DE:3 ES:7 FR:4 IT:7 PL:1 PT:2 SE:1',
-    G.resumen);
+    G.resumen + (/FR:8/.test(G.resumen) ? '  ← FR:8 es sumar el mismo ASIN en cada categoría' : '') +
+      (/DE:6/.test(G.resumen) ? '  ← DE:6 es contar la caja de envío a FBA como ventas' : ''));
   check('la fila cuyo país no sabe interpretar se queda fuera, no se reparte',
     G.sinPais===1, 'filas sin país: '+G.sinPais);
-  /* Aritmética a mano, que es lo que convierte esto en una comprobación y no
-     en una foto de lo que salió: las tres filas españolas pesan, con envase,
-     0,190 × 4 + 0,200 × 2 + 0,210 × 1 = 0,760 + 0,400 + 0,210 = 1,370 kg. */
-  check('los kilos declarados se suman con sus tres decimales',
-    G.kilosES!==null && Math.abs(G.kilosES - 1.370) < 0.0005, G.kilosES);
+  /* Aritmética a mano. El ENVASE pesa lo que suman sus materiales, papel
+     0,020 y plástico 0,015 por unidad: 0,035 × (4 + 2 + 1) = 0,245 kg. El
+     hub de antes leía TOTAL_REPORTED_WEIGHT_KG, que en las filas de envase
+     del informe real viene vacía: daba 0 kg. */
+  check('los kilos de envase salen de los materiales, con sus tres decimales',
+    G.kilosES!==null && Math.abs(G.kilosES - 0.245) < 0.0005,
+    G.kilosES + (G.kilosES===0 ? '  ← 0 kg es leer TOTAL_REPORTED, vacía en las filas de envase' : ''));
+  /* Francia: envase de las filas 7 y 8, 0,035 × (3 + 1) = 0,140 kg. El textil
+     de la fila 16 pesa (0,300 + 0,040) × 1 = 0,340 kg y el papel impreso de
+     la 15 (0,290 + 0,040) × 3 = 0,990 kg: ninguno de los dos es envase. */
+  /* DE: su envase, 0,035 × 3 = 0,105, más la caja de envío de la fila 17,
+     0,035 × 3 = 0,105: 0,210 kg. La caja SÍ es envase en ese mercado. */
+  check('la caja de envío a FBA suma sus kilos de envase aunque no sume unidades',
+    G.kilosDE!==null && Math.abs(G.kilosDE - 0.210) < 0.0005, G.kilosDE);
+  check('el textil y el papel impreso no se suman a los kilos de envase',
+    G.kilosFR!==null && Math.abs(G.kilosFR - 0.140) < 0.0005,
+    G.kilosFR + (G.kilosFR!==null && G.kilosFR > 0.2 ? '  ← se ha sumado peso que no es envase' : ''));
+  check('y salen aparte, como las obligaciones EPR distintas que son',
+    G.otrasFR==='papel impreso:1/0.99 textil:1/0.34', G.otrasFR);
   check('Italia sale marcada: el informe trae ventas y ninguna con número de registro',
     G.itSinRegistro===true, 'IT sinRegistro='+G.itSinRegistro);
   check('Francia sale como caso mixto: unas filas con número y otras sin él',
@@ -470,7 +514,7 @@ function generarFixtureEPR(){
     vacio: !!document.getElementById('cumplEprVacio')
   }));
   check('la pantalla enseña lo que dice el informe, señalando las filas sin número',
-    !G2.vacio && /vacío en las 2 filas/.test(G2.tabla) && /1,370 kg/.test(G2.tabla),
+    !G2.vacio && /vacío en las 2 filas/.test(G2.tabla) && /0,245 kg/.test(G2.tabla) && /textil/.test(G2.tabla),
     (G2.tabla||'(sin tabla)').replace(/\s+/g,' ').slice(0,160));
 
   /* =====================================================================

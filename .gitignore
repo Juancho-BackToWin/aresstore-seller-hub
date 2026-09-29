@@ -19,3 +19,8 @@ aresstore-reales/
 *CustomTransaction*.csv
 informe_ppc_*
 Informe+de+listings*
+
+# Fixtures del carril 3 · se generan con `node tests/mkfixtures-3.js`, igual que las
+# demas, y llevan fechas relativas a hoy: commitearlas solo produce ruido en los
+# merges porque cambian cada dia sin que nadie toque codigo.
+tests/fixtures-3/

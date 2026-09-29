@@ -1191,11 +1191,11 @@ function salesRows(opt){
    IVA realmente aplicado · el informe de transacciones sujetas al IVA
 
    Por qué esto es lo que más dinero mueve del hub. El código fiscal de producto
-   de la cuenta es `A_FOOD_DESSERT` —postre alimenticio— aplicado a pulseras y a
-   bayetas de coche, así que Amazon está liquidando tipos reducidos de
-   alimentación: 10 % en España e Italia, 5,5 % en Francia, 7 % en Alemania,
-   6 % en Bélgica. Medido sobre mayo, junio y julio de 2026: faltan 759,13 € de
-   IVA repercutido sobre 6.533,76 € de base, el 11,62 %.
+   de la cuenta puede ser uno de alimentación aplicado a artículos que no lo
+   son, y entonces Amazon liquida tipos reducidos —del orden del 5 % al 10 %
+   según el país— donde correspondería el general. Las cifras medidas sobre los
+   informes reales NO van aquí: este repositorio es público. Están en el
+   documento del proyecto, en el traspaso correspondiente.
 
    Ese coste no estaba en ninguna pantalla, así que todos los márgenes que el
    hub enseñaba eran optimistas en unos once puntos. No es un fallo de cálculo

@@ -125,7 +125,7 @@ Por el METODO, lo que no está en el remoto no existe. Consecuencias prácticas:
   septiembre. Verificado en las dos direcciones el 17 de septiembre: sin el
   arreglo del motor sale roja con mensaje («0 €», «de 3393.57 € a 3393.57 €»),
   no con un stack.
-- Las cifras del traspaso del 6 de septiembre (A7 = 759,11 €, el inventario de
-  21 referencias y 815 unidades, la foto del 2026-08-22) **son heredadas y no se
+- Las cifras del traspaso del 6 de septiembre (la diferencia de IVA de A7, el
+  recuento de inventario, la fecha de la foto) **son heredadas y no se
   han podido confirmar** contra esta base. Nadie las use como criterio sin
   volver a medirlas.

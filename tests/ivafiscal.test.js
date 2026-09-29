@@ -30,7 +30,15 @@ const D = fs.mkdtempSync(path.join(os.tmpdir(),'ivafiscal-'));
 const H = ['UNIQUE_ACCOUNT_IDENTIFIER','ACTIVITY_PERIOD','TRANSACTION_TYPE','TRANSACTION_EVENT_ID',
  'SELLER_SKU','TAXABLE_JURISDICTION','PRICE_OF_ITEMS_VAT_RATE_PERCENT',
  'TOTAL_PRICE_OF_ITEMS_AMT_VAT_EXCL','TOTAL_PRICE_OF_ITEMS_VAT_AMT','PRODUCT_TAX_CODE',
- 'TAX_REPORTING_SCHEME','TAX_COLLECTION_RESPONSIBILITY','SALE_ARRIVAL_COUNTRY'];
+ 'TAX_REPORTING_SCHEME','TAX_COLLECTION_RESPONSIBILITY','SALE_ARRIVAL_COUNTRY',
+ 'TRANSACTION_COMPLETE_DATE'];
+
+/* La fecha de cada transacción, en el formato LITERAL del informe real
+   —«31-07-2026», día-mes-año con guiones, medido el 29-09-2026—. Hace cinco
+   días, para que caiga dentro de un periodo de 30 días mirado hoy. */
+const hace = n => { const d=new Date(); d.setDate(d.getDate()-n);
+  return String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear(); };
+const FECHA = hace(5);
 
 /* Reparto que reproduce EXACTAMENTE los totales medidos.
    Tipos reducidos aplicados y tipo general de cada país:
@@ -68,7 +76,7 @@ Object.keys(CUENTA).forEach(pais=>{
     const iva = basePorFila*pct/100;
     filas.push(['AZ1','2026-06','SALE','171-'+String(5000000+filas.length).padStart(7,'0')+'-'+
       String(4000000+filas.length).padStart(7,'0'),'FBA0101',JURIS[pais],(pct/100).toFixed(6),
-      basePorFila.toFixed(6), iva.toFixed(6),'A_FOOD_DESSERT','UNION-OSS','SELLER',pais]);
+      basePorFila.toFixed(6), iva.toFixed(6),'A_FOOD_DESSERT','UNION-OSS','SELLER',pais,FECHA]);
   }
 });
 const F = path.join(D,'vat.txt');
@@ -93,10 +101,10 @@ CASOS.forEach(([pais,pct])=>{
   for(let i=0;i<2;i++) filas2.push(['AZ1','2026-07','SALE',
     '171-'+String(6000000+filas2.length).padStart(7,'0')+'-'+String(3000000+filas2.length).padStart(7,'0'),
     'FBA0500',JURIS[pais],(pct/100).toFixed(6),'50.000000',(50*pct/100).toFixed(6),
-    'A_FOOD_DESSERT','UNION-OSS','SELLER',pais]);
+    'A_FOOD_DESSERT','UNION-OSS','SELLER',pais,FECHA]);
 });
 filas2.push(['AZ1','2026-07','SALE','171-6000099-3000099','FBA0500','NARNIA','0.210000',
-             '100.000000','21.000000','A_FOOD_DESSERT','UNION-OSS','SELLER','XX']);
+             '100.000000','21.000000','A_FOOD_DESSERT','UNION-OSS','SELLER','XX',FECHA]);
 const F2 = path.join(D,'vat-jurisdicciones.txt');
 fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n')+'\n');
 
@@ -195,6 +203,44 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
     Dm.linea+' €');
   check('y el beneficio baja exactamente eso', near(Dm.sinProfit - Dm.conProfit, 759.13, 0.02),
     (Dm.sinProfit-Dm.conProfit).toFixed(2)+' € · de '+Dm.sinProfit+' € a '+Dm.conProfit+' €');
+
+  console.log('\n=== FIS-D2 · LA DEUDA ES LA DEL PERIODO Y EL PAÍS QUE SE MIRAN ===');
+  /* Medido el 29-09-2026 contra los informes reales: la cuenta de resultados
+     restaba la deuda del informe ENTERO fuese cual fuese el periodo. Un
+     informe de mayo a julio mirado en «30 días» a finales de septiembre daba
+     beneficio negativo por la deuda completa sin una sola venta en el mes.
+
+     Aritmética: las 457 ventas suman 759,13 €. Italia sola, 900,00 × (22 − 10)
+     / 100 = 108,00 €. Movidas a hace 60 días, en un periodo de 30 no queda
+     ninguna: 0,00 €. Sin fecha, con periodo, tampoco; en «Todo», las 457. */
+  const D2 = await page.evaluate(()=>{
+    const filas = DB.imports.vat.rows;
+    const guarda = filas.map(r=>r.transactioncompletedate);
+    const linea = ()=> +pnl().vatShortfall.toFixed(2);
+    const o = {};
+    periodDays=30; countryFilter='IT'; o.it = linea(); countryFilter='ALL';
+    const hace60 = (()=>{ const d=new Date(); d.setDate(d.getDate()-60);
+      return String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear(); })();
+    filas.forEach(r=>{ r.transactioncompletedate = hace60; });
+    periodDays=30; o.viejas30 = linea();
+    periodDays=90; o.viejas90 = linea();
+    periodDays=0;  o.viejasTodo = linea();
+    filas.forEach(r=>{ delete r.transactioncompletedate; });
+    periodDays=30; o.sinFecha30 = linea(); o.sinFechaN = pnl().vat.sinFecha;
+    periodDays=0;  o.sinFechaTodo = linea();
+    filas.forEach((r,i)=>{ r.transactioncompletedate = guarda[i]; });
+    periodDays=30;
+    return o;
+  });
+  check('con el filtro de un país, la línea es la deuda de ESE país', near(D2.it, 108.00, 0.02),
+    D2.it+' €' + (near(D2.it,759.13,0.02) ? '  ← es la deuda de todos los países' : ''));
+  check('ventas de hace 60 días no cargan un periodo de 30', near(D2.viejas30, 0, 0.005),
+    D2.viejas30+' €' + (D2.viejas30>0 ? '  ← la deuda del informe entero se carga al periodo mirado' : ''));
+  check('y sí cargan el de 90 y el de «Todo»', near(D2.viejas90, 759.13, 0.02) && near(D2.viejasTodo, 759.13, 0.02),
+    '90 d: '+D2.viejas90+' € · Todo: '+D2.viejasTodo+' €');
+  check('una fila sin fecha no se coloca en ningún periodo, y se cuenta',
+    near(D2.sinFecha30, 0, 0.005) && D2.sinFechaN===457, D2.sinFecha30+' € · sin fecha: '+D2.sinFechaN);
+  check('pero en «Todo» sí cuenta', near(D2.sinFechaTodo, 759.13, 0.02), D2.sinFechaTodo+' €');
 
   console.log('\n=== FIS-E · Y SE DICE EN PANTALLA, CON EL CÓDIGO QUE LO CAUSA ===');
   const E = await page.evaluate(()=>{ go('rentabilidad');

@@ -1210,17 +1210,55 @@ function salesRows(opt){
      IVA esté medido, porque medir bien una liquidación equivocada no la
      arregla.
    ========================================================================= */
-function vatReport(){
+/* Fecha de una transacción del informe de IVA. Amazon la escribe «31-07-2026»
+   —día, mes y año con GUIONES—, que `parseDate()` no lee: solo entiende el
+   formato europeo con barra o punto. Se prueba primero la fecha en que se
+   completó la transacción, luego la del cálculo del impuesto y la de salida. */
+function vatFechaFila(r){
+  const v = gv(r,'transactioncompletedate','taxcalculationdate','transactiondepartdate');
+  if(v==null || v==='') return null;
+  const m = String(v).trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if(m) return fechaValida(+m[3], +m[2], +m[1]);
+  return parseDate(v);
+}
+
+/* `vatReport(opts)` · SIN argumentos hace lo de siempre, sobre TODO el informe
+   —el dossier para la gestoría depende de eso y no cambia—. Con `opts` se corta
+   a un periodo (`desde`, `hasta`) y a un país (`pais`, código ISO de la
+   jurisdicción), y es lo que usa la cuenta de resultados.
+
+   Por qué hace falta, medido el 29-09-2026 contra los informes reales: la
+   cuenta de resultados restaba la deuda de IVA del informe ENTERO fuese cual
+   fuese el periodo mirado. Con un informe de tres meses y la pantalla en «30
+   días», el mes salía cargado con la deuda de los tres, y aunque ese mes no
+   hubiera ninguna venta, el beneficio salía negativo por el importe completo.
+   Con un filtro de país, igual: un país cargaba la deuda de todos.
+
+   Una fila sin fecha legible no se puede colocar en ningún periodo: con corte
+   se queda fuera y se cuenta en `sinFecha`, para que la pantalla lo diga. */
+function vatReport(opts){
   const rows = imp('vat');
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
                difTuya:0, difDelMercado:0, sinResponsable:0,
-               porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0};
+               porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0,
+               sinFecha:0, fueraDeCorte:0, cortado:!!opts};
   if(!rows.length) return out;
+  const corte = opts || null;
   rows.forEach(r=>{
     const tipoTx = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
     /* Solo ventas. Devoluciones y ajustes tienen su propio signo y mezclarlos
        aquí daría un tipo medio que no es el de ninguna transacción. */
     if(tipoTx && tipoTx.indexOf('SALE')<0) return;
+    if(corte && (corte.desde || corte.hasta)){
+      const f = vatFechaFila(r);
+      if(!f){ out.sinFecha++; return; }
+      if((corte.desde && f < startOfDay(corte.desde)) || (corte.hasta && f > startOfDay(corte.hasta))){
+        out.fueraDeCorte++; return; }
+    }
+    if(corte && corte.pais){
+      const pj = paisDeJuris(gv(r,'_juris','taxablejurisdiction','salearrivalcountry'));
+      if(pj !== corte.pais){ out.fueraDeCorte++; return; }
+    }
     /* `TAXABLE_JURISDICTION` trae el nombre COMPLETO del país, no el código
        ISO. Cortar por las dos primeras letras daba `SP`, `GE`, y `PO` para
        Portugal y Polonia a la vez: ninguno encontraba su tipo general y la
@@ -1551,7 +1589,17 @@ function taxBasis(S){
     tax: observed + estimated,
     observed, estimated,
     revSeen, revEst, revBlind, rev,
-    medidoFiscal, revFiscal, fiscal: V,
+    medidoFiscal, revFiscal,
+    /* La deuda de IVA que entra en la cuenta de resultados es la del PERIODO y
+       el país que se miran, no la del informe entero. `V` sigue sirviendo el
+       IVA medido por pedido, que es por pedido y no depende del corte. */
+    fiscal: (()=>{
+      const pais = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
+      /* «Todo» (periodDays = 0) no corta por fecha: ahí también cuentan las
+         filas sin fecha legible, que en cualquier otro periodo se quedan fuera. */
+      if(!periodDays) return pais ? vatReport({pais}) : vatReport();
+      return vatReport({desde: periodStart(), hasta: today(), pais});
+    })(),
     porSku, porPais, porMes,
     paisesDeducidos: paises,
     coverPct: rev > 0 ? revSeen/rev*100 : 100,

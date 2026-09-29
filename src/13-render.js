@@ -1317,29 +1317,32 @@ function renderPub(){
    15 · CUMPLIMIENTO
    ========================================================================= */
 function renderComp(){
-  const d = daysBetween(today(), new Date(PPWR_DATE));
-  const act = COUNTRIES.filter(c=>(DB.compliance[c.code]||{}).active);
-  const missing = act.filter(c=>!(DB.compliance[c.code]||{}).epr);
-  const navC=document.getElementById('navCump'); if(navC) navC.textContent = missing.length||'✓';
-  let b;
-  if(d>=0 && d<=60){
-    b='<div class="note-box stop" style="margin-top:0"><strong>Quedan '+d+' día'+(d===1?'':'s')+' para el 12 de agosto de 2026.</strong> '+
-      (missing.length? 'Tienes '+missing.length+' mercado'+(missing.length===1?'':'s')+' activo'+(missing.length===1?'':'s')+' sin registro EPR marcado: <strong>'+missing.map(c=>c.name).join(', ')+'</strong>. '+
-        'Desde esa fecha los marketplaces están obligados a verificar el registro de cada vendedor en cada país, y no hay periodo de gracia para el stock que ya está en almacén. '+
-        'De todo lo que hay en este hub, esto es lo único que puede apagarte el negocio de un día para otro.'
-        : 'Tienes marcados los registros EPR de todos tus mercados activos. Verifica también la Declaración UE de Conformidad por tipo de envase y el identificador trazable por unidad.')+'</div>';
-  } else if(d<0){
-    b='<div class="note-box '+(missing.length?'stop':'info')+'" style="margin-top:0"><strong>El PPWR está en vigor desde el 12 de agosto de 2026 · hace '+(-d)+' días.</strong> '+
-      (missing.length
-        ? 'Sigues con '+missing.length+' mercado'+(missing.length===1?'':'s')+' activo'+(missing.length===1?'':'s')+' sin registro EPR marcado: <strong>'+missing.map(c=>c.name).join(', ')+'</strong>. '+
-          'Ya no hay plazo que agotar. Los marketplaces están obligados a verificar el registro y no hubo periodo de gracia para el stock en almacén, '+
-          'así que esto no es una tarea pendiente: es una exposición abierta a bloqueo de listados y sanción. Tramítalo esta semana y, mientras tanto, '+
-          'comprueba en Seller Central si ya te han pedido documentación en alguno de esos países.'
-        : 'Todos tus mercados activos constan registrados. Verifica también la Declaración UE de Conformidad por tipo de envase y el identificador trazable por unidad, que vencieron el mismo día.')+'</div>';
-  } else {
-    b='<div class="note-box warn" style="margin-top:0"><strong>Faltan '+d+' días para el 12 de agosto de 2026</strong>, fecha de aplicación general del PPWR. Los registros EPR llevan semanas de tramitación: empieza con margen.</div>';
+  /* Todo el contenido de esta pantalla vive en src/28-cumplimiento.js, que es
+     el fichero de este carril. Aquí solo queda el reparto, para no engordar un
+     fichero de mil setecientas líneas que leen otros nueve carriles.
+
+     El cambio de fondo respecto a la versión anterior: esta pantalla ya no
+     tiene ningún estado que signifique «cumples». Tenía uno —«Tienes marcados
+     los registros EPR de todos tus mercados activos»— y se apoyaba en una
+     casilla que se marca sin comprobar nada. Un hub de gestión no falla dando
+     un error: falla dando un número creíble y falso, y ese era el número
+     creíble y falso de este módulo. */
+  try{ cumplBannerPPWR(); }catch(e){ console.warn('ppwr', e); }
+
+  /* El contador del menú cuenta PAÍSES EN RIESGO ABIERTO, no casillas sin
+     marcar: un país con la casilla puesta y sin número de registro sigue
+     estando sin comprobar y tiene que seguir contando. */
+  let riesgo = [];
+  try{ riesgo = cumplEstados().filter(s=>s.estado==='riesgo'); }catch(e){}
+  const navC = document.getElementById('navCump');
+  if(navC){
+    navC.textContent = riesgo.length || '·';
+    navC.title = riesgo.length
+      ? riesgo.length+' mercado(s) sin número de registro EPR anotado'
+      : 'Ningún mercado en riesgo abierto. Anotado no es comprobado.';
   }
-  document.getElementById('ppwrBanner').innerHTML=b;
+
+  const act = COUNTRIES.filter(c=>(DB.compliance[c.code]||{}).active);
 
   tbl('compTable','<tr><th style="width:26px"></th><th>País</th><th class="num">IVA</th><th>NIF-IVA local</th><th>OSS</th>'+
     '<th>EPR</th><th>Registrado el</th><th class="num">Gestoría €/año</th><th class="num">€/ud</th></tr>'+
@@ -1350,9 +1353,16 @@ function renderComp(){
       const perUnit = annualUnits>0 ? toNum(x.vatCost)/annualUnits : 0;
       const cb=(f,label)=>'<input type="checkbox" style="width:auto" '+(x[f]?'checked':'')+
         ' onchange="setComp(\''+c.code+'\',\''+f+'\',this.checked)" title="'+label+'">';
+      /* De dónde salió el país. Un país que está en la lista porque lo dijo un
+         documento, y no porque aparezca en un informe, tiene que ir marcado:
+         si no, a los tres meses nadie distingue lo medido de lo heredado. */
+      const orig = c.origen==='medido'
+          ? ' <span class="pill" title="Aparece en los informes reales">medido</span>'
+          : (c.origen==='heredado'
+              ? ' <span class="pill stop" title="No aparece en ningún informe real; entra porque lo dice el encargo">sin confirmar</span>' : '');
       return '<tr class="'+(x.active?'':'dim')+'">'+
         '<td>'+cb('active','Vendo aquí')+'</td>'+
-        '<td class="name"><strong>'+c.code+'</strong> '+c.name+' '+(c.storage?'<span class="pill core">stock</span>':'<span class="pill">EFN</span>')+'</td>'+
+        '<td class="name"><strong>'+c.code+'</strong> '+c.name+' '+(c.storage?'<span class="pill core">stock</span>':'<span class="pill">EFN</span>')+orig+'</td>'+
         '<td class="num mut">'+c.vat+'%</td>'+
         '<td>'+cb('vatReg','Registro de IVA local')+'</td><td>'+cb('oss','Declarado vía OSS')+'</td>'+
         '<td>'+cb('epr','Registro EPR')+(x.active&&!x.epr?' <span class="pill stop">falta</span>':'')+'</td>'+
@@ -1366,13 +1376,21 @@ function renderComp(){
   v+='La referencia del sector son entre 960 y 2.400 € por país y año —registro más declaraciones recurrentes—, bastante más que los 400 a 1.000 € que circulan en guías desactualizadas. ';
   const stock = act.filter(c=>c.storage), efn = act.filter(c=>!c.storage);
   if(efn.length) v+='<br><br>Tienes activos '+efn.map(c=>c.code).join(', ')+', que se sirven por EFN transfronterizo: <strong>no necesitan NIF-IVA local</strong> mientras no muevas mercancía allí físicamente, por eso su gestoría figura a cero. Países Bajos es obligatorio como marketplace de listado desde junio de 2025, pero eso no lo convierte en país de almacenamiento. ';
-  if(stock.length) v+='<br><br>En '+stock.map(c=>c.code).join(', ')+' sí guardas stock, así que el registro de IVA local es obligatorio y el OSS no lo sustituye. ';
-  v+='<br><br><span class="mut">Chequia no aparece en esta lista a propósito: no figura en el rate card europeo vigente y las fuentes se contradicen sobre si sigue siendo país de almacenamiento PanEU. Antes de contratar un registro allí, confírmalo en tu Seller Central. Este módulo lleva el control de qué tienes y cuánto cuesta; no presenta declaraciones ni sustituye a una gestoría.</span>';
+  if(stock.length) v+='<br><br>En '+stock.map(c=>c.code).join(', ')+' sí guardas stock, así que el registro de IVA local es obligatorio y el OSS no lo sustituye: la ventanilla única declara ventas a distancia, y tener mercancía en un Estado miembro no elimina por sí solo la obligación de registro allí <span class="mut">(portal OSS de la Comisión, consultado el '+CUMPL_CONSULTA+').</span> ';
+  /* Chequia ya no se justifica con «las fuentes se contradicen»: se dice lo que
+     se ha hecho, que es mirar los once informes reales y no encontrarla. */
+  v+='<br><br><span class="mut">Chequia figura en la lista porque el encargo la da como país de almacenaje PanEU, pero <strong>no aparece en ninguno de los informes reales</strong> —ni venta, ni jurisdicción, ni traslado—, así que el hub no puede confirmarlo y la marca «sin confirmar». Eslovaquia, en cambio, sí aparece: como país de salida de traslados entre centros logísticos, que es la huella que deja el stock almacenado. Este módulo lleva el control de qué tienes anotado y cuánto cuesta; no presenta declaraciones, no valida ningún número de registro y no sustituye a una gestoría.</span>';
   document.getElementById('compVerdict').innerHTML=v;
+
+  try{ cumplPintarEstados(); }catch(e){ console.warn('cumpl', e); }
 }
 function setComp(code,f,v){
   if(!DB.compliance[code]) DB.compliance[code]={};
-  DB.compliance[code][f] = (f==='vatCost') ? toNum(v) : v;
+  /* Los números de registro se guardan sin espacios de sobra: un NIF con un
+     espacio delante es un NIF distinto para cualquier comparación posterior,
+     y aquí lo que importa de un número es que esté o no esté. */
+  DB.compliance[code][f] = (f==='vatCost') ? toNum(v)
+                         : (typeof v==='string' ? v.trim() : v);
   saveDB(); renderComp(); renderPanel();
 }
 

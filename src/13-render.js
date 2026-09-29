@@ -721,7 +721,13 @@ function renderCatalogo(){
   const S = skuStats(), I = invStats();
   const sm={}; S.forEach(r=>sm[r.sku]=r);
   const im={}; I.forEach(r=>im[r.sku]=r);
-  tbl('productTable','<tr><th>SKU</th><th>Producto</th><th>Canal</th><th>Proveedor</th><th class="num">Coste hoy</th>'+
+  /* CARRIL 2 · la primera columna es la selección para el coste base en
+     bloque, y la columna «Coste hoy» ya no imprime «0,00 € base» cuando no hay
+     coste ninguno. Un cero ahí se lee como «cuesta cero euros», y con un coste
+     de cero el margen de ese SKU sale entero e inventado. Lo que hay que decir
+     es que NO SE SABE. La marca la pone costeConocido(), en src/21-catalogo.js. */
+  tbl('productTable','<tr><th style="width:28px"><input type="checkbox" class="cat-sel-all" onchange="catSelTodos(this.checked)"></th>'+
+    '<th>SKU</th><th>Producto</th><th>Canal</th><th>Proveedor</th><th class="num">Coste hoy</th>'+
     '<th class="num">Lotes</th><th class="num">Logística</th><th class="num">Stock</th><th class="num">Cobertura</th><th class="num">Beneficio</th><th style="width:70px"></th></tr>'+
     (DB.products.length? DB.products.map(p=>{
       const s=sm[String(p.sku)]||{}, i=im[String(p.sku)]||{};
@@ -729,11 +735,20 @@ function renderCatalogo(){
       const fbm = p.channel==='FBM';
       const nl = prodLots(p).length;
       const c = unitCostAt(p, iso(today()));
-      return '<tr><td><strong>'+esc(p.sku)+'</strong></td><td class="name">'+esc(p.name)+'</td>'+
+      const conocido = (typeof costeConocido==='function') ? costeConocido(p) : (c.cost>0);
+      const celdaCoste = !conocido
+        ? '<td class="num" title="Este producto no tiene ni coste base ni ningún lote de compra. No vale cero: no se sabe lo que vale.">'+
+            '<span class="cat-desconocido">coste desconocido</span></td>'
+        : '<td class="num" title="'+(c.src==='lot'?'del último lote comprado':
+            esc('coste base del producto, sin lote que lo respalde'+(p.costSource?' · '+p.costSource:'')))+'">'+
+            fmt(c.cost)+(c.src==='lot'?'':' <span class="mut" style="font-size:10px">'+
+              (p.costSource ? 'base · deducido' : 'base')+'</span>')+'</td>';
+      return '<tr><td><input type="checkbox" class="cat-sel" data-id="'+p.id+'"'+
+        ((typeof catSelMarcado==='function' && catSelMarcado(p.id)) ? ' checked' : '')+' onchange="catSelCuenta()"></td>'+
+        '<td><strong>'+esc(p.sku)+'</strong></td><td class="name">'+esc(p.name)+'</td>'+
         '<td><span class="pill '+(fbm?'info':'core')+'">'+(fbm?'FBM':'FBA')+'</span></td>'+
         '<td class="name mut">'+(sup?esc(sup.name):'<span class="pill warn">sin asignar</span>')+'</td>'+
-        '<td class="num" title="'+(c.src==='lot'?'del último lote comprado':'coste base del producto, sin lote que lo respalde')+'">'+
-          fmt(c.cost)+(c.src==='lot'?'':' <span class="mut" style="font-size:10px">base</span>')+'</td>'+
+        celdaCoste+
         '<td class="num">'+(nl? '<a href="#" onclick="editProduct(\''+p.id+'\');return false">'+nl+'</a>'
                               : '<span class="pill warn">0</span>')+'</td>'+
         '<td class="num mut">'+fmt(fbm?toNum(p.fbmShip):toNum(p.fba))+'</td>'+
@@ -742,7 +757,10 @@ function renderCatalogo(){
         '<td class="num '+((s.profit||0)>0?'pos':'neg')+'">'+(s.profit!=null?fmt(s.profit,0):'—')+'</td>'+
         '<td><button class="icon-btn" onclick="editProduct(\''+p.id+'\')">✎</button></td></tr>';
     }).join('')
-    : '<tr><td colspan="11" class="name mut">Sin productos. Añade uno o carga datos de ejemplo desde la pestaña Datos.</td></tr>'));
+    : '<tr><td colspan="12" class="name mut">Sin productos. Añade uno, o crea los que faltan desde el informe de listings activos, aquí abajo.</td></tr>'));
+  /* CARRIL 2 · listings, coste en bloque, familias y SKU sin coste. Vive en
+     src/21-catalogo.js para no abrir src/02-views.html, que es de todos. */
+  try{ if(typeof renderCatalogoExtra==='function') renderCatalogoExtra(); }catch(e){ console.warn('catalogo extra',e); }
   try{ renderLotes(); }catch(e){ console.warn('lotes',e); }
 }
 

@@ -157,7 +157,7 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('y sus 14 filas de datos, no 21 ni 1', carga.filas===14,
     carga.filas+' filas · con el preámbulo sin quitar, la cabecera era la línea 1 y el fichero entraba como UNA columna');
   check('el preproceso lo cuenta en vez de transformar en silencio',
-    /quitadas 7 líneas de preámbulo/.test(carga.nota), carga.nota||'ninguna nota');
+    /(quitadas|saltado) 7 líneas de preámbulo/.test(carga.nota), carga.nota||'ninguna nota');
   check('los decimales con coma se leen como números', near(carga.ventas, 100) && near(carga.com, -15),
     'ventas '+carga.ventas+' · tarifas de venta '+carga.com+' · «-15,00» no puede salir −1500 ni 0');
   check('las fechas «5 sep 2026 10:00:00 UTC» se leen', !!carga.fecha && /^\d{4}-\d{2}-\d{2}$/.test(carga.fecha),

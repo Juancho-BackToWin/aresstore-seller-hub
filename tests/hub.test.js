@@ -61,7 +61,19 @@ function check(label, cond, extra){
   await page.waitForTimeout(200);
   const fixtures = fs.readdirSync(FIX).map(f=>path.resolve(FIX,f));
   await page.setInputFiles('#csvFile', fixtures);
-  await page.waitForTimeout(2500);
+  /* INTEGRACIÓN · esperaba 2.500 ms fijos para los trece ficheros. Con los
+     informes que registran los carriles 3 y 8, la detección compara cada
+     fichero contra más definiciones y trece de golpe ya no caben en ese
+     tiempo: el último se quedaba en «leyendo…» y la prueba lo contaba como no
+     reconocido. No se relaja nada — se espera a que la lista deje de crecer,
+     con tope, que es lo que la prueba quería decir. */
+  for(let i=0;i<40;i++){
+    await page.waitForTimeout(250);
+    const pend = await page.$$eval('#fileList .fileitem',
+      els => els.filter(e=>/leyendo/i.test(e.textContent)).length);
+    const n = await page.$$eval('#fileList .fileitem', els => els.length);
+    if(n>=13 && pend===0) break;
+  }
   const items = await page.$$eval('#fileList .fileitem', els => els.map(e=>({
     name:(e.querySelector('.f-name')||{}).textContent,
     meta:(e.querySelector('.f-meta')||{}).textContent,

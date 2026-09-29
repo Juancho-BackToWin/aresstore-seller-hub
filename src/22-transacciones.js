@@ -124,7 +124,14 @@ function txQuitaPreambulo(txt){
           nota: 'quitadas '+cab+' líneas de preámbulo antes de la cabecera '+
                 '(la cabecera estaba en la línea '+(cab+1)+')'};
 }
-registrarPreproceso(txQuitaPreambulo, 'preámbulo del informe de transacciones');
+/* INTEGRACIÓN · RETIRADO. El preámbulo tiene un solo dueño: el importador
+   (carril 1, src/20-importador.js), que detecta la cabecera real y declara
+   cuántas líneas se salta. Con los dos preprocesos registrados actuaba primero
+   el del carril 1 y este se quedaba sin efecto, pero dos lectores del mismo
+   texto es una bomba de relojería: el día que cambie el orden de registro, el
+   fichero se lee dos veces y las filas se cuentan dos veces.
+   `txQuitaPreambulo` se conserva SIN registrar, como documentación del formato
+   y por si el importador deja de cubrirlo. */
 
 /* ── Fechas del informe ─────────────────────────────────────────────────────
    «17 dic 2023 22:37:41 UTC». `parseDate()` es del carril 6 y no lee meses

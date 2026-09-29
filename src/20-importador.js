@@ -72,7 +72,17 @@ function impHuellaFila(fila){
   for(let i=0;i<ks.length;i++){
     const v = fila[ks[i]];
     if(v==null || v==='') continue;                 // una celda vacía y una ausente son lo mismo
-    s += ks[i] + IMP_SEP_CAMPO + String(v) + IMP_SEP_FILA;
+    /* INTEGRACIÓN · un byte que no se pudo descodificar (U+FFFD) NO es
+       información. El mismo informe descargado dos veces, una con la
+       codificación rota, traía «Producto uno» y «Producto uno \uFFFD» y la fila
+       contaba DOS veces: la comisión salía 60,00 € donde son 45,00 €. Un
+       número redondo, creíble y falso. Se ignora ese carácter y el blanco que
+       deja, SOLO para decidir si dos filas son la misma; el valor que se
+       guarda no se toca. Lo fija tests/reclamaciones.test.js con la fixture
+       transacciones-fffd.csv. */
+    const t = String(v).replace(/\uFFFD/g,'').replace(/\s+/g,' ').trim();
+    if(t==='') continue;
+    s += ks[i] + IMP_SEP_CAMPO + t + IMP_SEP_FILA;
   }
   return impHash(s);
 }

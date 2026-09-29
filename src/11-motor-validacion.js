@@ -446,7 +446,21 @@ function verdict(e,payback,stress){
   ).join('');
 }
 
-/* ================= COMPARADOR PANEU ================= */
+/* ================= COMPARADOR PANEU =================
+
+   INTEGRACIÓN · el comparador pinta MERCADOS, y un país que el hub no puede
+   afirmar que exista no es un mercado. El carril 8 añadió Chequia a COUNTRIES
+   marcada `origen:'heredado'` y lo dejó escrito con todas las letras: el
+   encargo dice que es país de almacenaje PanEU, pero no aparece ni una vez en
+   los ficheros reales —ni venta, ni jurisdicción, ni traslado—. Está en la
+   lista para que Cumplimiento pueda avisar de un alta que quizá haga falta, no
+   para que el comparador la pinte como un mercado más con su divisa y su
+   columna, que es presentar como medido lo que es heredado.
+
+   Los países medidos o de base sí entran. Si algún día CZ se confirma —una
+   sola fila real basta—, cambia `origen` y entra sola, sin tocar esta línea. */
+const COMPARABLES = () => COUNTRIES.filter(c => c.origen !== 'heredado');
+
 function initCountryState(){
   const base=n('price'), monthly=n('monthly'), fba=n('fba');
   COUNTRIES.forEach(c=>{
@@ -463,7 +477,7 @@ function cSet(code,field,val){
 }
 function countryRows(){
   const i=inputs();
-  return COUNTRIES.map(c=>{
+  return COMPARABLES().map(c=>{
     const s=countryState[c.code];
     const li=(c.lowInv && i.lowInvEur)?i.lowInvEur:0;
     const per=Object.assign({},i,{fbaBase:s.fba, lowInvEur:li, vatAnnual:s.vatCost, monthly:s.units/12});
@@ -481,7 +495,7 @@ function renderCountryTable(){
     '<tr><th style="width:26px"></th><th>País</th><th class="num">Divisa</th><th class="num">IVA</th><th class="num">PVP</th>'+
     '<th class="num">FBA /ud</th><th class="num">ud/año</th><th class="num">Gestoría /año</th>'+
     '<th class="num">Benef./ud</th><th class="num">Margen</th><th class="num">Aporta /año</th></tr>'+
-    COUNTRIES.map(c=>{
+    COMPARABLES().map(c=>{
       const s=countryState[c.code];
       const inp=(f,st,v)=>'<input type="number" step="'+st+'" value="'+v+'" oninput="cSet(\''+c.code+'\',\''+f+'\',this.value)">';
       return '<tr id="crow-'+c.code+'">'+

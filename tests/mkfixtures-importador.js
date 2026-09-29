@@ -142,7 +142,13 @@ escribir('iva-b.txt', [IVA_H, IVA_1, IVA_2, IVA_3, IVA_4, IVA_5], {nl:'\r\n', bo
     '"Tarifas de otras transacciones: incluye reintegros de los cargos por envío."',
     '"Otro: incluye importes de transacciones distintas del pedido, consulta ""Tipo"" y ""Descripción""."'
   ];
-  const cab = ['"fecha y hora"','"identificador de pago"','"tipo"','"número de pedido"','"sku"',
+  /* INTEGRACIÓN · esta cabecera era la del informe de transacciones recortado,
+     y desde que el carril 3 registra ese informe el fichero SE RECONOCE, con
+     razón. Pero IMP-J vigila el preámbulo sobre un fichero que NO es ningún
+     informe conocido, así que «fecha y hora» pasa a «momento» y «tipo» a
+     «categoría»: sin los dos campos obligatorios de Transacciones vuelve a ser
+     desconocido y las dos exigencias de IMP-J quedan intactas. */
+  const cab = ['"momento"','"identificador de pago"','"categoría"','"número de pedido"','"sku"',
                '"descripción"','"cantidad"','"total"'];
   const fila = (f,id,tipo,ped,sku,desc,cant,total) =>
     ['"'+f+'"','"'+id+'"','"'+tipo+'"','"'+ped+'"','"'+sku+'"','"'+desc+'"','"'+cant+'"','"'+total+'"'];

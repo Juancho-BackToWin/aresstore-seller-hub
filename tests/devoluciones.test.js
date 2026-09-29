@@ -583,10 +583,27 @@ const js = body => '(()=>{' + FIXTURE + body + '})()';
   await page.waitForTimeout(400);
   const paisesLleno = await page.evaluate(()=>({
     filas: document.querySelectorAll('#countryTable tr').length,
+    comparables: COMPARABLES().length,
+    heredados: COUNTRIES.filter(c=>c.origen==='heredado').map(c=>c.code),
+    pintados: Array.from(document.querySelectorAll('#countryTable tr td:nth-child(2)'))
+                   .map(td=>td.textContent.trim()),
     veredicto: document.getElementById('countryVerdict').textContent.length
   }));
-  check('llena · el comparador pinta los nueve países + cabecera',
-    paisesLleno.filas===10, paisesLleno.filas+' filas');
+  /* INTEGRACIÓN · eran nueve países y ahora son más: el carril 8 añadió
+     Austria, Portugal y Eslovaquia, los tres MEDIDOS sobre los informes
+     reales. Clavar el número diez aquí obligaría a tocar esta prueba cada vez
+     que se confirme un mercado, así que se compara contra la lista que el
+     comparador dice pintar. Lo que sí se clava, porque es la decisión de la
+     integración: Chequia entró como HEREDADA —no aparece en ningún fichero
+     real— y un país que el hub no puede afirmar que exista no se pinta como
+     mercado. */
+  check('llena · el comparador pinta un país por fila comparable, más la cabecera',
+    paisesLleno.filas === paisesLleno.comparables + 1,
+    paisesLleno.filas+' filas para '+paisesLleno.comparables+' países comparables');
+  check('llena · y ningún país heredado se pinta como mercado',
+    paisesLleno.heredados.length>0 &&
+    paisesLleno.heredados.every(c=>!paisesLleno.pintados.some(n=>/chequia/i.test(n))),
+    'heredados fuera: '+paisesLleno.heredados.join(', ')+' · pintados: '+paisesLleno.pintados.join(', '));
   check('llena · y el veredicto dice algo', paisesLleno.veredicto>120, paisesLleno.veredicto+' caracteres');
 
   console.log('\n=== ERRORES DE JAVASCRIPT ===');

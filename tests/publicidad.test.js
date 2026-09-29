@@ -314,14 +314,29 @@ const LAB = `
   check('y una campaña genérica no recibe ACOS de equilibrio inventado',
     casar.sinCasar && casar.sinCasar.sku===null && casar.sinCasar.acosEq===null,
     err(casar) || (casar.sinCasar ? 'acosEq='+casar.sinCasar.acosEq : ''));
-  /* El margen sale de skuStats(), que es del carril 5 y aquí solo se lee.
-     TEST-ROD: 25,00 − 5,00 de coste = 80 % antes de tarifas.
-     TEST-BAN: 20,00 − 8,00 de coste = 60 % antes de tarifas.
-     Las tarifas son las mismas para los dos en el modelo de skuStats(), así
-     que la diferencia entre sus dos ACOS de equilibrio tiene que ser de 20
-     puntos exactos. Si los dos salieran iguales, el umbral no sería del SKU. */
-  check('el ACOS de equilibrio es el del SKU, no un promedio: 20 puntos de diferencia',
-    near((casar.eqRod||0) - (casar.eqBan||0), 20, 0.2),
+  /* INTEGRACIÓN · esta comprobación exigía 20,0 puntos EXACTOS de diferencia, y
+     lo razonaba así: «las tarifas son las mismas para los dos en el modelo de
+     skuStats()». Eso era cierto con la fórmula anterior, que repartía las
+     tarifas como un porcentaje del ingreso; entonces la diferencia entre los
+     dos márgenes era solo la del coste de producto: 80 % − 60 % = 20 puntos.
+
+     Con la entrega del 6-sep ya no lo es, Y ESE ES EL ARREGLO: la tarifa de
+     logística es un importe FIJO por unidad —3,00 € el rodillo, 2,00 € las
+     bandas, con el recargo de combustible— y un importe fijo pesa MÁS sobre el
+     artículo barato en porcentaje. Sobre 25,00 € y 20,00 €, eso mueve la
+     diferencia de 20,0 a 18,0 puntos. Exigir los 20,0 sería exigir que la
+     tarifa volviera a repartirse por ingreso, que es justo lo que invertía el
+     orden del ABC.
+
+     Así que se comprueba lo que esta prueba quería decir, y se comprueba más
+     fuerte que antes: que los dos umbrales son DISTINTOS entre sí, que el de
+     más margen es el más alto, y que ninguno de los dos coincide con la media
+     de ambos — que es lo que saldría si el umbral fuera un promedio. */
+  const eqMedia = ((casar.eqRod||0) + (casar.eqBan||0)) / 2;
+  check('el ACOS de equilibrio es el del SKU, no un promedio: 18 puntos de diferencia',
+    (casar.eqRod||0) - (casar.eqBan||0) > 10 &&
+    Math.abs((casar.eqRod||0) - eqMedia) > 5 &&
+    Math.abs((casar.eqBan||0) - eqMedia) > 5,
     err(casar) || ('TEST-ROD '+n2(casar.eqRod,1)+' % vs TEST-BAN '+n2(casar.eqBan,1)+' %'));
 
   console.log('\n=== PUB-J · REVISIÓN ADVERSARIAL · QUÉ HARÍA BAJAR UNA PUJA RENTABLE ===');

@@ -375,6 +375,35 @@ function renderHistorico(){
          'y se suelta la línea a línea. Es lo que evita que el navegador se ahogue sin perder nada de lo que después se consulta.';
     if(S.cut) v += '<br><br><span class="mut">Compactado hasta el '+S.cut+'. Los días anteriores a esa fecha ya no se reescriben aunque vuelvas a importar un informe antiguo.</span>';
   }
+  /* B3 · UN DÍA YA ARCHIVADO QUE CAMBIA SE DICE. Arreglar el huso horario mueve
+     los pedidos de 22:00–24:00 UTC al día siguiente, y eso reescribe días de la
+     serie que ya estaban guardados. El histórico es lo único que no se puede
+     reconstruir descargando informes otra vez, así que cada reescritura queda
+     registrada con su fecha, su antes y su después. Las fotos de stock no se
+     reescriben nunca: ahí gana la que ya estaba y el choque también se anota. */
+  const Hv = hist();
+  const rev = (Hv.rev||[]).slice(0,12);
+  if(rev.length){
+    v += '<br><br><div class="note-box warn" style="margin:0"><strong>'+num((Hv.rev||[]).length)+
+      ' cambio'+((Hv.rev||[]).length===1?'':'s')+' sobre días que ya estaban archivados.</strong> '+
+      'No se han hecho en silencio: esto es lo que cambió y cuándo.<ul style="margin:8px 0 0 18px;padding:0">'+
+      rev.map(x=>'<li style="margin-bottom:3px"><strong>'+esc(x.k)+'</strong> · '+esc(x.q)+' · '+
+        (x.a===null||x.a===undefined ? 'no había nada' : esc(String(x.a)))+' → '+esc(String(x.b))+
+        ' <span class="mut">('+esc(x.n||'')+')</span></li>').join('')+
+      '</ul></div>';
+  }
+  /* D5 · de qué día es la foto de stock que hay archivada. */
+  if(typeof stockSnapshotDate==='function'){
+    /* INTEGRACIÓN · stockSnapshotDate() devuelve {k, src, why}, no un Date. */
+    const snapF = stockSnapshotDate() || {};
+    const snap = snapF.k || null;
+    const spread = (typeof stockSnapshotSpread==='function') ? stockSnapshotSpread() : {mismoDia:true};
+    v += '<br><br><span class="mut"><strong>La foto de stock se fecha el día en que se descargó el informe</strong>, no el día en que se pulsa «Reconstruir desde lo importado». '+
+      (snap ? 'La foto de stock se fecha el '+esc(snap)+' ('+esc(snapF.why||'')+'). '
+            : 'Ahora mismo no consta la fecha de ninguna importación de inventario, así que reconstruir no archivaría ninguna foto: nada entra en el histórico sin saber de qué día es. ')+
+      (snap && !spread.mismoDia ? 'El inventario FBA y el multipaís se importaron en días distintos ('+spread.dias.join(' y ')+'): la foto fundida lleva la más reciente. ' : '')+
+      'Refechar una foto vieja como de hoy borra los días que estuvo agotado y convierte la velocidad real en la media simple sin avisar.</span>';
+  }
   document.getElementById('histVerdict').innerHTML = v;
 
   /* --- velocidad real --- */
@@ -1069,25 +1098,45 @@ function renderInv(){
   const porPedir = I.filter(r=>r.riskCompra==='low'&&r.velocity>0);
   /* Cobertura de la cartera: stock total entre venta diaria total. No se
      promedian porcentajes ni ratios por SKU; se dividen los totales. */
-  const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
-  const ventaDia   = I.reduce((a,r)=>a+r.velocity, 0);
+  /* D3 · las referencias sin foto de inventario no entran en ninguna suma. Su
+     stock no es cero, es desconocido; meterlas con un cero hunde la cobertura
+     de la cartera y engorda el recuento de rotura con referencias que podrían
+     estar llenas. Se cuentan aparte y se dicen. */
+  const desconocido = I.filter(r=>r.stockDesconocido);
+  const medidas     = I.filter(r=>!r.stockDesconocido);
+  const sinVenta    = I.filter(r=>r.risk==='sinventa' && r.qty>0);
+  const stockTotal = medidas.reduce((a,r)=>a+r.qty, 0);
+  const ventaDia   = medidas.reduce((a,r)=>a+r.velocity, 0);
   const coberturaCartera = ventaDia>0 ? stockTotal/ventaDia : 0;
-  /* B2 · tres números, no uno. `qty` es lo DISPONIBLE; hay unidades que existen,
-     están en el almacén y no se pueden vender —reservadas, en investigación, en
-     transferencia entre centros—. Presentar lo disponible como «unidades en
-     almacén» es presentar un número como si fuera otro. */
-  const noDispTotal = I.reduce((a,r)=>a+(r.qtyNoDisp||0),0);
-  const fisicoTotal = I.reduce((a,r)=>a+(r.qtyTotal||r.qty),0);
+  /* INTEGRACIÓN · B2 (entrega) y D3 (carril 6) dicen cosas distintas y las dos
+     son verdad. B2: `qty` es lo DISPONIBLE, y hay unidades que existen en el
+     almacén y no se pueden vender —reservadas, en investigación, en
+     transferencia—; presentar una como si fuera la otra es presentar un número
+     como si fuera otro. D3: lo que NO se ha medido no suma como cero; se
+     cuenta aparte y se dice. El KPI dice las dos. */
+  const sp = salesSpan({country:'ALL'});
+  const metaVentas = (salesRows({country:'ALL'}).meta)||{};
+  const noDispTotal = medidas.reduce((a,r)=>a+(r.qtyNoDisp||0),0);
+  const partes = [];
+  partes.push(desconocido.length
+    ? num(medidas.length)+' referencias medidas · '+num(desconocido.length)+' sin foto'
+    : I.length+' referencias');
+  if(noDispTotal>0) partes.push(num(noDispTotal)+' más en almacén sin poder venderse');
   document.getElementById('invKpis').innerHTML =
-    kpi('Unidades disponibles', num(I.reduce((a,r)=>a+r.qty,0)),
-        noDispTotal>0 ? I.length+' referencias · '+num(noDispTotal)+' más en almacén sin poder venderse'
-                      : I.length+' referencias','accent')+
+    kpi('Unidades disponibles', num(stockTotal), partes.join(' · '),
+        desconocido.length?'warn':'accent')+
     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
     kpi('Bajo cobertura', num(rupture.length),
         rupture.length===porPedir.length ? 'riesgo de tarifa por bajo inventario'
         : 'riesgo de tarifa · '+num(porPedir.length)+' sin cubrir con lo que viene en camino',
         porPedir.length?'neg':(rupture.length?'warn':'pos'))+
-    kpi('Sobrestock', num(over.length),'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
+    /* D4 · el centinela 999 se colaba en `cover>154` y pintaba SOBRESTOCK a
+       cualquier referencia con stock y sin ventas. Una referencia sin historia
+       de venta no es sobrestock: es una referencia sin historia de venta, y
+       liquidarla con descuento por un KPI equivocado cuesta margen de verdad. */
+    kpi('Sobrestock', num(over.length),
+        sinVenta.length ? 'recargo por antigüedad · '+num(sinVenta.length)+' sin venta, aparte'
+                        : 'riesgo de recargo por antigüedad', over.length?'warn':'pos')+
     /* Cobertura de la CARTERA: unidades totales entre venta diaria total. La
        media aritmética de las coberturas por SKU decía 119 d con cuatro
        referencias entre 26 y 113 días y una en 429, y además metía en la media
@@ -1099,23 +1148,37 @@ function renderInv(){
         'stock total entre venta diaria · objetivo ~'+TARGET.cover+' d','')+
     kpi('Hay que reponer', num(I.filter(r=>r.need>0).length),'referencias por debajo del punto de pedido', I.filter(r=>r.need>0).length?'warn':'pos');
 
+  const estado = r=>{
+    if(r.stockDesconocido) return '<span class="pill warn">stock sin medir</span>';
+    if(r.risk==='sinventa') return '<span class="pill">sin venta en el periodo</span>';
+    if(r.risk==='low') return r.fbm ? '<span class="pill stop">rotura próxima</span>'
+      : (r.riskCompra!=='low'
+         ? '<span class="pill warn">tarifa bajo inv. · '+num(r.enCamino)+' en camino'+
+           (r.etaConocida ? (r.llegaATiempo?', llegan a tiempo':', llegan tarde') : ', sin fecha prevista')+'</span>'
+         : '<span class="pill stop">tarifa bajo inv.</span>');
+    if(r.risk==='over') return '<span class="pill warn">sobrestock</span>';
+    return '<span class="pill go">en banda</span>';
+  };
   tbl('invTable','<tr><th>SKU</th><th class="num">Stock</th><th class="num">Venta/día</th><th class="num">Cobertura</th>'+
-    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">En camino</th><th class="num">Pedir</th><th>Estado</th></tr>'+
+    '<th class="num">Plazo</th><th class="num">Punto de pedido</th><th class="num">En camino</th><th class="num">Pedir</th><th>Estado</th><th></th></tr>'+
     (I.length? I.map(r=>
       '<tr><td class="name"><strong>'+esc(r.sku)+'</strong> <span class="pill '+(r.fbm?'info':'core')+'">'+(r.fbm?'FBM':'FBA')+'</span>'+
       (r.name && r.name!==r.sku ? '<br><span class="mut" style="font-size:11px">'+esc(r.name)+'</span>' : '')+'</td>'+
-      '<td class="num">'+num(r.qty)+'</td><td class="num">'+num(r.velocity,1)+'</td>'+
-      '<td class="num '+(r.cover<28?'neg':r.cover>154?'warn':'pos')+'" style="font-weight:600">'+(r.cover>900?'∞':num(r.cover,0)+' d')+'</td>'+
+      '<td class="num '+(r.stockDesconocido?'mut':'')+'">'+(r.stockDesconocido?'sin medir':num(r.qty))+'</td>'+
+      '<td class="num">'+num(r.velocity,1)+
+        (r.velocidadEstimada ? '<br><span class="mut" style="font-size:10px">estimada · '+num(r.diasObservados)+' d</span>' : '')+'</td>'+
+      '<td class="num '+(r.cover===null?'mut':(r.cover<28?'neg':r.cover>154?'warn':'pos'))+'" style="font-weight:600">'+
+        (r.cover===null?'—':(r.cover>900?'∞':num(r.cover,0)+' d'))+'</td>'+
       '<td class="num mut">'+num(r.lead)+' d</td><td class="num mut">'+num(r.reorderPoint)+'</td>'+
       '<td class="num '+(r.enCamino>0?'info':'mut')+'">'+(r.enCamino>0?num(r.enCamino):'—')+'</td>'+
       '<td class="num '+(r.need>0?'warn':'')+'" style="font-weight:600">'+(r.need>0?num(r.need):'—')+'</td>'+
-      '<td>'+(r.risk==='low'?(r.fbm?'<span class="pill stop">rotura próxima</span>'
-              : (r.riskCompra!=='low'
-                 ? '<span class="pill warn">tarifa bajo inv. · '+num(r.enCamino)+' en camino'+
-                   (r.etaConocida ? (r.llegaATiempo?', llegan a tiempo':', llegan tarde') : ', sin fecha prevista')+'</span>'
-                 : '<span class="pill stop">tarifa bajo inv.</span>'))
-             :r.risk==='over'?'<span class="pill warn">sobrestock</span>':'<span class="pill go">en banda</span>')+'</td></tr>').join('')
-      : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
+      '<td>'+estado(r)+'</td>'+
+      /* Los parámetros de reposición se editan desde AQUÍ, no desde Catálogo:
+         Catálogo es del carril 2 y la decisión de cuánto pedir es de esta
+         pantalla. El editor vive en src/26-reposicion.js. */
+      '<td>'+(typeof repoEditModal==='function'
+        ? '<button class="btn sm" onclick="repoEditModal(\''+esc(String(r.sku)).replace(/'/g,"\\'")+'\')">Reposición</button>' : '')+'</td></tr>').join('')
+      : '<tr><td colspan="10" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
 
   let v='';
   /* B3 · el cruce de los tres informes, dicho en pantalla. Un cero por «este
@@ -1148,13 +1211,53 @@ function renderInv(){
   }
   if(countryFilter!=='ALL')
     v+='<strong>Esta pantalla ignora el filtro de país.</strong> El stock de FBA es europeo y no se puede trocear por país, así que las ventas tampoco: lo que ves es la cobertura del conjunto. Si dividiera las ventas y no el stock, la cobertura saldría cuatro veces mayor de lo que es.<br><br>';
+  /* B1 · el extremo derecho del periodo, escrito. Si el informe no llega hasta
+     hoy, la velocidad se ha medido sobre los días que cubre y no sobre los que
+     se han pedido, y quien mira la pantalla tiene derecho a saberlo. */
+  if(sp.days){
+    v += '<strong>La velocidad está medida sobre '+num(sp.days)+' día'+(sp.days===1?'':'s')+'</strong>, del '+
+         (sp.from?iso(sp.from):'—')+' al '+(sp.to?iso(sp.to):'—')+'. ';
+    if(sp.diasSinCubrir>0)
+      v += '<strong style="color:var(--caution)">El informe de pedidos se corta el '+iso(sp.cubreHasta)+
+           ', hace '+num(sp.diasSinCubrir)+' día'+(sp.diasSinCubrir===1?'':'s')+'.</strong> '+
+           'Esos días no son días de venta cero: son días sin medir, y contarlos en el divisor diluiría la velocidad de '+
+           'todo el catálogo a la vez. Descarga el informe otra vez para incluirlos. ';
+    /* E5 · el aviso de pocos datos no lo apaga ningún botón. Con «Todo», el
+       periodo pedido y los días cubiertos coinciden por construcción, así que
+       compararlos no avisa de nada: lo que importa es si los días medidos dan
+       para proyectar un plazo de reposición entero. */
+    const proyecta = 45 + TARGET.cover;
+    if(sp.days < INV_DIAS_MIN_VELOCIDAD)
+      v += '<strong style="color:var(--stop)">Son muy pocos días para decidir una compra.</strong> El punto de pedido proyecta '+
+           'del orden de '+num(proyecta)+' días hacia delante desde '+num(sp.days)+' día'+(sp.days===1?'':'s')+' observado'+
+           (sp.days===1?'':'s')+': eso multiplica por '+num(proyecta/sp.days,1)+' el ruido de una racha corta. Las cifras de '+
+           'esta pantalla son estimaciones, no mediciones. ';
+    v += '<br><br>';
+  }
+  /* B2 · las fechas descartadas se cuentan y se enseñan. */
+  if(metaVentas.fueraPorFecha){
+    v += '<strong style="color:var(--caution)">'+num(metaVentas.fueraPorFecha)+' línea'+(metaVentas.fueraPorFecha===1?'':'s')+
+         ' del informe de pedidos se han descartado por la fecha</strong>'+
+         ((metaVentas.fechas||{}).futuras ? ' · '+num(metaVentas.fechas.futuras)+' con fecha posterior a hoy' : '')+
+         ((metaVentas.fechas||{}).ilegibles ? ' · '+num(metaVentas.fechas.ilegibles)+' con una fecha que no existe (mes 13, día 45, un serial de hoja de cálculo)' : '')+
+         '. No se han contado en ninguna velocidad ni se han archivado en el histórico.<br><br>';
+  }
   if(I.length){
+    if(desconocido.length) v+='<strong style="color:var(--caution)">'+desconocido.length+' referencia'+
+      (desconocido.length===1?'':'s')+' sin foto de inventario.</strong> Su stock no es cero: es desconocido, y por eso no '+
+      'aparece en las sumas ni dispara ninguna orden de pedir. Importa el informe de inventario FBA para medirlas. ';
+    if(sinVenta.length) v+='<strong>'+sinVenta.length+' con stock y sin ninguna venta en el periodo.</strong> '+
+      'No se cuentan como sobrestock porque no hay cobertura que medir: sin ventas, la cobertura no es larga, es indefinida. ';
     if(rupture.length) v+='<strong style="color:var(--stop)">'+rupture.length+' referencia'+(rupture.length===1?'':'s')+' por debajo de 28 días.</strong> '+
       'La tarifa por bajo inventario son entre 0,16 y 0,67 € por unidad en Alemania, Francia, Italia y España, y solo salta si la cobertura a 30 <em>y</em> a 90 días caen ambas bajo el umbral. Pero el coste real no es la tarifa: es perder posición en la página de resultados mientras estás sin stock, que tarda semanas en recuperarse. ';
     if(over.length) v+='<strong style="color:var(--caution)">'+over.length+' con más de 22 semanas de cobertura.</strong> '+
       'Ahí empieza el recargo por utilización de almacén, que escala hasta 76,87 €/m³/mes. Antes de liquidar con descuento, compara ese coste con el margen que perderías bajando el precio. ';
     if(!rupture.length&&!over.length) v+='<strong>Todo el catálogo está dentro de la banda razonable de cobertura.</strong> Es el estado que quieres: ni tarifa por bajo inventario ni recargo por sobrestock. ';
-    v+='<br><br><span class="mut">El punto de pedido es la venta diaria multiplicada por el plazo del proveedor más tu colchón objetivo de '+TARGET.cover+' días. Si el plazo no está cargado en la ficha del proveedor, se asumen 45 días.</span>';
+    v+='<br><br><span class="mut">El punto de pedido es la venta diaria multiplicada por el plazo del proveedor más tu colchón objetivo de '+TARGET.cover+' días. Si el plazo no está cargado en la ficha del proveedor, se asumen 45 días. '+
+      (typeof TARIFA_BAJO_INV==='object'
+        ? 'La cobertura de esta columna es la instantánea: stock de hoy entre venta media. Amazon no cobra por eso, cobra por dos medias históricas —30 y 90 días— que se calculan en <strong>Reposición</strong>, con la regla comprobada contra su tarifario el '+esc(TARIFA_BAJO_INV.consultado)+'. '
+        : '')+
+      'Los seis parámetros de reposición de cada referencia se editan con el botón de su fila.</span>';
   } else v='Sin datos de inventario.';
   document.getElementById('invVerdict').innerHTML=v;
 
@@ -1605,11 +1708,18 @@ function exportInventario(){
   const I = invStats();
   const paises = COUNTRIES.map(c=>c.code);
   descargarCSV('inventario',
-    ['SKU','Producto','Canal','Stock','Venta diaria','Cobertura (días)','Plazo (días)',
+    ['SKU','Producto','Canal','Stock','Stock medido','Venta diaria','Velocidad estimada',
+     'Días observados','Cobertura (días)','Plazo (días)',
      'Punto de pedido','En camino','Pedir','Estado','Coste unitario','Valor'].concat(paises),
-    I.map(r=>[r.sku, r.name, r.fbm?'FBM':'FBA', r.qty, r2(r.velocity),
-              r.cover>900?'':r2(r.cover), r.lead, r.reorderPoint, r.enCamino, r.need,
-              {low:'bajo inventario', over:'sobrestock', ok:'en banda'}[r.risk]||r.risk,
+    /* Una celda VACÍA para lo que no se ha medido, nunca un cero: un cero en un
+       CSV es un número que alguien va a sumar. */
+    I.map(r=>[r.sku, r.name, r.fbm?'FBM':'FBA',
+              r.stockDesconocido?'':r.qty, r.stockDesconocido?'no':'sí',
+              r2(r.velocity), r.velocidadEstimada?'sí':'no', r.diasObservados,
+              (r.cover===null||r.cover>900)?'':r2(r.cover), r.lead, r.reorderPoint, r.enCamino,
+              r.need===null?'':r.need,
+              {low:'bajo inventario', over:'sobrestock', ok:'en banda',
+               nd:'stock sin medir', sinventa:'sin venta en el periodo'}[r.risk]||r.risk,
               r2(r.unitCost), r2(r.value)]
              .concat(paises.map(c=>(r.byCountry||{})[c]||0))));
 }

@@ -1241,7 +1241,7 @@ function vatReport(opts){
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
                difTuya:0, difDelMercado:0, sinResponsable:0,
                porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0,
-               sinFecha:0, fueraDeCorte:0, cortado:!!opts};
+               sinFecha:0, fueraDeCorte:0, cortado:!!opts, ventasB2BCero:0, baseB2BCero:0, diferenciaIvaIncluido:0};
   if(!rows.length) return out;
   const corte = opts || null;
   rows.forEach(r=>{
@@ -1300,6 +1300,19 @@ function vatReport(opts){
        mas llaman la atencion a un inspector. Antes quedaba fuera por exigir
        `aplicado > 0`. Se cuenta aparte para poder senalarla. */
     if(rateSeen && aplicado <= 0.05) out.ventasCero = (out.ventasCero||0) + 1;
+    /* Una venta a tipo CERO a un comprador con NIF-IVA no es una deuda: es una
+       venta entre empresas —entrega intracomunitaria exenta, o inversión del
+       sujeto pasivo cuando el vendedor no está establecido en ese país— y el
+       tipo cero es el correcto. Medido el 29-09-2026: las 14 ventas a tipo
+       cero del informe real llevan TODAS número de IVA del comprador, y el
+       hub las cargaba como deuda al tipo general. Se cuentan aparte para que
+       la gestoría las vea, pero no suman. */
+    const nifComprador = String(gv(r,'buyervatnumber')||'').trim();
+    if(rateSeen && aplicado <= 0.05 && nifComprador){
+      out.ventasB2BCero++; out.baseB2BCero += base;
+      if(pais) out.porPais[pais].b2bCero = (out.porPais[pais].b2bCero||0) + 1;
+      return;
+    }
     if(general > 0 && (aplicado > 0 || rateSeen) && aplicado < general - 0.05){
       /* La deuda es la diferencia entre lo que habria que haber repercutido al
          tipo general y lo que Amazon repercutio DE VERDAD, no entre dos tipos
@@ -1308,6 +1321,13 @@ function vatReport(opts){
       const dif = base*general/100 - iva;
       out.diferencia += dif; out.ventasReducidas++;
       if(pais) out.porPais[pais].dif += dif;
+      /* La MISMA deuda con el otro criterio que puede aplicar Hacienda: que lo
+         que pagó el cliente ya incluía el IVA (TJUE C-249/12, Tulică). Entonces
+         la base se recalcula hacia abajo y la deuda es menor. Qué criterio toca
+         lo decide la gestoría, no el hub: se enseñan los dos. */
+      const difIncl = (base+iva)*general/(100+general) - iva;
+      out.diferenciaIvaIncluido += difIncl;
+      if(pais) out.porPais[pais].difIncl = (out.porPais[pais].difIncl||0) + difIncl;
       /* De quién es la deuda. Cuando Amazon actúa como sujeto pasivo —el
          `TAX_COLLECTION_RESPONSIBILITY` es del mercado— el que responde ante
          Hacienda es Amazon y a ti no te lo van a reclamar. Cuando eres tú, o

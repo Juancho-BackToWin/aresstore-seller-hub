@@ -266,7 +266,7 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
   const Fj = await page.evaluate(()=>{
     const V = vatReport();
     return {ventas:V.ventas, base:+V.base.toFixed(2), dif:+V.diferencia.toFixed(2),
-            cero:V.ventasCero||0, sinJuris:V.sinJuris,
+            cero:V.ventasCero||0, sinJuris:V.sinJuris, incl:+(V.diferenciaIvaIncluido||0).toFixed(2),
             paises:Object.keys(V.porPais).sort(),
             porPais:Object.keys(V.porPais).reduce((a,k)=>{a[k]=+V.porPais[k].dif.toFixed(2);return a;},{})};
   });
@@ -279,6 +279,37 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
     Fj.sinJuris===1 && Fj.paises.join(',')==='AT,ES,PL,PT', Fj.paises.join(', ')+' · sin país: '+Fj.sinJuris);
   check('y la diferencia total son 66,00 €', near(Fj.dif, 66, 0.02),
     Fj.dif+' € sobre '+Fj.base+' € de base en '+Fj.ventas+' ventas');
+  /* El otro criterio, el de precio con IVA incluido: (base + iva) × g/(100+g) − iva.
+       PT (100 + 6) × 23/123 −  6 = 13,8211
+       PL (100 + 5) × 23/123 −  5 = 14,6341
+       AT (100 + 10) × 20/120 − 10 =  8,3333
+       ES (100 + 0) × 21/121 −  0 = 17,3554
+       total                        = 54,1440  →  54,14 € */
+  check('y con el criterio de precio con IVA incluido, 54,14 €', near(Fj.incl, 54.14, 0.02),
+    Fj.incl+' €' + (near(Fj.incl,Fj.dif,0.02) ? '  ← sale igual que el otro criterio' : ''));
+
+  console.log('\n=== FIS-G · TIPO CERO A UNA EMPRESA CON NIF-IVA NO ES DEUDA ===');
+  /* Medido el 29-09-2026: las 14 ventas a tipo cero del informe real llevan
+     TODAS `BUYER_VAT_NUMBER`. Son ventas entre empresas —entrega
+     intracomunitaria exenta, o inversión del sujeto pasivo— y el cero es el
+     tipo correcto. El hub las cargaba como deuda al tipo general.
+     Aritmética: las dos ventas españolas a cero de la fixture son
+     50,00 × 21 / 100 = 10,50 € cada una. Con NIF del comprador la deuda baja
+     de 66,00 a 66,00 − 21,00 = 45,00 €, y España se queda en 0,00 €. */
+  const G = await page.evaluate(()=>{
+    DB.imports.vat.rows.forEach(r=>{
+      const j = String(r.taxablejurisdiction||r._juris||'').toUpperCase();
+      const t = parseFloat(r.priceofitemsvatratepercent||r._rate||'1');
+      if(j==='SPAIN' && t===0) r.buyervatnumber = 'PT999999990';
+    });
+    const V = vatReport();
+    return {dif:+V.diferencia.toFixed(2), es:+((V.porPais.ES||{}).dif||0).toFixed(2),
+            b2b:V.ventasB2BCero, cero:V.ventasCero};
+  });
+  check('con NIF del comprador, la venta a tipo cero no suma deuda', near(G.dif, 45, 0.02),
+    G.dif+' €' + (near(G.dif,66,0.02) ? '  ← cuenta como deuda una venta entre empresas' : ''));
+  check('España se queda sin deuda y las dos ventas se cuentan aparte',
+    near(G.es, 0, 0.005) && G.b2b===2 && G.cero===2, 'ES '+G.es+' € · B2B a cero: '+G.b2b+' · a cero: '+G.cero);
 
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));

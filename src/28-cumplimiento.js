@@ -436,6 +436,8 @@ function cumplDossierFilas(){
       tiposAplicados: tipos.join(' / ') || '—',
       tipoGeneral: (VAT_GENERAL[code]!=null ? VAT_GENERAL[code]+' %' : 'no consta'),
       difReducido: r2(P.dif),
+      difIvaIncluido: r2(P.difIncl||0),
+      b2bCero: P.b2bCero||0,
       registroIva: st ? (st.vatNum || 'no anotado') : 'no anotado',
       registroEpr: st ? (st.eprNum || 'no anotado') : 'no anotado',
       estado: st ? st.etiqueta : 'país fuera de la lista'
@@ -452,9 +454,11 @@ function exportarDossierGestoria(){
   }
   const cab = ['País','Nombre','Periodos del informe','Ventas','Base imponible','IVA repercutido',
                'Tipos aplicados %','Tipo general %','Diferencia por tipo reducido',
+               'Diferencia si el precio incluía IVA','Ventas B2B a tipo cero (no son deuda)',
                'NIF-IVA anotado','Registro EPR anotado','Estado en el hub'];
   const filas = D.filas.map(f=>[f.pais, f.nombre, f.periodos, f.ventas, f.base, f.iva,
                                 f.tiposAplicados, f.tipoGeneral, f.difReducido,
+                                f.difIvaIncluido, f.b2bCero,
                                 f.registroIva, f.registroEpr, f.estado]);
   /* El aviso va DENTRO del fichero, no solo en la pantalla. Un CSV se reenvía
      por correo y llega sin la pantalla detrás. */

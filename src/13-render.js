@@ -712,6 +712,11 @@ function renderRent(){
         (cods.length?'<br>Código fiscal de producto en el informe: <strong>'+cods.join(', ')+'</strong>. '+
           'Si tus productos no son lo que dice ese código, el tipo reducido no les toca y la diferencia es una deuda, no un ahorro.':'')+
         (V.difDelMercado>0?'<br>De esa diferencia, '+fmt(V.difDelMercado,2)+' responde Amazon como sujeto pasivo y no te la van a reclamar a ti.':'')+
+        (V.diferenciaIvaIncluido>0?'<br>Esa cifra supone que la base de cada venta era la correcta. Si la gestoría '+
+          'aplica el criterio de que el precio pagado ya incluía el IVA, la diferencia sería '+
+          '<strong>'+fmt(V.diferenciaIvaIncluido,2)+'</strong>. Cuál toca lo decide ella: el hub resta la primera, que es la prudente.':'')+
+        (V.ventasB2BCero>0?'<br>'+num(V.ventasB2BCero)+' venta'+(V.ventasB2BCero===1?'':'s')+' a tipo cero a empresas con NIF-IVA '+
+          '(entrega intracomunitaria o inversión del sujeto pasivo) no cuenta'+(V.ventasB2BCero===1?'':'n')+' como deuda.':'')+
         (V.sinResponsable>0?'<br>En '+num(V.sinResponsable)+' ventas el informe no dice quién responde, así que las cargo a tu cuenta: equivocarme por ahí es más barato que enseñarte un margen que no tienes.':'')+
         '<br>Esto no es un fallo de cálculo del hub. Es una deuda fiscal real que el hub no veía, y por eso los márgenes de antes eran optimistas.';
     }

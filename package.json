@@ -22,7 +22,9 @@
     "test:ivafiscal": "node tests/ivafiscal.test.js",
     "test:privacidad": "node tests/privacidad.test.js",
     "test:salida": "node tests/salida.test.js",
-    "test:iva": "node tests/iva.test.js"
+    "test:iva": "node tests/iva.test.js",
+    "test:coherencia": "node tests/coherencia.test.js",
+    "test:sesionb": "node tests/sesionb.test.js"
   },
   "devDependencies": {
     "playwright": "^1.62.1"

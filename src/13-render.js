@@ -1027,8 +1027,16 @@ function renderInv(){
   const stockTotal = I.reduce((a,r)=>a+r.qty, 0);
   const ventaDia   = I.reduce((a,r)=>a+r.velocity, 0);
   const coberturaCartera = ventaDia>0 ? stockTotal/ventaDia : 0;
+  /* B2 · tres números, no uno. `qty` es lo DISPONIBLE; hay unidades que existen,
+     están en el almacén y no se pueden vender —reservadas, en investigación, en
+     transferencia entre centros—. Presentar lo disponible como «unidades en
+     almacén» es presentar un número como si fuera otro. */
+  const noDispTotal = I.reduce((a,r)=>a+(r.qtyNoDisp||0),0);
+  const fisicoTotal = I.reduce((a,r)=>a+(r.qtyTotal||r.qty),0);
   document.getElementById('invKpis').innerHTML =
-    kpi('Unidades en almacén', num(I.reduce((a,r)=>a+r.qty,0)), I.length+' referencias','accent')+
+    kpi('Unidades disponibles', num(I.reduce((a,r)=>a+r.qty,0)),
+        noDispTotal>0 ? I.length+' referencias · '+num(noDispTotal)+' más en almacén sin poder venderse'
+                      : I.length+' referencias','accent')+
     kpi('Capital inmovilizado', fmt(value,0),'a coste puesto en almacén','')+
     kpi('Bajo cobertura', num(rupture.length),
         rupture.length===porPedir.length ? 'riesgo de tarifa por bajo inventario'
@@ -1065,6 +1073,34 @@ function renderInv(){
       : '<tr><td colspan="9" class="name mut">Importa el informe de inventario FBA y el de pedidos para calcular cobertura.</td></tr>'));
 
   let v='';
+  /* B3 · el cruce de los tres informes, dicho en pantalla. Un cero por «este
+     informe no trae el SKU» es indistinguible de un cero por «no queda stock»,
+     y ese cero se archiva en el histórico de forma irreversible. */
+  const C = (typeof stockCruce==='function') ? stockCruce() : null;
+  if(C && C.hayGestion && C.hayMulti){
+    const paises = Object.keys(C.porPais).sort((a,b)=>C.porPais[b]-C.porPais[a])
+                     .map(k=>k+' '+num(C.porPais[k])).join(' · ');
+    v += '<div class="note-box'+(C.soloMulti.length?' warn':'')+'" style="margin:0 0 12px">'+
+      '<strong>Los tres informes de inventario no dicen lo mismo, y no se promedian.</strong><br>'+
+      'Gestión de inventario FBA: <strong>'+num(C.skusGestion)+'</strong> referencias · '+
+      num(C.totDisp)+' disponibles + '+num(C.totNoDisp)+' presentes sin poder venderse = <strong>'+
+      num(C.totGestion)+'</strong> en almacén.<br>'+
+      'Inventario multipaís: <strong>'+num(C.skusMulti)+'</strong> referencias · <strong>'+
+      num(C.totMulti)+'</strong> unidades' + (paises? ' · '+paises : '') + '.<br>' +
+      (C.soloMulti.length
+        ? '<strong style="color:var(--caution)">'+C.soloMulti.length+' referencia'+
+          (C.soloMulti.length===1?'':'s')+' ('+num(C.ausentes)+' unidades, '+
+          (C.totMulti>0?num(C.ausentes/C.totMulti*100,0):'0')+' % del stock) NO vienen en el informe de gestión</strong>: '+
+          C.soloMulti.map(f=>esc(f.sku)).join(', ')+'. '+
+          'No es que no tengan stock: es que ese informe no las trae. El hub las cuenta con lo que declara el multipaís '+
+          'y NO archiva un cero para ellas, porque en el histórico un cero significa rotura y eso no se corrige reimportando. '+
+          'Mira en Seller Central por qué faltan antes de dar por buena ninguna cifra de inventario.'
+        : 'Las mismas referencias en los dos informes.') +
+      (Math.abs(C.descuadre)>0.5
+        ? '<br><span class="mut">Quedan '+num(Math.abs(C.descuadre))+' unidades sin explicar entre los dos informes.</span>'
+        : '') +
+      '</div>';
+  }
   if(countryFilter!=='ALL')
     v+='<strong>Esta pantalla ignora el filtro de país.</strong> El stock de FBA es europeo y no se puede trocear por país, así que las ventas tampoco: lo que ves es la cobertura del conjunto. Si dividiera las ventas y no el stock, la cobertura saldría cuatro veces mayor de lo que es.<br><br>';
   if(I.length){
@@ -1658,6 +1694,11 @@ function loadDemo(){
   DB.settings.cash={start:8400,cycle:14,reserve:15,vat:21,ppcDaily:0};
   /* El ejemplo también alimenta el histórico: si no, M0 parecería vacío justo
      cuando alguien está recorriendo los módulos para entender qué hace cada uno. */
+  /* B1 · la foto de stock ya no se sella con el día de hoy por defecto: sin
+     fecha del informe, `captureStock()` se niega a archivar. Los datos de
+     ejemplo se generan AHORA MISMO, así que su foto sí es de hoy, y eso se
+     dice aquí explícitamente en vez de que el motor lo suponga. */
+  DB.settings.stockDate = iso(today());
   try{ logImport('orders','Todos los pedidos',orders.length,'demo-all-orders.csv','datos de ejemplo'); captureAll(); }catch(e){}
   saveDB(); bootValues(); refreshAll();
   toast('Datos de ejemplo cargados. Recorre los módulos y luego vacíalos para meter los tuyos.');

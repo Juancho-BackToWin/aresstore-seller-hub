@@ -38,8 +38,27 @@ const MKT_MAP = {
   'amazon.nl':'NL','amazon.com.be':'BE','amazon.ie':'IE','amazon.se':'SE',
   'germany':'DE','france':'FR','italy':'IT','spain':'ES','poland':'PL',
   'netherlands':'NL','belgium':'BE','ireland':'IE','sweden':'SE',
-  'de':'DE','fr':'FR','it':'IT','es':'ES','pl':'PL','nl':'NL','be':'BE','ie':'IE','se':'SE'
+  'de':'DE','fr':'FR','it':'IT','es':'ES','pl':'PL','nl':'NL','be':'BE','ie':'IE','se':'SE',
+  /* El informe de IVA escribe el nombre COMPLETO del pais en
+     TAXABLE_JURISDICTION: SPAIN, GERMANY, PORTUGAL, POLAND... Cortar por las
+     dos primeras letras daba SP, GE, y PO para Portugal Y Polonia a la vez, y
+     ninguno encontraba su tipo general: la diferencia salia cero justo en el
+     pais que mas pesa. */
+  'austria':'AT','portugal':'PT','at':'AT','pt':'PT',
+  'amazon.at':'AT','amazon.pt':'PT','amazon.co.uk':'GB',
+  'united kingdom':'GB','great britain':'GB','uk':'GB','gb':'GB'
 };
+/* Un nombre de jurisdiccion -> codigo ISO, o null si no se reconoce.
+   Devolver null y que quien llame lo diga es preferible a devolver un codigo
+   inventado: un cero por no reconocer el pais es indistinguible de un cero
+   por no haber deuda. */
+function paisDeJuris(v){
+  const s = String(v==null?'':v).trim().toLowerCase();
+  if(!s) return null;
+  if(MKT_MAP[s]) return MKT_MAP[s];
+  if(/^[a-z]{2}$/.test(s)) return s.toUpperCase();
+  return null;
+}
 
 const FUEL = 1.015;                 // recargo de combustible sobre logística FBA
 const STORAGE_LOW = 27.54, STORAGE_HIGH = 52.20;   // €/m³/mes standard

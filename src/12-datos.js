@@ -304,7 +304,11 @@ const REPORTS = [
      _date:{req:1, type:'date', alias:[/returndate/,/fecha.*devoluci/,/^fecha/]},
      _sku :{req:1, type:'code', alias:[/^sku$/,/sellersku/,/referencia/]},
      _qty :{req:0, type:'int',  alias:[/quantity/,/cantidad/,/unidades/]},
-     _disp:{req:0, type:null,   alias:[/detaileddisposition/,/disposicion/,/estado/]}
+     _disp:{req:0, type:null,   alias:[/detaileddisposition/,/disposicion/,/estado/]},
+     /* B4 · el motivo es la senal de negocio: doce de catorce por talla no es
+        un problema de calidad, es una guia de tallas. Viene en MAYUSCULAS
+        (`JEWELRY_TOO_SMALL`), como `detailed-disposition`. */
+     _reason:{req:0, type:null, alias:[/^reason$/,/motivo/,/razon/]}
    },
    sig:P => P.has.orderId && P.has.date && P.cols<=18 && P.n.int>=1},
 
@@ -651,13 +655,54 @@ function saveImport(rep, headers, rows, map, fileName, el, how){
   let hnote = '';
   if(hg){
     if(hg.orders && hg.orders.days) hnote = ' · <span class="pos">histórico: '+num(hg.orders.days)+' día'+(hg.orders.days===1?'':'s')+'</span>';
-    else if(hg.stock && hg.stock.skus) hnote = ' · <span class="pos">foto de stock de '+num(hg.stock.skus)+' SKU</span>';
+    else if(hg.stock && hg.stock.skus) hnote = ' · <span class="pos">foto de stock de '+num(hg.stock.skus)+
+      ' SKU fechada el '+esc(hg.stock.fecha)+'</span>'+
+      (hg.stock.fuente==='planning' ? ' <span class="mut">(del informe)</span>' : ' <span class="mut">(la indicaste tú)</span>')+
+      (hg.stock.reescribe ? ' · <span class="warn">reescribe '+num(hg.stock.reescribe)+' foto(s) posteriores</span>' : '');
     else if(hg.fees && hg.fees.skus) hnote = ' · <span class="pos">tarifas de '+num(hg.fees.skus)+' SKU</span>';
   }
   if(el) el.innerHTML='<span class="f-dot ok"></span><span class="f-name">'+esc(fileName)+'</span>'+
     '<span class="f-meta">'+esc(rep.label)+' · reconocido por '+esc(how||'asignación manual')+hnote+'</span>'+
     '<span class="f-right"><strong>'+num(norm.length)+'</strong> filas · '+headers.length+' col.</span>';
+  /* B1 · la foto de stock NO se archiva sin la fecha del informe. Antes se
+     sellaba con `iso(today())`: un informe del 22 de agosto subido el 5 de
+     septiembre borraba catorce días de roturas reales del histórico, y eso no
+     se corrige reimportando. Así que aquí se pregunta, en la propia fila del
+     fichero, y hasta que no se conteste el histórico no se toca. */
+  if(el && hg && hg.stock && hg.stock.sinFecha) pedirFechaFoto(el, hg.stock.motivo);
   refreshAll();
+}
+/* Pregunta la fecha de la foto de stock y, con ella, archiva. */
+function pedirFechaFoto(el, motivo){
+  const w = document.createElement('div');
+  w.className = 'note-box warn';
+  w.style.margin = '6px 0 10px';
+  w.innerHTML = '<strong>No archivo esta foto de stock: no sé de qué día es.</strong><br>'+
+    esc(motivo||'')+'. Los informes de <em>Gestión de inventario</em> y de <em>Inventario multipaís</em> '+
+    'no traen ninguna columna de fecha, y sellarla con la de hoy borraría del histórico las roturas '+
+    'de los días intermedios — y eso no se arregla reimportando.<br>'+
+    '<label style="display:inline-flex;gap:8px;align-items:center;margin-top:8px">'+
+    '¿De qué día es el informe? <input type="date" class="inp" style="width:auto"></label> '+
+    '<button class="btn sm primary">Archivar la foto</button> '+
+    '<span class="mut" style="margin-left:8px">También puedes cargar el informe de <em>Salud del inventario</em>, '+
+    'que trae <code>snapshot-date</code>, y se coge de ahí.</span>';
+  const inp = w.querySelector('input'), btn = w.querySelector('button');
+  inp.max = iso(today());
+  btn.onclick = ()=>{
+    if(!inp.value){ toast('Pon la fecha del informe: sin ella el histórico se queda como está.'); return; }
+    if(!DB.settings) DB.settings = {};
+    DB.settings.stockDate = inp.value;
+    const r = captureStock();
+    saveDB();
+    if(r && r.sinFecha){ toast('Sigo sin poder archivarla: '+r.motivo); return; }
+    w.className = 'note-box';
+    w.innerHTML = '<strong>Foto de stock archivada con fecha '+esc(r.fecha)+'</strong> · '+
+      num(r.skus)+' referencias · '+num(r.disp)+' disponibles, '+num(r.noDisp)+
+      ' presentes sin poder venderse, '+num(r.total)+' en almacén.'+
+      (r.reescribe ? ' <span class="warn">Reescribe '+num(r.reescribe)+' foto(s) posteriores.</span>' : '');
+    refreshAll();
+  };
+  el.parentNode.insertBefore(w, el.nextSibling);
 }
 
 /* ---------- Asistente manual: se hace una vez y queda guardado ---------- */
@@ -865,20 +910,26 @@ function vatReport(){
   const rows = imp('vat');
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
                difTuya:0, difDelMercado:0, sinResponsable:0,
-               porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0};
+               porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0};
   if(!rows.length) return out;
   rows.forEach(r=>{
     const tipoTx = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
     /* Solo ventas. Devoluciones y ajustes tienen su propio signo y mezclarlos
        aquí daría un tipo medio que no es el de ninguna transacción. */
     if(tipoTx && tipoTx.indexOf('SALE')<0) return;
-    const pais = String(gv(r,'_juris','taxablejurisdiction','salearrivalcountry')||'').toUpperCase().slice(0,2);
+    /* `TAXABLE_JURISDICTION` trae el nombre COMPLETO del país, no el código
+       ISO. Cortar por las dos primeras letras daba `SP`, `GE`, y `PO` para
+       Portugal y Polonia a la vez: ninguno encontraba su tipo general y la
+       diferencia salía cero justo en el país que más pesa. */
+    const pais = paisDeJuris(gv(r,'_juris','taxablejurisdiction','salearrivalcountry'));
     const base = toNum(gv(r,'_base','totalpriceofitemsamtvatexcl','totalactivityvalueamtvatexcl'));
     const iva  = toNum(gv(r,'_vat','totalpriceofitemsvatamt','totalactivityvaluevatamt'));
     /* El tipo viene en fracción decimal: 0.1 es el 10 %. Un informe que lo
        trajera ya en porcentaje daría 1000 % al multiplicar, así que se
        distingue por el orden de magnitud en vez de confiar en el formato. */
-    let pct = toNum(gv(r,'_rate','priceofitemsvatratepercent','vatratepercent'));
+    const rateRaw = gv(r,'_rate','priceofitemsvatratepercent','vatratepercent');
+    const rateSeen = rateRaw !== undefined && rateRaw !== null && String(rateRaw).trim() !== '';
+    let pct = toNum(rateRaw);
     if(pct > 1) pct = pct/100;
     /* Y si no viene, se calcula del propio importe, que es más fiable que
        suponer. */
@@ -903,8 +954,16 @@ function vatReport(){
     if(oid){ const O = out.porPedido[oid] || (out.porPedido[oid] = {base:0, vat:0});
       O.base += base; O.vat += iva; }
 
-    if(general > 0 && aplicado > 0 && aplicado < general - 0.05){
-      const dif = base*(general-aplicado)/100;
+    /* Una venta a tipo CERO declarado tambien es una diferencia, y de las que
+       mas llaman la atencion a un inspector. Antes quedaba fuera por exigir
+       `aplicado > 0`. Se cuenta aparte para poder senalarla. */
+    if(rateSeen && aplicado <= 0.05) out.ventasCero = (out.ventasCero||0) + 1;
+    if(general > 0 && (aplicado > 0 || rateSeen) && aplicado < general - 0.05){
+      /* La deuda es la diferencia entre lo que habria que haber repercutido al
+         tipo general y lo que Amazon repercutio DE VERDAD, no entre dos tipos
+         nominales: el importe de cada linea viene ya redondeado al centimo y
+         restar tipos deja un residuo que no existe en ningun sitio. */
+      const dif = base*general/100 - iva;
       out.diferencia += dif; out.ventasReducidas++;
       if(pais) out.porPais[pais].dif += dif;
       /* De quién es la deuda. Cuando Amazon actúa como sujeto pasivo —el
@@ -1126,6 +1185,51 @@ function pnl(){
      seguridad, que es lo que permite auditar este número en vez de creérselo. */
   const cost = costOfSales(S);
   const cogs = cost.cogs, cogsKnown = cost.known;
+  /* ------------------------------------------------------------------
+     V2 · V3 · A1 · E1 · el desglose por SKU sale de AQUÍ, no de una
+     fórmula paralela.
+
+     `skuStats()` rehacía la cuenta con dos tasas planas —tarifas sobre
+     el ingreso, publicidad sobre el ingreso— y eso no es lo que cobra
+     Amazon: la tarifa de logística es un importe FIJO por unidad. Con
+     una tarifa por unidad repartida como porcentaje del ingreso, la
+     pieza cara paga varias veces lo que paga de verdad y la barata una
+     fracción. En un catálogo donde conviven las dos, eso INVIERTE el
+     orden del ABC, que es la pantalla con la que se decide qué producto
+     se empuja y cuál se mata.
+
+     Y las devoluciones y el IVA no repercutido no bajaban a ningún SKU:
+     se restaban del total y desaparecían de la tabla.
+
+     A partir de aquí, cada total que calcula esta función deja también
+     su parte en `SK[sku]`, y lo que NINGÚN SKU puede llevarse —gastos
+     fijos, reembolsos de Amazon— se declara en `noImputable` en vez de
+     desvanecerse. `tests/coherencia.test.js` vigila la propiedad que lo
+     cierra: la suma del desglose más lo no imputable es el beneficio
+     del P&L, al céntimo.
+     ------------------------------------------------------------------ */
+  const SK = {};
+  const skuDe = r => {
+    const k = String(r.sku);
+    return SK[k] || (SK[k] = {sku:k, units:0, revenue:0, tax:0, referral:0, fba:0,
+                              ship:0, storage:0, otherFee:0, cogs:0, ppc:0,
+                              returns:0, vat:0});
+  };
+  S.forEach(r=>{ const b=skuDe(r); b.units+=r.qty; b.revenue+=r.revenue; b.tax+=r.tax; });
+  /* Reparto proporcional con el residuo asignado, para que la suma sea el
+     total EXACTO y no «casi». Sin esto la coherencia se cumpliría por los
+     pelos de la coma flotante y un día dejaría de cumplirse sin que nadie
+     hubiera tocado nada. */
+  const reparte = (total, campo, pesoDe) => {
+    const ks = Object.keys(SK);
+    const T = ks.reduce((a,k)=>a+pesoDe(SK[k]),0);
+    if(!ks.length) return;
+    if(!(T>0)){ SK[ks[0]][campo] += total; return; }
+    let acc=0, mayor=ks[0];
+    ks.forEach(k=>{ const v = total*(pesoDe(SK[k])/T); SK[k][campo]+=v; acc+=v;
+      if(pesoDe(SK[k])>pesoDe(SK[mayor])) mayor=k; });
+    SK[mayor][campo] += total-acc;
+  };
   const sf = settlementFees();
   /* Está medido lo que la liquidación explica, no lo que la liquidación pesa.
      Antes bastaba con que hubiera filas en el periodo: con un fichero cuyas
@@ -1154,7 +1258,7 @@ function pnl(){
   S.forEach(r=>{
     const p=pm[String(r.sku).toLowerCase()];
     const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
-    if(isFbm){ fbmUnits+=r.qty; ship += (p?toNum(p.fbmShip):4.5)*r.qty; }
+    if(isFbm){ const e=(p?toNum(p.fbmShip):4.5)*r.qty; fbmUnits+=r.qty; ship += e; skuDe(r).ship += e; }
     else fbaUnits+=r.qty;
   });
   /* Tarifas estimadas de un subconjunto de ventas. Se usa para el periodo
@@ -1226,19 +1330,38 @@ function pnl(){
     return (t && t.pct>0) ? t.pct
          : (p && toNum(p.referral)>0 ? toNum(p.referral)/100 : 0.15);
   };
+  /* Devuelve además la FORMA del reparto por SKU. Cuando la liquidación mide
+     el total pero no lo desglosa, el tamaño lo pone la liquidación y la forma
+     la pone esta estimación: así el desglose no puede sumar otra cosa que el
+     total medido. */
   const estFees = rows => {
-    let ref=0, f=0;
+    let ref=0, f=0; const porSku={};
+    const dep = (k,c,v)=>{ const b=porSku[k]||(porSku[k]={referral:0,fba:0}); b[c]+=v; };
     rows.forEach(r=>{
       const k = String(r.sku).toLowerCase();
       const p = pm[k], t = tarifaDe(k, r.country);
       if(!t && (tarifas[k+'|*'] || (r.country && feeMultiTienda))) udsSinTarifaDeSuPais += r.qty;
       const pct = refPctOf(k, r.country);
       if(t && t.pct>0) udsConTarifa += r.qty;
-      ref += r.revenue*pct;
+      const rr = r.revenue*pct; ref += rr; dep(String(r.sku),'referral',rr);
       const isFbm = r.fbm!=null ? r.fbm : !!(p && p.channel==='FBM');
-      if(!isFbm) f += (t && t.fba>0 ? t.fba : (p?toNum(p.fba):3.2)*FUEL)*r.qty;
+      if(!isFbm){ const ff = (t && t.fba>0 ? t.fba : (p?toNum(p.fba):3.2)*FUEL)*r.qty;
+        f += ff; dep(String(r.sku),'fba',ff); }
     });
-    return {referral:ref, fba:f};
+    return {referral:ref, fba:f, porSku};
+  };
+  /* Vuelca una estimación por SKU tal cual (lo que la liquidación no cubre) o
+     reescalada al total medido (lo que sí cubre, pero sin desglosar). */
+  const vuelca = (est, campo, totalMedido) => {
+    const ks = Object.keys(est.porSku);
+    const suma = ks.reduce((a,k)=>a+est.porSku[k][campo],0);
+    if(totalMedido==null){ ks.forEach(k=>{ skuDe({sku:k})[campo] += est.porSku[k][campo]; }); return; }
+    if(!(suma>0)){ reparte(totalMedido, campo, b=>b.revenue); return; }
+    let acc=0, mayor=ks[0];
+    ks.forEach(k=>{ const v = totalMedido*(est.porSku[k][campo]/suma);
+      skuDe({sku:k})[campo] += v; acc+=v;
+      if(est.porSku[k][campo] > est.porSku[mayor][campo]) mayor=k; });
+    skuDe({sku:mayor})[campo] += totalMedido-acc;
   };
   if(hayLiquidacion){
     /* Amazon liquida cada 14 días, así que una liquidación cubre una quincena
@@ -1259,13 +1382,33 @@ function pnl(){
     referral = (refMedido ? sf.referral : estDentro.referral) + est.referral;
     fba      = (fbaMedido ? sf.fba      : estDentro.fba)      + est.fba;
     storage  = sf.storage; otherFee = sf.other;
+    vuelca(est,'referral',null);  vuelca(est,'fba',null);
+    vuelca(estDentro,'referral', refMedido ? sf.referral : null);
+    vuelca(estDentro,'fba',      fbaMedido ? sf.fba      : null);
     feeCoverPct = grossInc>0 ? cubierto/grossInc*100 : 100;
     if(!refMedido) feeCoverPct = 0;   // sin comisión medida, no hay nada medido que presumir
   } else {
     const est = estFees(S);
     referral = est.referral; fba = est.fba; storage = 0; otherFee = 0;
     feeCoverPct = 0;
+    vuelca(est,'referral',null); vuelca(est,'fba',null);
   }
+  /* El IVA del P&L no siempre es el que traen las filas. Cuando el informe no
+     declara `item-tax`, `taxBasis()` lo DEDUCE del tipo del país, y entonces
+     `net` no es la suma de (ingreso − IVA de la fila) de ningún SKU. Sin esta
+     línea el desglose se pasaba exactamente el IVA deducido y la tabla
+     enseñaba márgenes que el negocio no tiene. Lo que las filas sí declaran se
+     respeta; solo se reparte la diferencia. */
+  const taxFilas = Object.keys(SK).reduce((a,k)=>a+SK[k].tax,0);
+  const taxDeducido = tax - taxFilas;
+  if(Math.abs(taxDeducido) > 0.0001) reparte(taxDeducido, 'tax', b=>b.revenue);
+  /* Almacenaje y otras tarifas se reparten POR UNIDAD, no por ingreso. No es
+     exacto —el almacenaje va por volumen— pero por ingreso se repetiría
+     exactamente el error que hundía V2: cargar al artículo caro un coste que
+     no depende del precio. */
+  reparte(storage,  'storage',  b=>b.units);
+  reparte(otherFee, 'otherFee', b=>b.units);
+  Object.keys(cost.bySku||{}).forEach(k=>{ skuDe({sku:k}).cogs += cost.bySku[k].cogs||0; });
   const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
   /* De dónde sale ese gasto, que no es lo mismo y la pantalla lo tenía todo
      bajo la misma etiqueta:
@@ -1327,29 +1470,83 @@ function pnl(){
      compara en minúsculas, así que hace falta el índice. */
   const costeSku = {};
   Object.keys(cost.bySku||{}).forEach(k=>{ costeSku[k.toLowerCase()] = cost.bySku[k]; });
+  /* El informe de devoluciones escribe el SKU como le da la gana; el desglose
+     se indexa con el SKU tal cual lo escribe el informe de ventas. */
+  const skOrig = {}; Object.keys(SK).forEach(k=>{ skOrig[k.toLowerCase()] = k; });
   let retIngreso=0, retComision=0, retCoste=0, retVendibles=0, retSinEstado=0;
   /* Unidades que se cuentan pero NO se cobran, porque su SKU no vendió en el
      periodo. Antes el rótulo decía «N ud» sobre un importe de menos unidades. */
   let retDescartadas=0, retImputadas=0;
+  /* B4 · la devolución deja de depender de un umbral binario.
+
+     Antes: si el SKU no vendió NI UNA unidad en el periodo en pantalla, la
+     devolución entera se descartaba (`retDescartadas`); si vendió una, se
+     imputaba completa. El salto es discontinuo y arbitrario — la misma
+     devolución cuesta 0 € o cuesta todo según haya habido una venta más o una
+     menos—, y quien mira un mes flojo ve un coste de devoluciones de cero
+     mientras la mercancía vuelve al almacén igual.
+
+     Ahora la devolución se imputa SIEMPRE al periodo en que se produjo, y el
+     precio medio sale de la ventana más larga de la que haya datos, no solo de
+     lo que cae dentro del periodo en pantalla. Lo que no se puede saber —a qué
+     venta concreta corresponde— se sigue diciendo: `retFueraDePeriodo` cuenta
+     las que se cobran con el precio del histórico, y solo se descarta la
+     devolución de un SKU que no ha vendido NUNCA, que es la única de la que de
+     verdad no se sabe nada. */
+  const ventaHist = {};
+  salesRows({country:'ALL', from:new Date(0)}).forEach(r=>{
+    const k = String(r.sku).toLowerCase();
+    const h = ventaHist[k] || (ventaHist[k] = {rev:0, tax:0, units:0, paises:{}, pais:null});
+    h.rev += r.revenue; h.tax += r.tax; h.units += r.qty;
+    if(r.country){ const P3=h.paises; P3[r.country]=(P3[r.country]||0)+r.qty;
+      if(!h.pais || P3[r.country]>P3[h.pais]) h.pais=r.country; }
+  });
+  let retFueraDePeriodo = 0;
+  const retPorMotivo = {};
   retRows.forEach(r=>{
     const k = String(gv(r,'_sku','sku','sellersku')||'').toLowerCase();
     const qBruto = toNum(gv(r,'_qty','quantity'))||1;
-    const v = ventaSku[k];
-    if(!v || !v.units){ retDescartadas += qBruto; return; }  // no sé a qué venta corresponde
-    const q = qBruto * cuotaDe(k);
+    /* El motivo es la señal de negocio: la mayoría por talla no es un problema
+       de calidad, es una guía de tallas. Se cuenta siempre, aunque la
+       devolución no se pueda costear. */
+    const motivo = String(gv(r,'_reason','reason','motivo')||'SIN_MOTIVO').trim().toUpperCase();
+    retPorMotivo[motivo] = (retPorMotivo[motivo]||0) + qBruto;
+    let v = ventaSku[k], delHistorico = false;
+    if(!v || !v.units){ v = ventaHist[k]; delHistorico = true; }
+    if(!v || !v.units){ retDescartadas += qBruto; return; }  // nunca ha vendido: no sé nada
+    if(delHistorico) retFueraDePeriodo += qBruto;
+    const q = qBruto * (delHistorico ? 1 : cuotaDe(k));
     const p = pm[k];
     const netUd   = (v.rev - v.tax)/v.units;
     const grossUd = v.rev/v.units;
     const comUd = grossUd*refPctOf(k, v.pais);
     retImputadas += q;
-    retIngreso  += q*netUd;
-    retComision += q*(comUd - Math.min(5, 0.20*comUd));
+    const dIng = q*netUd, dCom = q*(comUd - Math.min(5, 0.20*comUd));
+    retIngreso  += dIng;
+    retComision += dCom;
+    let dCos = 0;
     const disp = String(gv(r,'_disp','detaileddisposition','disposicion','estado')||'').trim().toLowerCase();
     if(!disp) retSinEstado += q;
     if(disp==='sellable' || disp==='vendible'){
       retVendibles += q;
       const cb = costeSku[k];
-      if(cb && cb.units) retCoste += q*(cb.cogs/cb.units);
+      if(cb && cb.units) dCos = q*(cb.cogs/cb.units);
+      retCoste += dCos;
+    }
+    /* La devolución cae en el SKU que la tuvo. Antes se restaba del total y no
+       aparecía en ninguna fila de la tabla: la referencia con más devoluciones
+       salía tan rentable como si no tuviera ninguna.
+
+       Un SKU que solo aparece en devoluciones —vendió en otro periodo— no tiene
+       fila en el desglose todavía. Se le crea, con cero ventas y su coste de
+       devolución, en vez de dejar ese coste sin dueño: si no, la suma del
+       desglose dejaría de ser el beneficio del P&L, que es justo la propiedad
+       que vigila `tests/coherencia.test.js`. */
+    const ko = skOrig[k] || (skOrig[k] = String(gv(r,'_sku','sku','sellersku')||''));
+    if(ko){
+      if(!SK[ko]) SK[ko] = {sku:ko, units:0, revenue:0, tax:0, referral:0, fba:0, ship:0,
+                            storage:0, otherFee:0, cogs:0, ppc:0, returns:0, vat:0, soloDevolucion:true};
+      SK[ko].returns += dIng - dCom - dCos;
     }
   });
   const returnsCost = retIngreso - retComision - retCoste;
@@ -1359,7 +1556,26 @@ function pnl(){
      línea todos los márgenes salían optimistas en unos once puntos. */
   const vatShortfall = (tb.fiscal||{}).difTuya || 0;
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost - vatShortfall;
+  /* Publicidad e IVA no repercutido SE REPARTEN, y la pantalla tiene que
+     decirlo. No se pueden medir por SKU con los informes de hoy: el de PPC no
+     casa campaña con SKU de forma fiable y el de IVA no trae SKU en absoluto.
+     Repartirlos por ingreso declarando que es un reparto es honesto; dejarlos
+     fuera del desglose —que era lo que había— no lo era, porque hacía que la
+     tabla enseñara beneficios que el negocio no tiene. */
+  reparte(ppc,          'ppc', b=>b.revenue);
+  reparte(vatShortfall, 'vat', b=>b.revenue);
+  /* Lo que ningún SKU puede llevarse. Se declara; no se esconde. */
+  const noImputable = reimb - fixed;
+  const bySkuBreak = {};
+  Object.keys(SK).forEach(k=>{ const b=SK[k];
+    b.netRev = b.revenue - b.tax;
+    b.profit = b.netRev - b.referral - b.fba - b.ship - b.storage - b.otherFee
+             - b.cogs - b.ppc - b.returns - b.vat;
+    bySkuBreak[k] = b; });
   return {
+    bySku: bySkuBreak, noImputable, noImputableDetalle: {reimb, fixed},
+    repartidos: {ppc: ppc!==0, vat: vatShortfall!==0,
+                 storage: storage!==0, otherFee: otherFee!==0},
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
     vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall,
@@ -1374,6 +1590,7 @@ function pnl(){
     feeOtraDivisa, feeSinFba, feeSinTarifaPais: udsSinTarifaDeSuPais,
     returnsCost, retIngreso, retComision, retCoste, retVendibles, retSinEstado,
     retImputadas, retDescartadas, retRepartidas: countryFilter!=='ALL',
+    retFueraDePeriodo, retPorMotivo,
     periodDaysReal: daysInPeriod(), dataDays: salesSpan().days,
     cost, costMethod:cost.method, costBySku:cost.bySku, costQuality:cost.quality, costMeasuredPct:cost.measuredPct,
     measured, retUnits, retRate: units>0 ? retUnits/units*100 : 0,
@@ -1392,8 +1609,6 @@ function pnl(){
 /* Rentabilidad por SKU + clasificación ABC */
 function skuStats(){
   const S = salesRows(), pm = prodBySku(), P = pnl();
-  const feeRate = P.grossInc>0 ? (P.referral+P.fba+P.ship+P.storage+P.otherFee)/P.grossInc : 0.22;
-  const ppcRate = P.grossInc>0 ? P.ppc/P.grossInc : 0;
   const m={};
   S.forEach(r=>{
     const k=String(r.sku);
@@ -1401,6 +1616,13 @@ function skuStats(){
     m[k].units+=r.qty; m[k].revenue+=r.revenue; m[k].tax+=r.tax;
     if(r.country) m[k].countries[r.country]=(m[k].countries[r.country]||0)+r.qty;
   });
+  /* Un SKU que solo aparece en devoluciones no tiene ventas en el periodo, así
+     que no está en `m`. Tiene que salir en la tabla igual: su coste existe, y
+     si no sale, la suma del desglose deja de ser el beneficio del P&L. */
+  Object.keys(P.bySku||{}).forEach(k=>{ if(!m[k]){
+    const b = P.bySku[k];
+    m[k] = {sku:k, name:(pm[k.toLowerCase()]&&pm[k.toLowerCase()].name)||k,
+            units:b.units||0, revenue:b.revenue||0, tax:b.tax||0, countries:{}}; } });
   const rows = Object.keys(m).map(k=>{
     const x=m[k], p=pm[k.toLowerCase()];
     /* El IVA que se restó es el que traía cada pedido, no un 21 % clavado. Con
@@ -1410,13 +1632,18 @@ function skuStats(){
        mientras el español se llevaba la «A». Es la pantalla con la que se
        decide qué producto se empuja. */
     const netRev = x.revenue - x.tax;
-    /* El coste sale del mismo cálculo que el P&L, no de una fórmula paralela.
-       Dos maneras de calcular lo mismo es como los números dejan de cuadrar
-       entre pantallas, que es precisamente la queja que tiene la competencia. */
-    const cb = P.costBySku[k] || {cogs:0, units:0};
-    const cogs = cb.cogs || 0;
-    const profit = netRev - x.revenue*feeRate - x.revenue*ppcRate - cogs;
+    /* TODO el desglose sale del mismo cálculo que el P&L, no de una fórmula
+       paralela. Dos maneras de calcular lo mismo es como los números dejan de
+       cuadrar entre pantallas — y aquí no solo dejaban de cuadrar: la tabla se
+       pasaba y varias referencias cambiaban de clase ABC. La coherencia la
+       vigila `tests/coherencia.test.js`. */
+    const b = (P.bySku && P.bySku[k]) || {referral:0,fba:0,ship:0,storage:0,otherFee:0,
+                                          cogs:0,ppc:0,returns:0,vat:0,profit:netRev};
+    const cogs = b.cogs || 0;
+    const profit = b.profit;
     return Object.assign(x,{netRev, cogs, profit, hasCost:!!p,
+      referral:b.referral, fba:b.fba, ship:b.ship, storage:b.storage, otherFee:b.otherFee,
+      ppc:b.ppc, returns:b.returns, vat:b.vat,
       unitCost: x.units>0 ? cogs/x.units : 0,
       margin: netRev>0?profit/netRev*100:0, share:0, cum:0, abc:'C'});
   }).sort((a,b)=>b.profit-a.profit);
@@ -1450,25 +1677,20 @@ function invStats(){
   const sold={}; S.forEach(r=>sold[String(r.sku)]=(sold[String(r.sku)]||0)+r.qty);
   /* Días OBSERVADOS, no días pedidos: ver salesSpan(). */
   const days = Math.min(daysInPeriod(), salesSpan({country:'ALL'}).days || daysInPeriod());
-  const stock={}, byCountry={}, mcTotal={};
-  imp('inventory').forEach(r=>{
-    const k=gv(r,'_sku','sku','sellersku'); if(!k) return;
-    stock[k]=(stock[k]||0)+toNum(gv(r,'_qty','afnfulfillablequantity'));
-  });
-  imp('multicountry').forEach(r=>{
-    const k=gv(r,'_sku','sellersku','sku'), c=countryOf(gv(r,'_country','country')); if(!k) return;
-    if(!byCountry[k]) byCountry[k]={};
-    const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
-    if(c) byCountry[k][c]=(byCountry[k][c]||0)+q;
-    mcTotal[k]=(mcTotal[k]||0)+q;
-  });
-  /* Un SKU que solo aparece en el informe multipaís valía CERO unidades aquí y
-     en el histórico, mientras la tabla de países de la misma pantalla enseñaba
-     sus 1.400. Los lotes de coste ya hacían este respaldo; Inventario se quedó
-     fuera de aquella corrección. Solo cuando el SKU no viene en el informe de
-     inventario: sumar los dos contaría el mismo stock dos veces. */
-  Object.keys(mcTotal).forEach(k=>{ if(!(k in stock)) stock[k]=mcTotal[k]; });
-  if(!Object.keys(stock).length) imp('planning').forEach(r=>{ if(r.sku) stock[r.sku]=toNum(r.available); });
+  /* El stock sale del CRUCE de los tres informes, no de uno solo. El de
+     gestión no trae el catálogo completo —le faltan referencias y unidades en
+     el fichero real— y su columna «disponible» deja fuera unidades que
+     existen. Ver `stockCruce()` en 12b-historico.js. */
+  const C = (typeof stockCruce==='function') ? stockCruce() : null;
+  const stock={}, byCountry={}, noDisp={}, totalFisico={};
+  if(C){
+    C.filas.forEach(f=>{
+      stock[f.sku] = f.enGestion ? f.disp : (f.enMulti ? f.multi : f.salud);
+      noDisp[f.sku] = f.enGestion ? f.noDisp : 0;
+      totalFisico[f.sku] = f.enGestion ? f.total : (f.enMulti ? f.multi : f.salud);
+      if(Object.keys(f.porPais).length) byCountry[f.sku] = f.porPais;
+    });
+  }
   const plan={}; imp('planning').forEach(r=>{ if(r.sku) plan[r.sku]=r; });
   const keys = Array.from(new Set(Object.keys(stock).concat(Object.keys(sold)).concat(DB.products.map(p=>String(p.sku)))));
   return keys.map(k=>{
@@ -1515,7 +1737,15 @@ function invStats(){
       const d = parseDate(x.po.eta); return d && daysBetween(today(), d) <= diasHastaRotura; });
     const pl = plan[k]||{};
     const coverTransito = velocity>0 ? (qty+enCamino)/velocity : ((qty+enCamino)>0?999:0);
+    const fila = C ? C.filas.filter(f=>f.sku===k)[0] : null;
     return {sku:k, name:(p&&p.name)||k, fbm, qty, velocity, cover, coverTransito,
+      /* B2 · los tres números por separado, y la pantalla dice cuál mira.
+         `qty` es lo DISPONIBLE, que es lo que se puede vender hoy; `qtyNoDisp`
+         existe y no se puede vender; `qtyTotal` es lo que hay en el almacén. */
+      qtyNoDisp: fbm ? 0 : (noDisp[k]||0),
+      qtyTotal:  fbm ? qty : (totalFisico[k]!=null ? totalFisico[k] : qty),
+      soloEnMulti: !!(fila && !fila.enGestion && fila.enMulti),
+      soloEnGestion: !!(fila && fila.enGestion && !fila.enMulti),
       lead:toNum(lead), enCamino, etaConocida, llegaATiempo,
       reorderPoint, need: Math.max(0, reorderPoint-qty-enCamino),
       byCountry: fbm ? {} : (byCountry[k]||{}),
@@ -1640,6 +1870,21 @@ function cashProjection(){
       .reduce((b,i) => b + toNum(i.qty), 0), 0);
   const diasCubiertos = dayUnits>0 ? unidsEnCurso/dayUnits : 0;
 
+  /* B5 · LAS DEVOLUCIONES SALEN DE CAJA, y la curva no las descontaba.
+
+     `returnsCost` ya está calculado y ya baja a cada SKU, pero la proyección de
+     tesorería seguía como si el dinero devuelto no saliera nunca. Con la tasa
+     de devolución real del negocio eso es dinero que se resta del saldo mínimo,
+     que es el número con el que se decide si hace falta financiación.
+
+     El desfase: la devolución sale de caja cuando Amazon la REEMBOLSA, no
+     cuando el cliente la solicita. Amazon reembolsa al comprador de inmediato y
+     lo descuenta en la liquidación siguiente, así que el desembolso cae dentro
+     del mismo ciclo de pago. Se modela como un flujo diario porque a 90 días
+     vista la forma exacta dentro del ciclo no cambia el mínimo; lo que lo
+     cambia es que ANTES no salía en absoluto. */
+  const dayReturns = (P.returnsCost||0)/daysInPeriod();
+
   const monthlyFixed = DB.expenses.reduce((a,e)=>a+toNum(e.amount),0);
   /* Vencimientos de pedidos de compra pendientes.
 
@@ -1671,6 +1916,7 @@ function cashProjection(){
       pending -= inflow;
     }
     outflow += dayPpc;
+    outflow += dayReturns;                            // B5 · ver «las devoluciones salen de caja»
     if(k >= diasCubiertos) outflow += dayCogsFlow;   // ver «reponer lo que vendes»
     if(d.getDate()===1) outflow += monthlyFixed;
     if(d.getDate()===20) outflow += dayRev*30*(toNum(cs.vat)/100)/(1+toNum(cs.vat)/100);
@@ -1678,7 +1924,8 @@ function cashProjection(){
     bal += inflow - outflow;
     out.push({k, date:d, inflow, outflow, bal, po:poFlows[k]||0});
   }
-  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana};
+  out.meta = {dayCogsFlow, diasCubiertos, unidsEnCurso, fueraDeVentana, dayReturns,
+              returnsCost:P.returnsCost||0};
   return out;
 }
 function poAmount(po){

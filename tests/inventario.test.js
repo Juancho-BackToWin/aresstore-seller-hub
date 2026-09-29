@@ -314,6 +314,11 @@ const js = body => '(()=>{' + LAB + body + '})()';
       {sellersku:'LENTO', country:'DE', quantityforlocalfulfillment:'900'},
       {sellersku:'LENTO', country:'ES', quantityforlocalfulfillment:'500'}]};
     DB.history = {};
+    /* B1 · la foto ya no se sella con el dia de hoy: sin fecha del informe el
+       hub se NIEGA a archivar. Aqui se le da la fecha a mano, que es la
+       segunda via de stockSnapshotDate(). La negativa se comprueba en la
+       suite de la sesion B. */
+    DB.settings.stockDate = '2026-08-22';
     captureStock();
     const diaHoy = Object.keys(DB.history.d).sort().pop();
     const k = DB.history.d[diaHoy].k;

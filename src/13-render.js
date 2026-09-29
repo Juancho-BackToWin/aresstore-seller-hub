@@ -305,7 +305,10 @@ function renderDatos(){
         '<td class="name mut" style="font-size:11.5px">'+esc(i.file)+'</td>'+
         '<td class="num '+c+'">'+(f.age===0?'hoy':f.age+' d')+'</td></tr>';
     }).join('') : '<tr><td colspan="6" class="name mut">Nada importado todavía.</td></tr>'));
+
+  renderDatosFicheros();
 }
+
 
 /* =========================================================================
    8b · HISTÓRICO (M0)

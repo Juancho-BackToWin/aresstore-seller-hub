@@ -1,0 +1,4 @@
+sku	fnsku	asin	amazon-store	product-name	brand	fulfilled-by	has-local-inventory	longest-side	median-side	shortest-side	length-and-girth	unit-of-dimension	item-package-weight	unit-of-weight	currency	estimated-referral-fee-per-unit	estimated-variable-closing-fee	expected-domestic-fulfilment-fee-per-unit	expected-efn-fulfilment-fee-per-unit-uk	expected-efn-fulfilment-fee-per-unit-de	expected-efn-fulfilment-fee-per-unit-fr	expected-efn-fulfilment-fee-per-unit-it	expected-efn-fulfilment-fee-per-unit-es
+FBA0101	X00FBA0101	B00FBA0101	Amazon.es	Producto FBA0101	Aresstore	Amazon	Yes	20	15	8	40	centimeters	0.5	kilograms	EUR	4.08	0.00	3.05	--	--	--	--	--
+FBA0102	X00FBA0102	B00FBA0102	Amazon.es	Producto FBA0102	Aresstore	Amazon	Yes	20	15	8	40	centimeters	0.5	kilograms	EUR	2.04	0.00	2.24	--	--	--	--	--
+FBA0103	X00FBA0103	B00FBA0103	Amazon.es	Producto FBA0103	Aresstore	Amazon	Yes	20	15	8	40	centimeters	0.5	kilograms	EUR	5.10	0.00	4.01	--	--	--	--	--

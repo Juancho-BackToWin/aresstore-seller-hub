@@ -1236,6 +1236,54 @@ function vatFechaFila(r){
 
    Una fila sin fecha legible no se puede colocar en ningún periodo: con corte
    se queda fuera y se cuenta en `sinFecha`, para que la pantalla lo diga. */
+/* ── LA DEUDA DE IVA DE UN MES SIN PEDIDOS CARGADOS NO SE RESTA AL BENEFICIO ──
+
+   Medido el 2-10-2026 con los informes reales: el de IVA cubre mayo, junio y
+   julio de 2026; los de pedidos, agosto y septiembre de 2025 y junio y julio de
+   2026. En «Todo», el P&L restaba la deuda de MAYO contra un ingreso que no
+   tenía las ventas de mayo: la línea de IVA era la verdadera y el beneficio,
+   falso, porque comparaba un coste de tres meses con ingresos de dos.
+
+   Aquí se separan los meses que el informe de IVA trae con ventas y para los
+   que NO hay ni un pedido cargado. Su deuda no se resta al beneficio del
+   periodo —no hay con qué compararla— y la pantalla dice cuánto es y de qué
+   meses. No desaparece: sigue entera en la pantalla de IVA y en el dossier de
+   la gestoría, que no pasan por aquí.
+
+   Lo que NO hace: mirar la cobertura por día. Un mes con un solo pedido cargado
+   cuenta como cubierto. Es la granularidad con que se descargan los informes,
+   y se dice. */
+function ivaMesesSinVentas(S, pais, desde){
+  const out = {meses:[], difTuya:0, diferencia:0, ventas:0};
+  const rows = imp('vat');
+  if(!rows.length) return out;
+  /* La cobertura es la del INFORME de pedidos, no la de las ventas que se
+     miran: con el filtro de un país, que Italia no venda un mes no quiere decir
+     que falte el informe de ese mes. Por eso se leen las fechas de todos los
+     pedidos importados, sin periodo ni país. */
+  const conVentas = {};
+  imp('orders').forEach(r=>{ const d = parseDate(gv(r,'_date','purchasedate'));
+    if(d && !isNaN(d)) conVentas[iso(d).slice(0,7)] = 1; });
+  const mesesIva = {};
+  rows.forEach(r=>{
+    const t = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
+    if(t && t.indexOf('SALE')<0) return;
+    const f = vatFechaFila(r); if(!f) return;
+    if(desde && f < startOfDay(desde)) return;
+    mesesIva[iso(f).slice(0,7)] = 1;
+  });
+  Object.keys(mesesIva).sort().forEach(m=>{
+    if(conVentas[m]) return;
+    const y = +m.slice(0,4), mo = +m.slice(5,7);
+    let ini = new Date(y, mo-1, 1), fin = new Date(y, mo, 0);
+    if(desde && ini < startOfDay(desde)) ini = startOfDay(desde);
+    const V = vatReport({desde:ini, hasta:fin, pais});
+    if(!V.ventas && !V.difTuya) return;
+    out.meses.push(m); out.difTuya += V.difTuya; out.diferencia += V.diferencia; out.ventas += V.ventas;
+  });
+  return out;
+}
+
 function vatReport(opts){
   const rows = imp('vat');
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
@@ -1639,8 +1687,10 @@ function taxBasis(S){
       const pais = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
       /* «Todo» (periodDays = 0) no corta por fecha: ahí también cuentan las
          filas sin fecha legible, que en cualquier otro periodo se quedan fuera. */
-      if(!periodDays) return pais ? vatReport({pais}) : vatReport();
-      return vatReport({desde: periodStart(), hasta: today(), pais});
+      const F = !periodDays ? (pais ? vatReport({pais}) : vatReport())
+                            : vatReport({desde: periodStart(), hasta: today(), pais});
+      F.sinVentas = ivaMesesSinVentas(S, pais, periodDays ? periodStart() : null);
+      return F;
     })(),
     porSku, porPais, porMes,
     paisesDeducidos: paises,
@@ -2064,7 +2114,10 @@ function pnl(){
   /* El IVA que Amazon no repercutió y que responde tu NIF sigue siendo tuyo
      ante Hacienda: es un coste real del periodo, no una advertencia. Sin esta
      línea todos los márgenes salían optimistas en unos once puntos. */
-  const vatShortfall = (tb.fiscal||{}).difTuya || 0;
+  /* Menos la de los meses del informe de IVA sin un solo pedido cargado: ver
+     `ivaMesesSinVentas`. Se guarda aparte para poder decirlo. */
+  const vatSinVentas = ((tb.fiscal||{}).sinVentas) || {meses:[], difTuya:0};
+  const vatShortfall = ((tb.fiscal||{}).difTuya || 0) - (vatSinVentas.difTuya || 0);
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost - vatShortfall;
   /* Publicidad e IVA no repercutido SE REPARTEN, y la pantalla tiene que
      decirlo. No se pueden medir por SKU con los informes de hoy: el de PPC no
@@ -2088,7 +2141,7 @@ function pnl(){
                  storage: storage!==0, otherFee: otherFee!==0},
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
-    vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall,
+    vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall, vatSinVentas,
     vatVentasReducidas: (tb.fiscal||{}).ventasReducidas||0,
     ppcSource, adSpanUnknown: ads.spanUnknown,
     refMedido, fbaMedido,

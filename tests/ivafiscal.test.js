@@ -222,9 +222,18 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
     const hace60 = (()=>{ const d=new Date(); d.setDate(d.getDate()-60);
       return String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear(); })();
     filas.forEach(r=>{ r.transactioncompletedate = hace60; });
+    /* Desde el 3-10-2026 la deuda de un mes SIN NINGÚN PEDIDO CARGADO no se
+       resta al beneficio (ver `ivaMesesSinVentas` y tests/ivacobertura.test.js).
+       Esta prueba no va de eso, va de cortar por periodo: se le da un pedido
+       de ese mes para que el mes esté cubierto, y se quita después. */
+    const pedidos = DB.imports.orders.rows;
+    const hace60iso = (()=>{ const d=new Date(); d.setDate(d.getDate()-60);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+    pedidos.push(Object.assign({}, pedidos[0], {purchasedate: hace60iso+'T10:00:00+00:00', _date: hace60iso+'T10:00:00+00:00'}));
     periodDays=30; o.viejas30 = linea();
     periodDays=90; o.viejas90 = linea();
     periodDays=0;  o.viejasTodo = linea();
+    pedidos.pop();
     filas.forEach(r=>{ delete r.transactioncompletedate; });
     periodDays=30; o.sinFecha30 = linea(); o.sinFechaN = pnl().vat.sinFecha;
     periodDays=0;  o.sinFechaTodo = linea();

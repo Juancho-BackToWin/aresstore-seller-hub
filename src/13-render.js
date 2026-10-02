@@ -721,6 +721,11 @@ function renderRent(){
         (V.ventasB2BCero>0?'<br>'+num(V.ventasB2BCero)+' venta'+(V.ventasB2BCero===1?'':'s')+' a tipo cero a empresas con NIF-IVA '+
           '(entrega intracomunitaria o inversión del sujeto pasivo) no cuenta'+(V.ventasB2BCero===1?'':'n')+' como deuda.':'')+
         (V.sinResponsable>0?'<br>En '+num(V.sinResponsable)+' ventas el informe no dice quién responde, así que las cargo a tu cuenta: equivocarme por ahí es más barato que enseñarte un margen que no tienes.':'')+
+        (P.vatSinVentas && P.vatSinVentas.meses.length?'<br><strong>'+fmt(P.vatSinVentas.difTuya,2)+' de esa deuda son de '+
+          P.vatSinVentas.meses.join(', ')+', y de '+(P.vatSinVentas.meses.length===1?'ese mes':'esos meses')+
+          ' no hay ni un pedido cargado.</strong> No se restan al beneficio de esta pantalla, porque no hay ingresos con los '+
+          'que compararlos; la deuda sigue entera en IVA y en el dossier. Carga los pedidos de '+
+          (P.vatSinVentas.meses.length===1?'ese mes':'esos meses')+' y entrará sola.':'')+
         '<br>Esto no es un fallo de cálculo del hub. Es una deuda fiscal real que el hub no veía, y por eso los márgenes de antes eran optimistas.';
     }
     if(P.ventasFueraDivisa>0){

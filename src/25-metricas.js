@@ -208,7 +208,11 @@ function cascada(P){
   const hayVat = ((P.vat||{}).rows||0) > 0;
   push('ivaNoRep', 'IVA no repercutido', -P.vatShortfall,
     hayVat ? 'medido' : (hayVentas ? 'desconocido' : 'medido'),
-    hayVat ? num(P.vatVentasReducidas)+' ventas a tipo reducido · lo debes tú, no Amazon'
+    hayVat ? num(P.vatVentasReducidas)+' ventas a tipo reducido · lo debes tú, no Amazon'+
+             (P.vatSinVentas && P.vatSinVentas.meses.length
+               ? ' · no se restan '+fmt(P.vatSinVentas.difTuya,2)+' de '+P.vatSinVentas.meses.join(', ')+
+                 ', meses sin ningún pedido cargado'
+               : '')
            : 'sin el informe fiscal no se sabe a qué tipo liquidó Amazon',
     hayVat ? '' : 'informe de transacciones sujetas al IVA');
   push('publicidad', 'Publicidad', -P.ppc,

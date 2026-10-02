@@ -1241,14 +1241,23 @@ function vatReport(opts){
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
                difTuya:0, difDelMercado:0, sinResponsable:0,
                porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0,
-               sinFecha:0, fueraDeCorte:0, cortado:!!opts, ventasB2BCero:0, baseB2BCero:0, diferenciaIvaIncluido:0};
+               sinFecha:0, fueraDeCorte:0, cortado:!!opts, ventasB2BCero:0, baseB2BCero:0, diferenciaIvaIncluido:0,
+               reembolsos:0, baseReembolsos:0, reembolsosReducidos:0, difReembolsos:0,
+               difReembolsosIncl:0, reembSinJuris:0};
   if(!rows.length) return out;
   const corte = opts || null;
   rows.forEach(r=>{
     const tipoTx = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
-    /* Solo ventas. Devoluciones y ajustes tienen su propio signo y mezclarlos
-       aquí daría un tipo medio que no es el de ninguna transacción. */
-    if(tipoTx && tipoTx.indexOf('SALE')<0) return;
+    /* Ventas y REEMBOLSOS. El resto —traslados entre almacenes (FC_TRANSFER),
+       devoluciones físicas sin importe (RETURN), facturas y abonos de Amazon a
+       ti (INVOICE, CREDIT_NOTE)— no es venta tuya a un cliente.
+
+       Los reembolsos entran desde el 2-10-2026, medido contra el informe real:
+       42 filas REFUND con base e IVA en negativo y el mismo tipo reducido de la
+       venta que anulan. Un reembolso rectifica la base de esa venta, y con ella
+       la deuda. Contando solo ventas, la deuda salía 55,15 € por encima. */
+    const esReemb = tipoTx.indexOf('REFUND') >= 0;
+    if(tipoTx && tipoTx.indexOf('SALE')<0 && !esReemb) return;
     if(corte && (corte.desde || corte.hasta)){
       const f = vatFechaFila(r);
       if(!f){ out.sinFecha++; return; }
@@ -1275,12 +1284,19 @@ function vatReport(opts){
     if(pct > 1) pct = pct/100;
     /* Y si no viene, se calcula del propio importe, que es más fiable que
        suponer. */
-    if(!(pct>0) && base>0 && iva>0) pct = iva/base;
+    if(!(pct>0) && base!==0 && iva/base>0) pct = iva/base;
     const aplicado = pct*100;
     const general  = VAT_GENERAL[pais];
 
+    if(pais && !out.porPais[pais]) out.porPais[pais] = {ventas:0, base:0, vat:0, dif:0, tipos:{}};
+    if(esReemb){
+      /* Un reembolso no es una venta: no suma a ventas, base ni tipos. Solo
+         rectifica la deuda de abajo, y se cuenta aparte. */
+      out.reembolsos++; out.baseReembolsos += base;
+      if(!pais) out.reembSinJuris++;
+    } else {
     out.ventas++; out.base += base; out.vat += iva;
-    if(pais) { const P = out.porPais[pais] || (out.porPais[pais] = {ventas:0, base:0, vat:0, dif:0, tipos:{}});
+    if(pais) { const P = out.porPais[pais];
       P.ventas++; P.base += base; P.vat += iva;
       P.tipos[aplicado.toFixed(1)] = (P.tipos[aplicado.toFixed(1)]||0)+1; }
     else out.sinJuris++;
@@ -1300,6 +1316,7 @@ function vatReport(opts){
        mas llaman la atencion a un inspector. Antes quedaba fuera por exigir
        `aplicado > 0`. Se cuenta aparte para poder senalarla. */
     if(rateSeen && aplicado <= 0.05) out.ventasCero = (out.ventasCero||0) + 1;
+    }
     /* Una venta a tipo CERO a un comprador con NIF-IVA no es una deuda: es una
        venta entre empresas —entrega intracomunitaria exenta, o inversión del
        sujeto pasivo cuando el vendedor no está establecido en ese país— y el
@@ -1309,8 +1326,10 @@ function vatReport(opts){
        la gestoría las vea, pero no suman. */
     const nifComprador = String(gv(r,'buyervatnumber')||'').trim();
     if(rateSeen && aplicado <= 0.05 && nifComprador){
-      out.ventasB2BCero++; out.baseB2BCero += base;
-      if(pais) out.porPais[pais].b2bCero = (out.porPais[pais].b2bCero||0) + 1;
+      if(!esReemb){
+        out.ventasB2BCero++; out.baseB2BCero += base;
+        if(pais) out.porPais[pais].b2bCero = (out.porPais[pais].b2bCero||0) + 1;
+      }
       return;
     }
     if(general > 0 && (aplicado > 0 || rateSeen) && aplicado < general - 0.05){
@@ -1319,7 +1338,9 @@ function vatReport(opts){
          nominales: el importe de cada linea viene ya redondeado al centimo y
          restar tipos deja un residuo que no existe en ningun sitio. */
       const dif = base*general/100 - iva;
-      out.diferencia += dif; out.ventasReducidas++;
+      out.diferencia += dif;
+      if(esReemb){ out.reembolsosReducidos++; out.difReembolsos += dif; }
+      else out.ventasReducidas++;
       if(pais) out.porPais[pais].dif += dif;
       /* La MISMA deuda con el otro criterio que puede aplicar Hacienda: que lo
          que pagó el cliente ya incluía el IVA (TJUE C-249/12, Tulică). Entonces
@@ -1327,6 +1348,7 @@ function vatReport(opts){
          lo decide la gestoría, no el hub: se enseñan los dos. */
       const difIncl = (base+iva)*general/(100+general) - iva;
       out.diferenciaIvaIncluido += difIncl;
+      if(esReemb) out.difReembolsosIncl += difIncl;
       if(pais) out.porPais[pais].difIncl = (out.porPais[pais].difIncl||0) + difIncl;
       /* De quién es la deuda. Cuando Amazon actúa como sujeto pasivo —el
          `TAX_COLLECTION_RESPONSIBILITY` es del mercado— el que responde ante

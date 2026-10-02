@@ -1,3 +1,26 @@
 node_modules/
 .DS_Store
 *.log
+
+# ── Informes reales de Amazon · NUNCA en el repositorio ──────────────────────
+# Este repositorio es público. Un informe real no solo trae cifras del negocio:
+# trae nombres, direcciones y números de pedido de compradores. Estos patrones
+# son la primera barrera; la segunda es tests/privacidad.test.js, que mira el
+# árbol y falla si algo se cuela. La barrera de verdad es trabajar con los
+# ficheros reales FUERA del repositorio, en ~/aresstore-reales/.
+reales/
+aresstore-reales/
+*.real.*
+
+# Descargas de Seller Central, por cómo las nombra Amazon
+2*020688.txt
+2*020687.txt
+2*020675.txt
+*CustomTransaction*.csv
+informe_ppc_*
+Informe+de+listings*
+
+# Fixtures del carril 3 · se generan con `node tests/mkfixtures-3.js`, igual que las
+# demas, y llevan fechas relativas a hoy: commitearlas solo produce ruido en los
+# merges porque cambian cada dia sin que nadie toque codigo.
+tests/fixtures-3/

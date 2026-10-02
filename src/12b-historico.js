@@ -44,7 +44,26 @@ function hist(){
   if(!H.obs || typeof H.obs!=='object') H.obs = {}; // observaciones de stock por SKU
   if(!H.bk || typeof H.bk!=='object') H.bk = {last:null};
   if(H.cut===undefined) H.cut = null;           // fecha hasta la que está compactado
+  if(!Array.isArray(H.rev)) H.rev = [];         // reescrituras de lo ya archivado
   return H;
+}
+const HIST_REV_MAX = 200;
+/* ---------- Constancia de que algo ya archivado ha cambiado ----------------
+   El histórico es el único daño irreversible de este hub. Sobrescribir el rango
+   que cubre el informe de pedidos es deliberado —si no, reimportar un mes
+   duplicaría las ventas— pero hacerlo EN SILENCIO no lo es. Un arreglo de
+   fechas como B3 mueve pedidos de un día al siguiente: sin este registro, la
+   serie de ayer cambia y no aparece en ninguna pantalla, que es exactamente
+   cómo un número deja de ser fiable sin que nadie se entere.
+
+   La foto de stock es distinta y se trata distinto: Amazon no guarda el stock
+   de días pasados, así que una foto archivada no se puede volver a medir. Esa
+   NO se sobrescribe nunca; el conflicto se anota y gana la que ya estaba. */
+function logRevision(k, que, antes, ahora, nota){
+  const H = hist();
+  H.rev.unshift({t:new Date().toISOString(), k, q:que, a:antes, b:ahora, n:nota||''});
+  if(H.rev.length > HIST_REV_MAX) H.rev.length = HIST_REV_MAX;
+  return H.rev[0];
 }
 function hDay(k){ const H=hist(); return H.d[k] || (H.d[k] = {}); }
 function r2(x){ return Math.round((x||0)*100)/100; }
@@ -89,52 +108,207 @@ function captureOrders(){
   const cut = H.cut || '';
   const tIso = iso(today());
   let n = 0;
+  const revisiones = [];
   for(let d = new Date(min.getTime()); d <= max; d = addDays(d,1)){
     const k = iso(d);
     if(cut && k <= cut) continue;
     const day = hDay(k);
     const a = agg[k] || {s:{}, cs:{}};
+    /* Un día que ya estaba archivado y que cambia se anota antes de cambiarlo.
+       Es lo que hace visible el arreglo de B3: al dejar de tirar el huso, los
+       pedidos de 22:00–24:00 UTC se mueven al día siguiente y dos días de la
+       serie cambian de total. La reimportación idéntica no anota nada, porque
+       no cambia nada. */
+    if(day.s){
+      const antes = Object.keys(day.s).reduce((x,sk)=>x+(day.s[sk][0]||0),0);
+      const ahora = Object.keys(a.s).reduce((x,sk)=>x+(a.s[sk][0]||0),0);
+      if(antes!==ahora) revisiones.push([k, antes, ahora]);
+    }
     day.s = a.s; day.cs = a.cs;
     if(k >= tIso) day.x = 1; else delete day.x;   // hoy siempre es un día parcial
     n++;
   }
-  return {days:n, from:iso(min), to:iso(max)};
+  revisiones.forEach(r=>logRevision(r[0], 'ventas', r[1], r[2],
+    'el informe reimportado trae otro total para un día ya archivado'));
+  return {days:n, from:iso(min), to:iso(max), revisiones:revisiones.length};
 }
 
-/* ---------- 2 · Foto de stock, fechada hoy ---------- */
-function captureStock(){
-  const stock = {}, byC = {}, hasInv = {};
+/* =========================================================================
+   B · §0 y B3 · EL CRUCE DE LOS TRES INFORMES DE INVENTARIO
+
+   Medido sobre los ficheros reales: el informe de «Gestión de inventario de
+   Logística de Amazon» **no trae el catálogo completo**. El de *Inventario
+   multipaís* declara más referencias y más unidades. Las cifras concretas
+   están en el documento del proyecto, no aquí: el repositorio es público.
+
+   Por qué esto va antes que cualquier otra cosa de la sesión B: `captureStock()`
+   archiva la foto y alimenta `H.obs`, el contador de roturas, que **no se
+   corrige reimportando**. Un cero por «este informe no trae el SKU» es
+   indistinguible en pantalla de un cero por «no queda stock» —el mismo error
+   que A7 con las jurisdicciones—, y deja a esas referencias en rotura
+   permanente con la velocidad de venta inflada, que es justo el número con el
+   que se decide cuánto reponer.
+
+   `stockCruce()` no promedia ni elige un informe ganador: dice qué declara cada
+   uno, cuánto no cuadra, y qué SKUs faltan en cuál.
+   ========================================================================= */
+function stockCruce(){
+  const G = {}, M = {}, S = {}, byC = {}, paises = {};
   imp('inventory').forEach(r=>{
     const k = gv(r,'_sku','sku','sellersku'); if(!k) return;
-    hasInv[k] = 1;
-    stock[k] = (stock[k]||0) + toNum(gv(r,'_qty','afnfulfillablequantity'));
+    const g = G[k] || (G[k] = {disp:0, res:0, inv:0, tr:0, unsell:0, total:0});
+    g.disp   += toNum(gv(r,'_qty','afnfulfillablequantity'));
+    g.res    += toNum(r.afnreservedquantity);
+    g.inv    += toNum(r.afnresearchingquantity);
+    g.tr     += toNum(r.afnfctransferquantity);
+    g.unsell += toNum(r.afnunsellablequantity);
+    g.total  += toNum(r.afntotalquantity);
   });
   imp('multicountry').forEach(r=>{
-    const k = gv(r,'_sku','sellersku','sku'), c = countryOf(gv(r,'_country','country'));
-    if(!k) return;
-    if(!byC[k]) byC[k] = {};
+    const k = gv(r,'_sku','sellersku','sku'); if(!k) return;
+    const c = countryOf(gv(r,'_country','country'));
     const q = toNum(gv(r,'_qty','quantityforlocalfulfillment'));
-    if(c) byC[k][c] = (byC[k][c]||0) + q;
-    /* Aquí se archivaba stock CERO para el SKU que solo viene en el informe
-       multipaís, guardando a la vez sus unidades por país en el mismo
-       registro. Ese cero no es una medición: es «este SKU no salía en el otro
-       informe». Y en el histórico un cero significa rotura, así que la
-       referencia quedaba en rotura permanente y su velocidad real —unidades
-       entre días CON stock— salía inflada, que es justo el número que M2 usa
-       para decidir cuánto reponer.
-       Lo mismo que hace invStats: si no viene en el de inventario, el stock es
-       la suma de lo que declara el multipaís. Sumar los dos contaría doble. */
-    if(stock[k]===undefined) stock[k] = 0;
-    if(!hasInv[k]) stock[k] += q;
+    M[k] = (M[k]||0) + q;
+    if(c){ (byC[k] || (byC[k]={}))[c] = ((byC[k]||{})[c]||0) + q;
+           paises[c] = (paises[c]||0) + q; }
   });
-  DB.products.forEach(p=>{ if(p.channel==='FBM' && toNum(p.fbmStock)) stock[String(p.sku)] = toNum(p.fbmStock); });
+  imp('planning').forEach(r=>{ const k = r.sku; if(!k) return;
+    S[k] = (S[k]||0) + toNum(r.available); });
+
+  const skus = Array.from(new Set(Object.keys(G).concat(Object.keys(M)).concat(Object.keys(S)))).sort();
+  const filas = skus.map(k=>{
+    const g = G[k] || null;
+    /* «no disponible pero presente»: existe, está en el almacén y no se puede
+       vender ahora mismo. No es cero y no es disponible. */
+    const noDisp = g ? (g.res + g.inv + g.tr + g.unsell) : 0;
+    return {sku:k,
+      enGestion: !!g, enMulti: M[k]!==undefined, enSalud: S[k]!==undefined,
+      disp: g ? g.disp : null, noDisp: g ? noDisp : null, total: g ? g.total : null,
+      multi: M[k]!==undefined ? M[k] : null,
+      salud: S[k]!==undefined ? S[k] : null,
+      porPais: byC[k] || {}};
+  });
+  const soloMulti = filas.filter(f=>!f.enGestion && f.enMulti);
+  const soloGestion = filas.filter(f=>f.enGestion && !f.enMulti);
+  const totGestion = filas.reduce((a,f)=>a+(f.total||0),0);
+  const totDisp    = filas.reduce((a,f)=>a+(f.disp||0),0);
+  const totNoDisp  = filas.reduce((a,f)=>a+(f.noDisp||0),0);
+  const totMulti   = filas.reduce((a,f)=>a+(f.multi||0),0);
+  /* Cuánto de la diferencia se explica por SKUs ausentes y cuánto por unidades
+     que existen pero no son «disponibles en un país». Son dos causas de signo
+     contrario y sumarlas en un solo número las oculta. */
+  const ausentes   = soloMulti.reduce((a,f)=>a+(f.multi||0),0);
+  /* Lo que NO se explica, que es lo único que debe alarmar.
+
+     Lo que SÍ se explica: el multipaís cuenta las unidades disponibles EN UN
+     PAÍS, así que deja fuera lo reservado, lo que está en investigación y lo no
+     vendible, pero SÍ cuenta lo que viaja entre centros. Lo que queda después
+     de eso es lo que hay que mirar. */
+  let sinExplicar = 0;
+  filas.forEach(f=>{
+    if(!f.enGestion || !f.enMulti) return;
+    const g = G[f.sku];
+    const esperado = f.total - g.res - g.inv - g.unsell;   // la transferencia sí cuenta
+    sinExplicar += (f.multi - esperado);
+  });
+  return {
+    filas, soloMulti, soloGestion,
+    skusGestion: filas.filter(f=>f.enGestion).length,
+    skusMulti:   filas.filter(f=>f.enMulti).length,
+    skusSalud:   filas.filter(f=>f.enSalud).length,
+    totGestion, totDisp, totNoDisp, totMulti, ausentes,
+    porPais: paises,
+    /* La diferencia bruta entre los dos informes, y la parte de ella que NO
+       tiene explicación. La primera alarma a quien no sepa por qué; la segunda
+       es la que de verdad hay que mirar. */
+    diferencia: totMulti - totGestion,
+    descuadre: sinExplicar,
+    noDisponibleNoContado: totNoDisp - filas.reduce((a,f)=>a+((f.enGestion&&f.enMulti&&G[f.sku])?G[f.sku].tr:0),0),
+    hayGestion: Object.keys(G).length>0, hayMulti: Object.keys(M).length>0,
+    haySalud: Object.keys(S).length>0
+  };
+}
+
+/* =========================================================================
+   B1 · LA FOTO DE STOCK DEJA DE FECHARSE CON EL DÍA DE HOY
+
+   `captureStock()` sellaba la foto con `iso(today())`. Un informe de hace dos
+   semanas subido hoy se archivaba como de hoy, y borraba del histórico las
+   roturas de los días intermedios. Es el único daño irreversible del hub:
+   `H.obs` no se corrige reimportando.
+
+   La regla es la de `poLotDate()`, que se niega a crear un lote sin fecha de
+   recepción:
+     1 · si está el informe de Salud del inventario, la fecha es su
+         `snapshot-date` — y NO `Inventory age snapshot date`, que va dos días
+         por detrás y es otra cosa (el corte de antigüedad, no la foto);
+     2 · si no, se pregunta, y no se archiva sin respuesta. Ni el informe de
+         gestión ni el multipaís traen NINGUNA columna de fecha —confirmado
+         enumerando las 26 y las 6—, así que adivinarla es inventarse el eje
+         temporal del histórico entero;
+     3 · nunca una fecha futura, y si es anterior a la última archivada se dice
+         que se está reescribiendo el pasado.
+   ========================================================================= */
+function stockSnapshotDate(){
+  /* 1 · la del informe que sí la trae */
+  let d = null;
+  imp('planning').forEach(r=>{
+    const v = String(r.snapshotdate||'').trim();
+    if(!v) return;
+    const p = parseDate(v); if(!p) return;
+    const k = iso(p);
+    if(!d || k > d) d = k;                 // si hubiera varias, la más reciente
+  });
+  if(d) return {k:d, src:'planning', why:'`snapshot-date` del informe de Salud del inventario'};
+  /* 2 · la que haya dicho Juancho al importar */
+  const m = (DB.settings && DB.settings.stockDate) ? String(DB.settings.stockDate).trim() : '';
+  if(m){ const p = parseDate(m); if(p) return {k:iso(p), src:'manual', why:'fecha indicada al importar'}; }
+  /* 3 · no hay fecha: no se archiva */
+  return {k:null, src:'ninguna',
+          why:'ni el informe de gestión ni el multipaís traen columna de fecha, y no se ha indicado ninguna'};
+}
+
+/* ---------- 2 · Foto de stock, fechada con el día del INFORME ---------- */
+function captureStock(){
+  const C = stockCruce();
+  const fecha = stockSnapshotDate();
+  const stock = {}, noDisp = {}, total = {}, byC = {};
+  C.filas.forEach(f=>{
+    /* Un SKU que solo viene en el multipaís NO vale cero: vale lo que el
+       multipaís declara. Y un SKU que solo viene en el de gestión conserva sus
+       tres números. Lo que no se sabe se deja sin archivar, no a cero. */
+    if(f.enGestion){ stock[f.sku] = f.disp; noDisp[f.sku] = f.noDisp; total[f.sku] = f.total; }
+    else if(f.enMulti){ stock[f.sku] = f.multi; noDisp[f.sku] = 0; total[f.sku] = f.multi; }
+    else if(f.enSalud){ stock[f.sku] = f.salud; noDisp[f.sku] = 0; total[f.sku] = f.salud; }
+    if(Object.keys(f.porPais).length) byC[f.sku] = f.porPais;
+  });
+  DB.products.forEach(p=>{ if(p.channel==='FBM' && toNum(p.fbmStock)){
+    stock[String(p.sku)] = toNum(p.fbmStock); noDisp[String(p.sku)] = 0;
+    total[String(p.sku)] = toNum(p.fbmStock); } });
   const keys = Object.keys(stock);
   if(!keys.length) return {skus:0};
-  const H = hist(), k = iso(today()), day = hDay(k);
+
+  /* B1 · sin fecha no se archiva. Y se dice, en vez de archivar con la de hoy
+     y que nadie se entere hasta que el contador de roturas ya esté sucio. */
+  if(!fecha.k) return {skus:0, sinFecha:true, motivo:fecha.why, cruce:C};
+  const hoy = iso(today());
+  if(fecha.k > hoy) return {skus:0, sinFecha:true, cruce:C,
+    motivo:'la fecha de la foto ('+fecha.k+') es posterior a hoy ('+hoy+')'};
+
+  const H = hist(), k = fecha.k, day = hDay(k);
+  /* Si ya hay fotos archivadas después de esta, se está reescribiendo el
+     pasado. Se hace —el informe es el informe— pero se dice. */
+  const posteriores = Object.keys(H.d).filter(x=>x>k && H.d[x] && H.d[x].k).length;
   day.k = {};
   keys.forEach(s=>{
     const q = stock[s];
-    day.k[s] = (byC[s] && Object.keys(byC[s]).length) ? [q, byC[s]] : [q];
+    /* Tres números, no uno: disponible, no disponible pero presente, y total.
+       Antes se archivaba solo `afn-fulfillable-quantity` y las unidades que
+       existen y están en el almacén sin poder venderse desaparecían del
+       histórico. */
+    const nd = noDisp[s]||0, tt = total[s]!=null ? total[s] : q;
+    const c  = (byC[s] && Object.keys(byC[s]).length) ? byC[s] : null;
+    day.k[s] = c ? [q, c, nd, tt] : [q, null, nd, tt];
     const o = H.obs[s] || (H.obs[s] = {n:0, z:0, last:null, lz:0});
     /* Una observación por SKU y por día. Reimportar el mismo día corrige la
        observación en lugar de añadir otra: si no, el porcentaje de rotura
@@ -143,7 +317,10 @@ function captureStock(){
     if(o.last !== k){ o.n++; o.z += z; o.lz = z; o.last = k; }
     else if(z !== o.lz){ o.z += z - o.lz; o.lz = z; }
   });
-  return {skus:keys.length};
+  return {skus:keys.length, fecha:k, fuente:fecha.src, porque:fecha.why,
+          reescribe:posteriores, cruce:C,
+          disp:C.totDisp, noDisp:C.totNoDisp, total:C.totGestion, multi:C.totMulti,
+          ausentes:C.soloMulti.map(f=>f.sku)};
 }
 
 /* ---------- 3 · Precio y tarifas vigentes, fechadas hoy ----------
@@ -261,6 +438,85 @@ function velocityStats(windowDays){
   }).sort((a,b)=>b.units-a.units);
 }
 
+/* Primera venta archivada de cada SKU, en clave aaaa-mm-dd.
+
+   Es lo que permite a invStats() distinguir un SKU RECIÉN LANZADO —cuya
+   velocidad hay que medir desde su primera venta, D1— de uno viejo que
+   simplemente lleva semanas sin vender. Sin esta distinción, estrechar la
+   ventana convierte una unidad vendida anteayer en 0,5 ud/día y manda comprar
+   un contenedor. Los meses compactados cuentan con su primer día real
+   archivado, que es lo único que queda de ellos. */
+function primerasVentasHistoricas(){
+  const H = hist(), out = {};
+  const anota = (sk, k)=>{ if(!out[sk] || k<out[sk]) out[sk]=k; };
+  Object.keys(H.d).forEach(k=>{
+    const s = H.d[k].s || {};
+    Object.keys(s).forEach(sk=>{ if(s[sk][0]>0) anota(sk, k); });
+  });
+  Object.keys(H.m).forEach(mk=>{
+    const m = H.m[mk], s = m.s || {};
+    const k = m.first || (mk + '-01');
+    Object.keys(s).forEach(sk=>{ if(s[sk][0]>0) anota(sk, k); });
+  });
+  return out;
+}
+
+/* ---------- D5 · la foto de stock lleva la fecha en que se MIDIÓ -----------
+
+   `captureStock()` fecha la foto HOY, y está bien: en una importación normal el
+   fichero se acaba de descargar. Pero «Reconstruir desde lo importado» vuelve a
+   archivar una foto que puede llevar semanas en el navegador, y la refecha como
+   de hoy. Consecuencias medidas sobre la mecánica de este módulo: los días
+   entre la foto real y hoy pierden su stock arrastrado, `oosDays()` deja de ver
+   una rotura que sí hubo, y `velocityStats()` devuelve la media simple
+   disfrazada de velocidad real. Un número creíble y falso, y encima sobre el
+   histórico, que no se puede volver a pedir.
+
+   Esta función mueve la foto que `captureStock()` acaba de dejar en el día de
+   hoy al día en que de verdad se midió. Si ese día YA TIENE una foto
+   archivada, no la pisa: gana la que estaba —es una medición que Amazon no
+   conserva en ningún sitio— y el conflicto queda anotado. */
+function refecharFotoStock(destino){
+  const H = hist(), kHoy = iso(today());
+  const day = H.d[kHoy];
+  if(!day || !day.k) return {movida:0, motivo:'no hay foto de hoy que mover'};
+  const skus = Object.keys(day.k);
+  const descontarObs = ()=>skus.forEach(s=>{
+    const o = H.obs[s];
+    if(o && o.last===kHoy){ o.n=Math.max(0,o.n-1); o.z=Math.max(0,o.z-(o.lz||0)); o.last=null; o.lz=0; }
+  });
+  const limpiarHoy = ()=>{ delete day.k; if(!Object.keys(day).length) delete H.d[kHoy]; };
+
+  if(!destino){
+    /* Nada se archiva sin saber de qué día es. */
+    descontarObs(); limpiarHoy();
+    logRevision(kHoy, 'foto de stock', skus.length, 0,
+      'no consta la fecha de descarga del informe de inventario: la foto no se archiva');
+    return {movida:0, motivo:'sin fecha de medición'};
+  }
+  const kDest = iso(destino);
+  if(kDest === kHoy) return {movida:0, motivo:'la foto ya es de hoy'};
+  if(H.cut && kDest <= H.cut){
+    descontarObs(); limpiarHoy();
+    logRevision(kDest, 'foto de stock', null, skus.length,
+      'el '+kDest+' ya está compactado y no se reabre');
+    return {movida:0, motivo:'compactado'};
+  }
+  if(H.d[kDest] && H.d[kDest].k){
+    descontarObs(); limpiarHoy();
+    logRevision(kDest, 'foto de stock', Object.keys(H.d[kDest].k).length, skus.length,
+      'ya había una foto archivada ese día y no se reescribe: Amazon no guarda el stock de días pasados');
+    return {movida:0, motivo:'ya archivada', conflicto:true};
+  }
+  const dest = hDay(kDest);
+  dest.k = day.k;
+  skus.forEach(s=>{ const o = H.obs[s]; if(o && o.last===kHoy) o.last = kDest; });
+  limpiarHoy();
+  logRevision(kDest, 'foto de stock', null, skus.length,
+    'foto refechada al día en que se descargó el informe, no al de la reconstrucción');
+  return {movida:skus.length, kDest};
+}
+
 /* =========================================================================
    COMPACTACIÓN
    El detalle día a día se resume a mes a partir de los 90 días. Antes de
@@ -343,7 +599,7 @@ function historyStats(){
   return {first, span, days:days.length, months:months.length, withStock, withFees,
           units, rev:r2(rev), bytes, dbBytes, log:H.log.length,
           backup:H.bk.last, backupAge: H.bk.last ? daysBetween(new Date(H.bk.last), today()) : null,
-          cut:H.cut};
+          cut:H.cut, revisiones:(H.rev||[]).length};
 }
 function backupDue(){
   const s = historyStats();
@@ -376,8 +632,29 @@ function wipeHistory(){
   saveDB(); refreshAll(); toast('Histórico borrado');
 }
 function rebuildHistory(){
+  /* D5 · la fecha de la foto se decide ANTES de reconstruir, con
+     stockSnapshotDate(), que la saca de cuándo se importó el informe. Si no
+     consta, no se archiva ninguna foto: nada entra en el histórico sin saber de
+     qué día es. `captureStock()` está congelada y sigue fechando hoy; lo que
+     hace esta función es corregir la fecha después, sin tocarla. */
+  /* INTEGRACIÓN · con la entrega del 6-sep, `captureStock()` YA archiva en la
+     fecha del informe y se niega a archivar sin ella, así que el refechado de
+     después es una red y no el camino principal: si la foto quedó bien puesta,
+     `refecharFotoStock()` no encuentra nada de hoy que mover y no hace nada.
+     Se conserva porque sigue sirviendo para arreglar fotos ya archivadas mal. */
+  const snapF = (typeof stockSnapshotDate==='function') ? stockSnapshotDate() : null;
+  const snap = (snapF && snapF.k) ? parseDate(snapF.k) : null;
   const g = captureAll();
+  let ref = null;
+  try{ ref = refecharFotoStock(snap); }catch(e){ console.warn('refechado', e); }
+  compactHistory();
   saveDB(); refreshAll();
-  toast(g.orders && g.orders.days ? ('Histórico reconstruido con '+num(g.orders.days)+' días del informe de pedidos')
-                                  : 'Reconstruido con lo que hay importado ahora mismo');
+  let msg = g.orders && g.orders.days
+    ? 'Histórico reconstruido con '+num(g.orders.days)+' días del informe de pedidos'
+    : 'Reconstruido con lo que hay importado ahora mismo';
+  if(ref && ref.movida) msg += ' · foto de stock fechada el '+ref.kDest+', no hoy';
+  else if(ref && ref.motivo==='sin fecha de medición') msg += ' · sin foto de stock: no consta de qué día es';
+  else if(ref && ref.conflicto) msg += ' · la foto de ese día ya estaba archivada y no se ha reescrito';
+  if(g.orders && g.orders.revisiones) msg += ' · '+num(g.orders.revisiones)+' día(s) ya archivados han cambiado';
+  toast(msg);
 }

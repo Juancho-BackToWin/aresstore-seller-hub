@@ -28,7 +28,7 @@ for(let d=0; d<95; d++){
     const price = +(s[2]*q).toFixed(2);
     ordR.push([ '171-'+String(2000000+d*13+si).padStart(7,'0')+'-'+String(1000000+d*7+si).padStart(7,'0'), '', iso(ago(d))+'T09:12:44+00:00', iso(ago(d))+'T11:00:00+00:00',
       'Shipped','Amazon', ch,'','Expedited', s[1], s[0], 'B0TEST'+si, 'Shipped', q, 'EUR',
-      price, (price*0.21/1.21).toFixed(2), '0','0','0','0','0','0','Madrid','','28001',
+      price, (price*0.21/1.21).toFixed(2), '0','0','0','0','0','0','','','',
       ch.slice(7).toUpperCase().replace('COM.BE','BE'), '','','false','','','' ]);
   });
 }
@@ -169,13 +169,21 @@ const vatH = ['UNIQUE_ACCOUNT_IDENTIFIER','ACTIVITY_PERIOD','SALES_CHANNEL','MAR
  'ASIN','ITEM_DESCRIPTION','QTY','TOTAL_ACTIVITY_VALUE_AMT_VAT_EXCL','TOTAL_ACTIVITY_VALUE_VAT_AMT',
  'TOTAL_ACTIVITY_VALUE_AMT_VAT_INCL','TRANSACTION_CURRENCY_CODE','PRICE_OF_ITEMS_VAT_RATE_PERCENT',
  'SALE_DEPART_COUNTRY','SALE_ARRIVAL_COUNTRY','ARRIVAL_POST_CODE','DEPARTURE_POST_CODE','TAXABLE_JURISDICTION'];
-const vatPais = [['DE',19],['FR',20],['IT',22],['ES',21]];
+/* Tipo REDUCIDO de alimentación que Amazon aplica de verdad a estos productos
+   por llevar el código fiscal `A_FOOD_DESSERT`, y el tipo general que les
+   tocaría. La diferencia entre los dos es la deuda que el hub tiene que ver. */
+const vatPais = [['DE',7],['FR',5.5],['IT',10],['ES',10]];
 tsv('vat-transactions.txt', vatH, SKUS.map((s,i)=>{
   const [pais,tipo] = vatPais[i];
   const sinIva = s[2]*20/(1+tipo/100);
+  /* El identificador de evento lleva dentro el número de pedido —así viene en
+     265 de las 294 filas del informe real—, que es lo que permite cruzarlo con
+     «Todos los pedidos» y tomar el IVA medido en vez de deducirlo.
+     Y el tipo va en FRACCIÓN decimal: 0.1 es el 10 %. */
   return ['AZ'+i,'2026-07','Amazon.'+pais.toLowerCase(),'Amazon.'+pais.toLowerCase(),'PAN_EU',
-   'EV'+(700000+i),'AT'+(800000+i), iso(ago(20)), iso(ago(18)), iso(ago(18)),'SALE','ES', s[0], 'B0TEST'+i,
-   s[1],'20', sinIva.toFixed(2), (sinIva*tipo/100).toFixed(2), (s[2]*20).toFixed(2),'EUR', String(tipo),
+   '171-'+String(2000000+i).padStart(7,'0')+'-'+String(1000000+i).padStart(7,'0'),
+   'AT'+(800000+i), iso(ago(20)), iso(ago(18)), iso(ago(18)),'SALE','ES', s[0], 'B0TEST'+i,
+   s[1],'20', sinIva.toFixed(2), (sinIva*tipo/100).toFixed(2), (s[2]*20).toFixed(2),'EUR', (tipo/100).toFixed(4),
    'ES', pais, '10115','46001', pais];
 }));
 

@@ -250,11 +250,42 @@ ingreso vienen sin ella.
 
 ---
 
+## P-12b · Activar el *secret scanning* de GitHub — dos clics tuyos
+
+**Bloquea a:** nada del código. Es la parte del encargo del 23 de agosto que yo
+no puedo ejecutar.
+
+**Confirmado:** el repositorio es **público** (`visibility: public`) y
+`security_and_analysis` viene a `null`, es decir, sin nada activado.
+
+**No puedo activarlo desde aquí.** El proxy de este entorno bloquea las
+escrituras de ajustes del repositorio:
+`{"message":"Repository settings writes are not permitted through this proxy."}`,
+HTTP 403. Es la misma pared que impide borrar ramas (P-14).
+
+**Qué necesito:** en
+`github.com/Juancho-BackToWin/aresstore-seller-hub/settings/security_analysis`,
+activar **Secret scanning** y **Push protection**. La segunda es la que importa:
+impide el `git push` que llevaría un secreto dentro, en vez de avisarte después.
+Un secreto en un repositorio público está comprometido desde el segundo en que
+se empuja, y rotarlo no lo borra del historial.
+
+**Mientras tanto**, `tests/privacidad.test.js` corre **el primero** de
+`npm run test:all` y revisa el árbol entero en cada ejecución: ocho patrones de
+credencial, que las columnas de comprador de los fixtures estén vacías, y que no
+se haya colado ningún fichero con nombre de descarga de Seller Central. No
+sustituye a la protección de GitHub —yo solo veo lo que ya está en disco— pero
+cubre el descuido más probable.
+
+---
+
 ## P-14 · Borrar dos ramas en GitHub — un clic tuyo
 
 **Bloquea a:** nada. Es limpieza.
 
 Me pediste borrar `parche-margen-honesto` y `claude/verify-git-environment-nbjq49`.
+Siguen ahí, y se han sumado `claude/margen-honesto` y `claude/traspaso-al-dia`,
+las dos ya mergeadas y sin un solo commit fuera de `main`.
 **No puedo desde aquí:** el proxy de este entorno bloquea el borrado de ramas,
 por `git push --delete` y por la API REST, las dos con 403
 («Write access to this GitHub API path is not permitted through this proxy»).
@@ -284,6 +315,7 @@ quieres conservar como archivo histórico, dímelo antes.
 | P-9 | coste de las devoluciones | ¿hay tasa de procesamiento? | abierto |
 | P-10 | prioridad, no cálculo | ¿cableo los tres informes parados? | abierto |
 | P-11 | nada del código | EPR/PPWR, riesgo de bloqueo de listados | abierto |
-| P-12 | el paso a «apta» de todo | los cuatro informes reales, cargados por ti | abierto |
+| P-12 | el paso a «apta» de todo | los cuatro informes reales, cargados por ti | **hecho el 23-ago** |
+| P-12b | seguridad del repositorio público | activar secret scanning y push protection | abierto |
 | P-13 | margen medido vs deducido | ¿tu informe de pedidos trae la columna de impuestos? | abierto |
 | P-14 | nada, es limpieza | borrar dos ramas en GitHub (no puedo desde aquí) | abierto |

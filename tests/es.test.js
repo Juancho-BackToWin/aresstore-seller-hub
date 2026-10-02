@@ -17,10 +17,22 @@ const snap = p => p.evaluate(()=>{
   await p.evaluate(()=>document.querySelector('.nav-item[data-view="datos"]').click());
   await p.waitForTimeout(300);
 
+  /* INTEGRACIÓN · era una espera fija. Con los informes que registran los
+     carriles 3 y 8 la detección compara cada fichero contra más definiciones, y
+     varios de golpe ya no caben en ese tiempo: la suite fallaba una pasada de
+     cada tres con «0 vs 293» de gasto de PPC, que no es un fallo del hub sino
+     de la espera. Ahora se espera a que estén TODAS las filas y ninguna siga
+     en «leyendo…», con tope. */
+  const listo = async (n) => { for(let i=0;i<60;i++){
+    await p.waitForTimeout(250);
+    const r = await p.$$eval('#fileList .fileitem', els=>({
+      n:els.length, pend:els.filter(e=>/leyendo/i.test(e.textContent)).length})).catch(()=>({n:0,pend:1}));
+    if(r.n>=n && r.pend===0) return true;
+  } return false; };
   console.log('\n=== A · INFORMES EN INGLÉS (referencia) ===');
   await p.setInputFiles('#csvFile', ['all-orders.txt','fba-inventory.txt','multicountry.txt','fee-preview.txt','returns.txt','search-terms.csv']
     .map(f=>path.resolve(FIX,f)));
-  await p.waitForTimeout(3000);
+  await listo(6);
   const EN = await snap(p);
   console.log('     '+JSON.stringify(EN));
 
@@ -30,7 +42,7 @@ const snap = p => p.evaluate(()=>{
   await p.evaluate(()=>document.getElementById('fileList').innerHTML='');
   const esFiles = fs.readdirSync(FIXES).filter(f=>f!=='hostil-sin-nombres.txt');
   await p.setInputFiles('#csvFile', esFiles.map(f=>path.resolve(FIXES,f)));
-  await p.waitForTimeout(3500);
+  await listo(esFiles.length);
   const items = await p.$$eval('#fileList .fileitem', els=>els.map(e=>({
     name:(e.querySelector('.f-name')||{}).textContent, meta:(e.querySelector('.f-meta')||{}).textContent,
     ok:!!e.querySelector('.f-dot.ok')})));

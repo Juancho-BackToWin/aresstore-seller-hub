@@ -61,7 +61,19 @@ function check(label, cond, extra){
   await page.waitForTimeout(200);
   const fixtures = fs.readdirSync(FIX).map(f=>path.resolve(FIX,f));
   await page.setInputFiles('#csvFile', fixtures);
-  await page.waitForTimeout(2500);
+  /* INTEGRACIÓN · esperaba 2.500 ms fijos para los trece ficheros. Con los
+     informes que registran los carriles 3 y 8, la detección compara cada
+     fichero contra más definiciones y trece de golpe ya no caben en ese
+     tiempo: el último se quedaba en «leyendo…» y la prueba lo contaba como no
+     reconocido. No se relaja nada — se espera a que la lista deje de crecer,
+     con tope, que es lo que la prueba quería decir. */
+  for(let i=0;i<40;i++){
+    await page.waitForTimeout(250);
+    const pend = await page.$$eval('#fileList .fileitem',
+      els => els.filter(e=>/leyendo/i.test(e.textContent)).length);
+    const n = await page.$$eval('#fileList .fileitem', els => els.length);
+    if(n>=13 && pend===0) break;
+  }
   const items = await page.$$eval('#fileList .fileitem', els => els.map(e=>({
     name:(e.querySelector('.f-name')||{}).textContent,
     meta:(e.querySelector('.f-meta')||{}).textContent,
@@ -204,7 +216,19 @@ function check(label, cond, extra){
   await page.click('.nav-item[data-view="cumplimiento"]');
   await page.waitForTimeout(400);
   const compRows = await page.$$eval('#compTable tr', rs=>rs.length);
-  check('lista los 9 mercados', compRows===10, compRows+' filas');
+  /* Eran 9 hasta el 17-sep-2026. El carril 8 añadió Austria, Portugal y
+     Eslovaquia —los tres aparecen en los informes reales y no estaban— y
+     Chequia, que entra marcada como no confirmada. La comprobación ya no
+     lleva el número a mano: se ata a COUNTRIES, que es de donde sale la
+     tabla. Así deja de romperse cada vez que se añade un mercado legítimo,
+     y a cambio caza lo que el número fijo NO cazaba: un país que se cae de
+     COUNTRIES y desaparece de la pantalla sin que nadie se entere. */
+  const nPaises = await page.evaluate(()=>COUNTRIES.length);
+  const compCodes = await page.$$eval('#compTable tr td.name strong', els=>els.map(e=>e.textContent.trim()));
+  check('lista todos los mercados de COUNTRIES, uno por fila',
+    compRows===nPaises+1, compRows+' filas para '+nPaises+' países');
+  check('y entre ellos están los cuatro añadidos en septiembre de 2026',
+    ['AT','PT','SK','CZ'].every(c=>compCodes.indexOf(c)>=0), compCodes.join(','));
   await page.click('#compTable tr:nth-child(2) td:nth-child(1) input');
   await page.waitForTimeout(300);
   check('activar un mercado sin EPR dispara la alerta',

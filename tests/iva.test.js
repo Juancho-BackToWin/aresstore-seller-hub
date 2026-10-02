@@ -57,6 +57,8 @@ const LAB = `
       sku:'TEST-1', asin:'B0X', itemstatus:'Shipped', quantity:String(q),
       itemprice:(bruto*q).toFixed(2), shipcountry:pais};
     if(o.conIva !== false) row.itemtax = ((bruto-neto)*q).toFixed(2);
+    if(o.ivaCero) row.itemtax = '0.00';
+    if(o.divisa) row.currency = o.divisa;
     return row;
   };
 `;
@@ -246,6 +248,79 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('y dice qué hay que hacer, no solo qué pasa',
     /vuelve a descargar/i.test(E.conFallo) && /item-tax/i.test(E.conFallo), 'incluye la acción');
   check('con la columna presente, no molesta', E.sinFallo.trim()==='', '«'+E.sinFallo.trim()+'»');
+
+  console.log('\n=== IVA-F · UNA LÍNEA EN OTRA DIVISA NO SE SUMA COMO SI FUERAN EUROS ===');
+  /* El traspaso del 22 de agosto afirmaba que «el informe de pedidos no declara
+     campo de divisa». Es falso: la columna 16 de 34 se llama `currency`. Lo que
+     pasaba es que el hub no la leía, y esa afirmación equivocada en el documento
+     es la que dejó el fallo sin arreglar durante un mes.
+
+     Medido sobre el informe real de 238 líneas: 205 en EUR, 1 en PLN y 32 sin
+     divisa (canceladas y `Non-Amazon`, sin importes). Contar la de zlotys como
+     euros sobrestimaba el ingreso en 38,46 € sobre 3.237,73 €, un 1,19 %.
+
+     Caso, con el precio del laboratorio (100 € netos, 121,00 € con IVA):
+       300 unidades en España        = 300 × 121,00 = 36.300,00 €
+       3 unidades en Polonia en PLN  =   3 × 123,00 =    369,00 zlotys
+       ingreso correcto                            = 36.300,00 €
+       sumando la línea polaca como euros          = 36.669,00 €
+     Se excluye y se declara. Convertir haría falta un tipo de cambio que el hub
+     no tiene, e inventárselo sería peor que dejarla fuera. */
+  const F = await page.evaluate(js(`
+    DB.imports.orders = {count:2, file:'o', rows:[
+      venta(dia(5), 300, {pais:'ES', vat:21, divisa:'EUR'}),
+      venta(dia(5), 3,   {pais:'PL', vat:23, divisa:'PLN'})]};
+    periodDays = 30;
+    const p = pnl();
+    return {gross:p.grossInc, unid:p.units, fuera:p.ventasFueraDivisa,
+            detalle:p.ventasOtraDivisa};
+  `));
+  check('la línea en zlotys queda fuera del ingreso', near(F.gross, 36300, 0.5),
+    F.gross.toFixed(2)+' € · sumándola como euros daban 36.669,00 €');
+  check('y no aporta unidades', F.unid===300, F.unid+' ud');
+  check('el hub declara cuántas ha excluido y en qué divisa',
+    F.fuera===1 && F.detalle.PLN===1, F.fuera+' línea · '+JSON.stringify(F.detalle));
+
+  console.log('\n=== IVA-G · UN 0,00 DE IVA SOBRE UNA VENTA GRAVADA NO ES UNA MEDICIÓN ===');
+  /* `hayNumero("0.00")` es verdadero, así que un cero literal en la columna de
+     impuesto pasaba por IVA medido y el «ingreso neto» volvía a ser el bruto.
+     Es la misma familia del fallo de la PR #2, por una tercera puerta.
+
+     No aparece en los informes reales de Juancho —cero ceros literales en las
+     287 y 238 filas—, así que esto es una red, no una corrección de algo que
+     esté pasando. Pero cuesta cuatro líneas y el fallo vale 4,5 puntos.
+
+     Caso: 100 unidades en España a 121,00 € con `itemtax = 0.00`.
+       tomándolo por medido : neto = 12.100 €  ← el bruto disfrazado
+       deduciéndolo al 21 % : neto = 10.000 €, que es lo correcto */
+  const G = await page.evaluate(js(`
+    DB.imports.orders = {count:1, file:'o',
+      rows:[venta(dia(5), 100, {pais:'ES', vat:21, ivaCero:true})]};
+    periodDays = 30;
+    const p = pnl();
+    return {gross:p.grossInc, tax:p.tax, net:p.net, calidad:p.baseQuality};
+  `));
+  check('el cero literal no se toma por un IVA medido', near(G.tax, 2100, 1),
+    G.tax.toFixed(2)+' € deducidos al 21 % · tomándolo por medido daban 0,00 €');
+  check('así el ingreso neto son 10.000 €, no 12.100 €', near(G.net, 10000, 1),
+    G.net.toFixed(2)+' €');
+  check('y la base queda etiquetada como estimada, no como leída',
+    G.calidad !== 'leida' && G.calidad !== 'read', G.calidad);
+
+  console.log('\n=== IVA-H · UN CERO DE IVA QUE SÍ ES CREÍBLE SE RESPETA ===');
+  /* La regla no puede ser «todo cero es mentira». Una línea SIN importe —una
+     cancelada, una `Non-Amazon`— tiene un cero de IVA perfectamente coherente,
+     y deducirle IVA a un ingreso de cero no tendría sentido. */
+  const Hc = await page.evaluate(js(`
+    const fila = venta(dia(5), 1, {pais:'ES', vat:21, ivaCero:true});
+    fila.itemprice = '0.00';
+    DB.imports.orders = {count:1, file:'o', rows:[fila]};
+    periodDays = 30;
+    const p = pnl();
+    return {gross:p.grossInc, tax:p.tax};
+  `));
+  check('una línea sin importe conserva su cero sin deducir nada',
+    near(Hc.gross, 0) && near(Hc.tax, 0), 'bruto '+Hc.gross+' € · IVA '+Hc.tax+' €');
 
   console.log('\nERRORES JS: ' + errors.length);
   errors.forEach(e => console.log('   ' + e));

@@ -12,10 +12,27 @@ CACHE="aresstore-${VER}-$(date -u +%Y%m%d%H%M)"
 
 echo "→ Compilando ${STAMP}"
 
+# 0 · la lista de módulos JS, en orden de ejecución.
+#
+#     `19-registro.js` va justo antes que los `2x`: define las funciones con las
+#     que cada extensión se engancha. Los `2x-*.js` entran solos, por orden
+#     alfabético, y por eso añadir un módulo nuevo NO obliga a volver a editar
+#     este fichero — que es la costura que evita que varios carriles trabajando
+#     a la vez choquen aquí, en la única línea que todos tendrían que tocar.
+#
+#     `13-render.js` va el último a propósito: engancha los escuchadores de
+#     navegación recorriendo el DOM, así que las vistas que registre un `2x`
+#     tienen que estar ya insertadas cuando le llega el turno.
+#
+#     `|| true` porque con `set -e` y `pipefail` un `ls` sin coincidencias
+#     abortaría la compilación cuando todavía no existe ningún módulo 2x.
+EXTRA=$( { ls src/2[0-9]-*.js 2>/dev/null || true; } | LC_ALL=C sort | tr '\n' ' ')
+JS="src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/19-registro.js ${EXTRA}src/13-render.js"
+
 # 1 · un solo archivo HTML con todo dentro
 cat src/01-head.html src/02-views.html src/03-calculadora.html src/04-acerca.html \
     src/05-auditoria.html src/06-guia.html src/07-close.html \
-    src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js > index.html
+    $JS > index.html
 printf '\n</script>\n</body>\n</html>\n' >> index.html
 
 # 2 · sellar la versión para que se vea en la interfaz
@@ -88,6 +105,6 @@ c.paste(i,(51,51),i); c.save('icon-maskable-512.png')
 PY
 
 echo "→ index.html $(wc -c < index.html) bytes · cache ${CACHE}"
-node --check <(cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js) 2>/dev/null \
-  || { cat src/10-const.js src/11-motor-validacion.js src/12-datos.js src/12b-historico.js src/12c-lotes.js src/13-render.js > /tmp/_chk.js; node --check /tmp/_chk.js; }
+node --check <(cat $JS) 2>/dev/null \
+  || { cat $JS > /tmp/_chk.js; node --check /tmp/_chk.js; }
 echo "→ sintaxis correcta"

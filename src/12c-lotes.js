@@ -486,29 +486,51 @@ function delLot(prodId, lotId){
    el margen de dos meses de ventas que salieron del stock viejo. Sin fecha de
    recepción devuelve null y quien llama decide, en lugar de inventarse una
    fecha plausible. */
-function poLotDate(po){
-  return po.received || null;
+function poLotDate(po, rec){
+  /* M3 · con entregas parciales cada recepción trae SU fecha, y esa es la que
+     manda para el lote que crea. Si la entrega no tiene fecha se devuelve null
+     igual que antes: NO se cae en `po.received`, porque la fecha de la última
+     recepción aplicada a la primera entrega fecha ese stock semanas después de
+     existir, y ese es justo el error que esta función existe para impedir. */
+  if(rec) return rec.date || null;
+  return (po && po.received) || null;
 }
 /* Un pedido de compra crea un lote POR LÍNEA, con el flete ya repartido. Si el
    mismo pedido se aplica dos veces —entrega parcial— se actualiza el lote que
    ya creó en lugar de duplicarlo. La clave lleva el índice de la línea: con el
    SKU solo, un pedido con la misma referencia en dos líneas perdía la mitad de
    las unidades y escribía un flete negativo. */
-function lotFromPO(po, item, idx){
+function lotFromPO(po, item, idx, rec){
   const p = findProd(item.sku); if(!p) return null;
   /* La guarda vive aquí, no solo en quien llama: una función que crea datos no
      debe poder fabricar un lote sin fecha por descuido de otro. */
-  if(!poLotDate(po)) return null;
+  const date = poLotDate(po, rec);
+  if(!date) return null;
+  /* M3 · DIVISA. El lote vive en euros, como el catálogo, el margen y la caja.
+     Un pedido en divisa sin tipo de cambio escrito NO crea lote: meter 4,35
+     dólares en el catálogo como si fueran 4,35 euros es un coste un 8 % bajo
+     que nadie puede detectar mirando la pantalla. */
+  const fx = poFxRate(po);
+  if(fx === null) return null;
   if(!Array.isArray(p.lots)) p.lots = [];
-  const unit = toNum(item.unitCost);
-  const freight = +(poUnitCostOf(po, item) - unit).toFixed(4);
-  const date = poLotDate(po);
-  const key = po.id + '·' + (idx==null ? item.sku : idx);
+  const unit = +(toNum(item.unitCost)*fx).toFixed(4);
+  const freight = +((poUnitCostOf(po, item) - toNum(item.unitCost))*fx).toFixed(4);
+  /* M3 · ENTREGAS PARCIALES. Las unidades del lote son las de ESTA recepción,
+     no las del pedido entero: un pedido de 1.500 del que han llegado 600 creaba
+     1.500 unidades de stock fechadas el día de la primera caja, y el coste
+     puesto de las 900 que aún navegan se aplicaba a ventas servidas con el
+     stock anterior. El flete por unidad, en cambio, se reparte sobre el pedido
+     COMPLETO —es una sola factura de transporte— así que el coste unitario no
+     cambia porque el contenedor venga partido, que es exactamente lo que tiene
+     que pasar. La clave lleva el id de la entrega para que cada una tenga su
+     lote y reaplicar el pedido actualice en lugar de duplicar. */
+  const qty = rec ? poReceiptQty(rec, idx) : toNum(item.qty);
+  const key = po.id + '·' + (idx==null ? item.sku : idx) + (rec ? '·'+rec.id : '');
   let l = p.lots.filter(x=>x.poId===key)[0];
-  if(l){ Object.assign(l, {date, qty:toNum(item.qty), unit, freight}); return l; }
+  if(l){ Object.assign(l, {date, qty, unit, freight}); return l; }
   const prov = (DB.suppliers.filter(s=>s.id===po.supplierId)[0]||{}).name || '';
-  l = {id:uid(), poId:key, date, qty:toNum(item.qty), unit, freight,
-       ref:(po.ref||'pedido') + (prov ? ' · '+prov : '')};
+  l = {id:uid(), poId:key, date, qty, unit, freight,
+       ref:(po.ref||'pedido') + (prov ? ' · '+prov : '') + (rec ? ' · '+(rec.ref||'entrega') : '')};
   p.lots.push(l);
   return l;
 }

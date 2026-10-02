@@ -1255,7 +1255,7 @@ function vatReport(opts){
        Los reembolsos entran desde el 2-10-2026, medido contra el informe real:
        42 filas REFUND con base e IVA en negativo y el mismo tipo reducido de la
        venta que anulan. Un reembolso rectifica la base de esa venta, y con ella
-       la deuda. Contando solo ventas, la deuda salía 55,15 € por encima. */
+       la deuda. Contando solo ventas, la deuda salía por encima de la real. */
     const esReemb = tipoTx.indexOf('REFUND') >= 0;
     if(tipoTx && tipoTx.indexOf('SALE')<0 && !esReemb) return;
     if(corte && (corte.desde || corte.hasta)){

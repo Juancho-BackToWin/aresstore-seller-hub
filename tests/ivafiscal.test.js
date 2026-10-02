@@ -314,7 +314,7 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
   console.log('\n=== FIS-H · UN REEMBOLSO RECTIFICA LA DEUDA DE LA VENTA QUE ANULA ===');
   /* Medido el 2-10-2026 contra el informe real: 42 filas REFUND, con base e
      IVA en negativo y el tipo reducido de la venta. El hub solo contaba
-     ventas y la deuda salía 55,15 € por encima.
+     ventas y la deuda salía por encima de la real.
      Aritmética, sobre los 45,00 € de FIS-G:
        reembolso de una venta austriaca, base −50,00, IVA −5,00 al 10 %:
          −50,00 × 20/100 − (−5,00) = −10,00 + 5,00 = −5,00   → 40,00 €

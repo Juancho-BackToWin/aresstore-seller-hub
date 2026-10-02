@@ -75,7 +75,48 @@ const near = (a,b)=> typeof a==='number' && Math.abs(a-b) < 0.005;
   check('con un pedido del mes B cargado, su deuda entra sola: 33,00 €', !R.__err && near(R.linea2, 33) &&
     R.sinVentas2 && R.sinVentas2.meses.length===0, err || R.linea2+' €');
 
-  await page.evaluate(()=>{ DB.imports.orders.rows.pop(); DB.imports.orders.count=1; saveDB(); refreshAll(); go('rentabilidad'); });
+  /* Revisión adversarial del 3-10-2026.
+     R2 · La venta del mes B (sin pedidos) se reembolsa en el mes A (con
+          pedidos). Mes A: +11,00 de su venta y −22,00 del reembolso; mes B
+          apartado: +22,00. Total del informe: 11 + 22 − 22 = 11,00 €. La resta
+          ingenua daba 11 − 22 = −11,00 €: el IVA no repercutido SUBÍA el
+          beneficio. Nunca por debajo de cero.
+     R4 · Un único pedido CANCELADO en el mes B no lo da por cubierto. */
+  const R2 = await page.evaluate(()=>{ try{
+      const dia = k => { const d=new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-k); return d; };
+      const ddmmyyyy = d => String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
+      const isoD = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+      const A = dia(70), B = dia(130);
+      const fila = (d, base, tipo) => ({transactiontype:tipo||'SALE', transactioncompletedate:ddmmyyyy(d),
+        taxablejurisdiction:'SPAIN', totalactivityvalueamtvatexcl:String(base), totalactivityvaluevatamt:String(base*0.10),
+        priceofitemsvatratepercent:'0.1000', producttaxcode:'A_FOOD_DESSERT', sellersku:'LAB-1'});
+      DB.imports.vat = {rows:[fila(A,100), fila(B,200), fila(A,-200,'REFUND')], count:3, file:'lab'};
+      const pedido = (d, st) => ({amazonorderid:'o'+isoD(d)+(st||''), purchasedate:isoD(d)+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
+        saleschannel:'Amazon.es', sku:'LAB-1', asin:'B0LAB00001', itemstatus:st||'Shipped', quantity:'1', itemprice:'121', itemtax:'21', shipcountry:'ES'});
+      DB.imports.orders = {rows:[pedido(A)], count:1, file:'lab'};
+      periodDays = 0; countryFilter = 'ALL';
+      const r2 = {linea:pnl().vatShortfall, informe:vatReport().difTuya};
+      DB.imports.vat = {rows:[fila(A,100), fila(B,200)], count:2, file:'lab'};
+      DB.imports.orders = {rows:[pedido(A), pedido(B,'Cancelled')], count:2, file:'lab'};
+      const P4 = pnl();
+      return Object.assign(r2, {linea4:P4.vatShortfall, meses4:(P4.vatSinVentas||{}).meses});
+    }catch(e){ return {__err:String(e&&e.message||e).slice(0,140)}; } });
+  check('R2 · un reembolso de un mes apartado no deja la línea de IVA en negativo', !R2.__err && R2.linea>=0 && near(R2.informe, 11),
+    R2.__err || ('línea '+R2.linea+' € · informe '+R2.informe+' €'));
+  check('R4 · un pedido cancelado no da el mes por cubierto: se restan 11,00 €, no 33,00 €', !R2.__err && near(R2.linea4, 11) &&
+    (R2.meses4||[]).length===1, R2.__err || (R2.linea4+' € · meses apartados '+JSON.stringify(R2.meses4)));
+
+  await page.evaluate(()=>{ const dia = k => { const d=new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-k); return d; };
+    const ddmmyyyy = d => String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear();
+    const isoD = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    const venta = (d, base) => ({transactiontype:'SALE', transactioncompletedate:ddmmyyyy(d), taxablejurisdiction:'SPAIN',
+      totalactivityvalueamtvatexcl:String(base), totalactivityvaluevatamt:String(base*0.10), priceofitemsvatratepercent:'0.1000',
+      producttaxcode:'A_FOOD_DESSERT', sellersku:'LAB-1'});
+    DB.imports.vat = {rows:[venta(dia(70),100), venta(dia(130),200)], count:2, file:'lab'};
+    DB.imports.orders = {rows:[{amazonorderid:'oA', purchasedate:isoD(dia(70))+'T10:00:00+00:00', fulfillmentchannel:'Amazon',
+      saleschannel:'Amazon.es', sku:'LAB-1', asin:'B0LAB00001', itemstatus:'Shipped', quantity:'1', itemprice:'121', itemtax:'21', shipcountry:'ES'}],
+      count:1, file:'lab'};
+    saveDB(); refreshAll(); go('rentabilidad'); });
   await page.waitForTimeout(400);
   const T = await page.evaluate(()=>document.body.innerText);
   check('la pantalla de Rentabilidad lo explica', /no hay ni un pedido cargado/.test(T),

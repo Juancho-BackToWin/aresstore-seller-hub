@@ -135,6 +135,19 @@ function tsv(filas){
 }
 
 fs.writeFileSync(path.join(FIX,'amazon.xlsx'), libroAmazon());
+fs.writeFileSync(path.join(FIX,'fecha-iso.xlsx'), (()=>{
+  const cab = ['Fecha de inicio','Fecha de finalización','Divisa','Nombre de campaña','Término de búsqueda de cliente','Impresiones','Clics','Gasto'];
+  const is = (c,v)=>'<c r="'+c+'" t="inlineStr"><is><t>'+xe(v)+'</t></is></c>';
+  const r1 = '<row r="1">'+cab.map((v,i)=>is(String.fromCharCode(65+i)+'1',v)).join('')+'</row>';
+  /* Con estilo de fecha (s="1"): es donde fallaba, porque el lector trataba la
+     celda como número de serie y `Number('2026-…')` da NaN. */
+  const r2 = '<row r="2"><c r="A2" s="1" t="d"><v>'+isoHace(5)+'T00:00:00</v></c><c r="B2" s="1" t="d"><v>'+isoHace(5)+'T00:00:00</v></c>'+
+    is('C2','EUR')+is('D2','X')+is('E2','fecha iso')+'<c r="F2"><v>10</v></c><c r="G2"><v>2</v></c><c r="H2"><v>1.5</v></c></row>';
+  return zip([['xl/workbook.xml','<workbook><sheets><sheet name="H" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+    ['xl/_rels/workbook.xml.rels','<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>'],
+    ['xl/styles.xml','<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>'],
+    ['xl/worksheets/sheet1.xml','<worksheet><sheetData>'+r1+r2+'</sheetData></worksheet>']]);
+})());
 fs.writeFileSync(path.join(FIX,'viejo.xls'), Buffer.from('D0CF11E0', 'hex'));
 
 /* X-B · dos informes que se pisan.
@@ -173,6 +186,28 @@ fs.writeFileSync(path.join(FIX,'antiguo.txt'), tsv(V1));
 fs.writeFileSync(path.join(FIX,'reciente.txt'), tsv(V2));
 const V3=[]; for(let k=109;k>=100;k--) V3.push({d:k,h:k,camp:'E',pais:'España',term:'e'+k,g:5});
 fs.writeFileSync(path.join(FIX,'antiguo-caro.txt'), tsv(V3));
+
+/* ── Fixtures de la revisión adversarial del 3-10-2026 ──────────────────────
+   R1 · Informe largo de hace 200 a hace 5 a 2,00 €/día y un informe de UN día
+        (hace 2) con 40,00 € —un pico de Prime Day—. Con el ritmo del último
+        tramo y el tope de todos los días medidos, a 365 días se extrapolaban
+        6.720 €. Ahora: muestra mínima de 7 días con informe (hace 2 y hace 5…10)
+        = (40 + 6×2)/7 = 7,43 €/día, estirado como mucho 7 días = 52,00 €. */
+const L1=[]; for(let k=200;k>=5;k--) L1.push({d:k,h:k,camp:'L',pais:'España',term:'l'+k,g:2});
+fs.writeFileSync(path.join(FIX,'largo.txt'), tsv(L1));
+fs.writeFileSync(path.join(FIX,'pico.txt'), tsv([{d:2,h:2,camp:'L',pais:'España',term:'pico',g:40}]));
+/* R3 · el mismo informe con «España» y con «Spain»: 10,00 €, no 20,00 €. */
+const P1=[], P2=[]; for(let k=10;k>=1;k--){ P1.push({d:k,h:k,camp:'P',pais:'España',term:'p'+k,g:1});
+  P2.push({d:k,h:k,camp:'P',pais:'Spain',term:'p'+k+' ',g:1}); }
+fs.writeFileSync(path.join(FIX,'pais-es.txt'), tsv(P1));
+fs.writeFileSync(path.join(FIX,'pais-en.txt'), tsv(P2));
+/* R5 · un informe con las campañas A y B (hace 60…5) y otro solo con B
+        (hace 4…1): A no sale en el más reciente y tiene que decirse. */
+const C1=[], C2=[]; for(let k=60;k>=5;k--){ C1.push({d:k,h:k,camp:'Campaña A',pais:'España',term:'a'+k,g:5});
+  C1.push({d:k,h:k,camp:'Campaña B',pais:'España',term:'b'+k,g:5}); }
+for(let k=4;k>=1;k--) C2.push({d:k,h:k,camp:'Campaña B',pais:'España',term:'b'+k,g:5});
+fs.writeFileSync(path.join(FIX,'dos-campanas.txt'), tsv(C1));
+fs.writeFileSync(path.join(FIX,'solo-b.txt'), tsv(C2));
 
 (async () => {
   const browser = await chromium.launch({executablePath:'/opt/pw-browsers/chromium'});
@@ -289,7 +324,10 @@ fs.writeFileSync(path.join(FIX,'antiguo-caro.txt'), tsv(V3));
      OJO: a 365 días las dos fórmulas dan 20,00 € por casualidad (se estiran
      tantos días como el divisor), y la prueba pasaba sin el arreglo. Por eso
      va a 30. */
-  check('y se extrapola al ritmo real, 1,00 €/día: 20,00 €', Math.abs(gc.extra-20)<0.005,
+  /* Desde la revisión adversarial, un ritmo se estira como mucho los días que
+     lo sostienen: el tramo reciente son 10 días, así que se rellenan 10 de los
+     20 a 1,00 €/día = 10,00 €, y los otros 10 quedan sin dato y se dicen. */
+  check('y se extrapola al ritmo real, 1,00 €/día, tantos días como lo sostienen: 10,00 €', Math.abs(gc.extra-10)<0.005,
     n2(gc.extra)+' € en '+gc.extDias+' días (con el fallo, 3,67 €)');
 
   /* X-D · EL RITMO ES EL DEL ÚLTIMO TRAMO, NO EL DE TODO EL HISTÓRICO.
@@ -302,16 +340,42 @@ fs.writeFileSync(path.join(FIX,'antiguo-caro.txt'), tsv(V3));
   await limpiar();
   await cargar('antiguo-caro.txt', 'reciente.txt');
   const gd = await ev(`(()=>{ periodDays=30; const A=pubAdStats(); return {extra:A.spendExtrapolado, ritmo:A.ritmoDiario,
-      tramo:A.diasTramo}; })()`);
+      tramo:A.diasTramo, sinDato:A.diasSinDato}; })()`);
   check('el ritmo es el del último tramo continuo: 1,00 €/día en 10 días', !gd.__err && Math.abs(gd.ritmo-1)<0.005 && gd.tramo===10,
     err(gd) || n2(gd.ritmo)+' €/día · tramo de '+gd.tramo+' días');
-  check('y los 20 días sin informe suman 20,00 €, no 60,00 €', Math.abs(gd.extra-20)<0.005,
+  /* Y el ritmo de 10 días se estira, como mucho, 10 días: 10,00 €; los otros
+     10 días quedan sin dato y se dicen. Con la media del histórico y el tope
+     de todos los días medidos salían 60,00 €. */
+  check('y de los 20 días sin informe, 10 se rellenan a ese ritmo: 10,00 €, no 60,00 €', Math.abs(gd.extra-10)<0.005,
     err(gd) || n2(gd.extra)+' € (con la media del histórico, 60,00 €)');
   await limpiar();
   await cargar('reciente.txt');
   const g1r = await ev(`(()=>{ periodDays=30; const A=pubAdStats(); return {extra:A.spendExtrapolado, ritmo:A.ritmoDiario}; })()`);
   check('con un solo informe, el ritmo es el del informe entero, como siempre',
     Math.abs(g1r.ritmo-1)<0.005 && Math.abs(g1r.extra-10)<0.005, n2(g1r.ritmo)+' €/día · '+n2(g1r.extra)+' € extrapolados');
+
+  console.log('\n=== X-E · REVISIÓN ADVERSARIAL DEL 3-10-2026 ===');
+  await limpiar(); await cargar('largo.txt', 'pico.txt');
+  const r1 = await ev(`(()=>{ periodDays=365; const A=pubAdStats(); return {extra:A.spendExtrapolado, ritmo:A.ritmoDiario, tramo:A.diasTramo}; })()`);
+  check('R1 · un pico de un día no se estira a cientos de días: 52,00 € extrapolados, no 6.720 €',
+    !r1.__err && Math.abs(r1.extra-52)<0.01 && r1.tramo===7, err(r1) || n2(r1.extra)+' € · ritmo '+n2(r1.ritmo)+' €/día · muestra '+r1.tramo+' días');
+  await limpiar(); await cargar('pais-es.txt', 'pais-en.txt');
+  const r3 = await ev(`(()=>{ periodDays=3650; return pubAdStats().spendBruto; })()`);
+  check('R3 · «España» y «Spain» son el mismo país: 10,00 €, no 20,00 €', typeof r3==='number' && Math.abs(r3-10)<0.005, n2(r3)+' €');
+  await limpiar(); await cargar('dos-campanas.txt', 'solo-b.txt');
+  const r5 = await ev(`(()=>{ periodDays=30; return pubAdStats().campanasFuera||null; })()`);
+  check('R5 · la campaña que no sale en el informe más reciente se nombra', Array.isArray(r5) && r5.indexOf('Campaña A')>=0 && r5.indexOf('Campaña B')<0,
+    JSON.stringify(r5));
+  await page.evaluate(()=>go('publicidad')); await page.waitForTimeout(300);
+  check('R5 · y la pantalla lo avisa', /no sale en él/.test(await page.evaluate(()=>document.body.innerText)), 'aviso en Publicidad');
+  const r7 = await ev(`xlsxTexto('<r><t/></r><r><t xml:space="preserve">Pulseras</t></r>')`);
+  check('R7 · un trozo de texto vacío «<t/>» no se come el texto de al lado', r7==='Pulseras', JSON.stringify(r7));
+  const r9 = await ev(`[xlsxNum('1E+21'), xlsxNum('-2.5E-3'), xlsxNum('12')]`);
+  check('R9 · números grandes y pequeños, en decimal', Array.isArray(r9) && r9[0]==='1000000000000000000000' && r9[1]==='-0.0025' && r9[2]==='12',
+    JSON.stringify(r9));
+  await limpiar(); await cargar('fecha-iso.xlsx');
+  const r8 = await ev(`(()=>{ const F=pubFilas(); return F.length ? (F[0].desde?iso(F[0].desde):null) : 'sin filas'; })()`);
+  check('R8 · una fecha guardada como ISO («t=\"d\"») se lee como fecha', r8===isoHace(5), JSON.stringify(r8)+' · esperado '+isoHace(5));
 
   check('sin errores de JS en toda la sesión', errors.length===0, errors.slice(0,3).join(' | ') || 'limpio');
   await browser.close();

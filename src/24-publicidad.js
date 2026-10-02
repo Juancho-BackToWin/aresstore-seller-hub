@@ -47,6 +47,7 @@
 const PUB_MIN_CLICS   = 10;   // clics mínimos para que una conversión observada signifique algo
 const PUB_HORAS_REGLA = 72;   // la regla de las 72 horas entre cambios de puja
 const PUB_DIAS_RUIDO  = 3;    // los últimos tres días siguen moviéndose (atribución)
+const PUB_MUESTRA_RITMO = 7;  // días con informe, como mínimo, para sacar el ritmo de los días sin informe (una semana)
 
 /* ── Fechas · COSTURA → carril 6 ──────────────────────────────────────────────
    `parseDate()` está en el carril 6 y no se toca. Lo que hace falta aquí es
@@ -192,13 +193,14 @@ function pubCobertura(filas){
        crea cobertura ni se le quita ningún día. */
     if(!f.desde || !f.ficheros.length) return;
     f.ficheros.forEach(fid=>{
-      const c = cob[fid] || (cob[fid] = {fid, ini:f.desde, fin:f.hasta, filas:0, camp:{}, campPais:{}});
+      const c = cob[fid] || (cob[fid] = {fid, ini:f.desde, fin:f.hasta, filas:0, sumDias:0, camp:{}, campPais:{}});
       if(f.desde<c.ini) c.ini=f.desde;
       if(f.hasta>c.fin) c.fin=f.hasta;
       c.filas++;
       const kc = fold(f.campaign);
       c.camp[kc] = 1;
-      if(f.country) c.campPais[kc+'|'+fold(f.country)] = 1;
+      if(f.country) c.campPais[kc+'|'+pubPais(f.country)] = 1;
+      c.sumDias = (c.sumDias||0) + f.dias;
     });
   });
   return cob;
@@ -207,6 +209,22 @@ function pubCobertura(filas){
    que coincidir: una campaña con el mismo nombre en Francia y en Italia son dos
    campañas. Si alguno no trae país (los informes viejos no lo traían), basta el
    nombre. */
+/* El país de una fila, como código. Un informe escribe «España», otro «Spain» y
+   otro «ES»: comparados en crudo eran tres países y la misma campaña contaba dos
+   veces (lo encontró la revisión adversarial del 3-10-2026). */
+/* `countryOf()` entiende los nombres en inglés y los códigos, pero no los
+   nombres en español con que el informe de publicidad en español escribe el
+   país («España», «Alemania», «Países Bajos»). Se resuelven aquí primero. */
+const PUB_PAISES_ES = {'espana':'ES','alemania':'DE','francia':'FR','italia':'IT','paises bajos':'NL',
+  'belgica':'BE','polonia':'PL','suecia':'SE','reino unido':'GB','irlanda':'IE','austria':'AT',
+  'portugal':'PT','republica checa':'CZ','chequia':'CZ','turquia':'TR','eslovaquia':'SK'};
+function pubPais(v){
+  if(!v) return '';
+  const f = fold(String(v)).replace(/\s+/g,' ').trim();
+  if(PUB_PAISES_ES[f]) return PUB_PAISES_ES[f];
+  let c = null; try{ c = countryOf(v); }catch(e){}
+  return c || f;
+}
 function pubTraeCampana(c, kc, kp){
   if(!c.camp[kc]) return false;
   const conPais = Object.keys(c.campPais).some(k=>k.indexOf(kc+'|')===0);
@@ -220,8 +238,13 @@ function pubDuenoDia(cob, kc, kp, dia, cache){
   for(const fid in cob){
     const c = cob[fid];
     if(dia<c.ini || dia>c.fin || !pubTraeCampana(c, kc, kp)) continue;
-    if(!mejor || c.fin>mejor.fin || (+c.fin===+mejor.fin && (c.filas>mejor.filas ||
-       (c.filas===mejor.filas && fid>mejor.fid)))) mejor = c;
+    /* Desempates, en orden: llega más lejos; es más fino (filas de menos días
+       de media: un informe diario gana a uno de resumen aunque tenga menos
+       filas); tiene más filas; se cargó después (número de fichero, como
+       número: «f10» va después de «f9»). */
+    const fino = x=>x.sumDias/x.filas, nf = x=>+String(x.fid).replace(/\D/g,'')||0;
+    if(!mejor || c.fin>mejor.fin || (+c.fin===+mejor.fin && (fino(c)<fino(mejor) ||
+       (fino(c)===fino(mejor) && (c.filas>mejor.filas || (c.filas===mejor.filas && nf(c)>nf(mejor))))))) mejor = c;
   }
   return (cache[k] = mejor ? mejor.fid : null);
 }
@@ -289,7 +312,7 @@ function pubAdStats(){
        manda para esta campaña (ver `pubCobertura`). */
     let propios = f.dias, diasPropios = null;
     if(f.desde && nFicheros>1 && f.ficheros.length){
-      const kc = fold(f.campaign), kp = fold(f.country);
+      const kc = fold(f.campaign), kp = pubPais(f.country);
       const mios = f.ficheros;
       diasPropios = [];
       for(let k=0;k<f.dias;k++){
@@ -384,10 +407,37 @@ function pubAdStats(){
          cuando el último informe, el de agosto, gastaba 7,67 €/día. Para
          rellenar días que nadie ha medido, lo menos malo es lo más reciente.
          Con un solo informe, el tramo es el informe entero: lo de siempre. */
+      /* Y CON UNA MUESTRA MÍNIMA. La revisión adversarial lo encontró: si el
+         último tramo es de un día —un pico de Prime Day descargado aparte—,
+         su ritmo se estiraba a cientos de días. El tramo se alarga hacia atrás,
+         saltando los huecos, hasta tener al menos `PUB_MUESTRA_RITMO` días
+         con informe (o todos los que haya). */
       let k = d1; tramoFin = d1;
       while(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
         ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; k = addDays(k,-1); }
+      const objetivo = Math.min(PUB_MUESTRA_RITMO, adDays);
+      while(diasTramo < objetivo && k >= d0){
+        if(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
+          ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; }
+        k = addDays(k,-1);
+      }
     }
+  }
+  /* CAMPAÑAS QUE NO SALEN EN EL INFORME MÁS RECIENTE. La cobertura de un día
+     es la de los informes que lo tocan, y un informe que no trae una campaña
+     deja esa campaña a cero esos días, dados por medidos. Si la campaña dejó
+     de gastar, es verdad; si el informe se pidió filtrado, falta su gasto. El
+     hub no puede saber cuál de las dos, así que lo dice: las campañas activas
+     en la semana anterior al informe más reciente que no salen en él. */
+  let campanasFuera = [];
+  if(nFicheros>1){
+    let ult = null; for(const fid in cob) if(!ult || cob[fid].fin>ult.fin) ult = cob[fid];
+    const ultimaFecha = {};
+    filas.forEach(f=>{ if(!f.hasta || !f.ficheros.length) return; const kc=fold(f.campaign);
+      if(!ultimaFecha[kc] || f.hasta>ultimaFecha[kc].d) ultimaFecha[kc] = {d:f.hasta, nombre:f.campaign}; });
+    const limite = addDays(ult.ini, -7);
+    campanasFuera = Object.keys(ultimaFecha).filter(kc=>!ult.camp[kc] && ultimaFecha[kc].d>=limite)
+      .map(kc=>ultimaFecha[kc].nombre);
   }
   /* Ritmo diario, para los días del periodo que el informe no cubre. */
   const ritmoGasto  = diasTramo ? gastoTramo/diasTramo : 0;
@@ -408,7 +458,9 @@ function pubAdStats(){
      con cero de publicidad y el beneficio de ese tramo sale optimista. Decirlo
      es lo único honesto; inventarlo, no. */
   const diasPorCubrir = Math.max(0, V.dias - diasMedidos);
-  const diasExtrapolados = adDays ? Math.min(diasPorCubrir, adDays) : 0;
+  /* Un ritmo se estira, como mucho, tantos días como los que lo sostienen. Con
+     un informe es el informe; con varios, la muestra de la que sale el ritmo. */
+  const diasExtrapolados = adDays ? Math.min(diasPorCubrir, nFicheros>1 ? diasTramo : adDays) : 0;
   const diasSinDato = diasPorCubrir - diasExtrapolados;
   const spendExtra = diasExtrapolados * ritmoGasto;
   const salesExtra = diasExtrapolados * ritmoVentas;
@@ -455,7 +507,7 @@ function pubAdStats(){
     filas: filas.length, filasAgregadas, filasSinFecha, maxDiasFila: maxDias,
     filasOtraDivisa, gastoOtraDivisa, otrasDivisas: Object.keys(otrasDivisas),
     ficheros: nFicheros, filasSolape, gastoSolape, ventasSolape,
-    ritmoDiario: ritmoGasto, diasTramo, tramoIni, tramoFin,
+    ritmoDiario: ritmoGasto, diasTramo, tramoIni, tramoFin, campanasFuera,
     diasSolape: Object.keys(diasSolape).length,
     gastoAgregado, gastoProrrateado,
     prorrateoPct: spend>0 ? Math.min(100, (gastoProrrateado+spendExtra)/spend*100) : 0,
@@ -862,6 +914,13 @@ function pubRenderPublicidad(){
          '—el que llega más lejos—, así que '+fmt(A.gastoSolape,2)+' de gasto de los otros informes se ha quedado fuera para no '+
          'contarlo dos veces. Si dos informes dicen cifras distintas para el mismo día, no se promedian: manda uno. '+
          'Los ficheros y sus fechas están en <em>Datos</em>.</div>';
+    }
+    if(A.campanasFuera && A.campanasFuera.length){
+      v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+num(A.campanasFuera.length)+' campaña'+
+         (A.campanasFuera.length===1?' que gastaba':'s que gastaban')+' justo antes del informe más reciente no '+
+         (A.campanasFuera.length===1?'sale':'salen')+' en él</strong> ('+esc(A.campanasFuera.slice(0,5).join(', '))+
+         (A.campanasFuera.length>5?'…':'')+'). Esos días cuentan a cero para ella'+(A.campanasFuera.length===1?'':'s')+
+         '. Si se pausó, es correcto; si el informe se pidió filtrado por campaña o por país, falta su gasto.</div>';
     }
     if(A.filasOtraDivisa>0){
       v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+num(A.filasOtraDivisa)+' fila'+

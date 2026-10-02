@@ -488,8 +488,11 @@ function xlsxEnt(s){
    guía fonética `<rPh>`, que es una transcripción y no el texto. */
 function xlsxTexto(xml){
   const sinFon = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g,'');
-  let s=''; const re=/<t\b[^>]*>([\s\S]*?)<\/t>/g; let m;
-  while((m=re.exec(sinFon))) s += m[1];
+  /* `<t/>` (un trozo de texto vacío) existe en libros reales. Una expresión que
+     lo leyera como apertura se tragaba hasta el siguiente `</t>` y metía
+     «</r><r><t>» dentro del nombre de una campaña. */
+  let s=''; const re=/<t(?:\s[^>]*?)?(?:\/>|>([\s\S]*?)<\/t>)/g; let m;
+  while((m=re.exec(sinFon))) s += m[1]||'';
   return xlsxEnt(s);
 }
 function xlsxAttr(tag, nom){
@@ -527,6 +530,8 @@ function xlsxFecha(serie, base1904){
 function xlsxNum(txt){
   const n = Number(txt);
   if(!isFinite(n)) return String(txt);
+  /* A partir de 1e21, String() vuelve a la notación científica. */
+  if(Math.abs(n) >= 1e21) return n.toLocaleString('en-US', {useGrouping:false, maximumFractionDigits:0});
   if(Number.isInteger(n)) return String(n);
   const s = n.toFixed(10).replace(/0+$/,'').replace(/\.$/,'');
   return s==='-0' ? '0' : s;
@@ -595,6 +600,11 @@ async function xlsxLeer(buf){
       else if(t==='str') val = v;
       else if(t==='b') val = v==='1' ? 'TRUE' : 'FALSE';
       else if(t==='e'){ val = ''; errores++; }
+      /* Fecha ISO guardada como tal (`t="d"`): no es un número de serie. */
+      else if(t==='d'){ val = v ? v.replace('T',' ').replace(/(\s00:00(:00(\.0+)?)?)?Z?$/,'') : ''; if(val) fechas++; }
+      /* Una fórmula sin valor guardado: Excel no la calculó al guardar. Vacía,
+         y contada como error: no es un cero. */
+      else if(v==='' && /<f\b/.test(cuerpo)){ val = ''; errores++; }
       else if(v!==''){
         if(estiloFecha[s]){ val = xlsxFecha(Number(v), base1904); fechas++; }
         else val = xlsxNum(v);
@@ -665,7 +675,8 @@ if(typeof handleFiles === 'function' && !window.__impXlsx){
         resto.push(conv);
       }catch(e){
         fila(f.name, '<strong>No he podido leer este libro de Excel</strong> ('+esc(e.message||String(e))+'). '+
-          'Si está protegido con contraseña o se guardó en otro formato, ábrelo en Excel y usa '+
+          'Si es un informe de publicidad, pídelo en CSV: <em>Publicidad › Gestor de campañas › Informes</em>, '+
+          'y al descargar elige <em>CSV</em>. Si solo tienes el libro, ábrelo en Excel y usa '+
           '<em>Archivo › Guardar como › CSV UTF-8</em>.', 'err', el);
       }
     }

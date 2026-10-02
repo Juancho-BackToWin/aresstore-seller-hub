@@ -1262,7 +1262,16 @@ function ivaMesesSinVentas(S, pais, desde){
      que falte el informe de ese mes. Por eso se leen las fechas de todos los
      pedidos importados, sin periodo ni país. */
   const conVentas = {};
-  imp('orders').forEach(r=>{ const d = parseDate(gv(r,'_date','purchasedate'));
+  /* Un pedido cancelado o pendiente, o en otra divisa, no es una venta del
+     P&L: no puede dar un mes por cubierto (lo encontró la revisión adversarial
+     del 3-10-2026: un único pedido cancelado hacía restar la deuda del mes
+     entero contra cero ingresos de ese mes). */
+  imp('orders').forEach(r=>{
+    const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
+    if(st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0 || st==='pending' || st==='pendiente') return;
+    const cur = String(gv(r,'_cur','currency','divisa')||'').trim().toUpperCase();
+    if(cur && cur!==DIVISA_VENTAS) return;
+    const d = parseDate(gv(r,'_date','purchasedate'));
     if(d && !isNaN(d)) conVentas[iso(d).slice(0,7)] = 1; });
   const mesesIva = {};
   rows.forEach(r=>{
@@ -2117,7 +2126,13 @@ function pnl(){
   /* Menos la de los meses del informe de IVA sin un solo pedido cargado: ver
      `ivaMesesSinVentas`. Se guarda aparte para poder decirlo. */
   const vatSinVentas = ((tb.fiscal||{}).sinVentas) || {meses:[], difTuya:0};
-  const vatShortfall = ((tb.fiscal||{}).difTuya || 0) - (vatSinVentas.difTuya || 0);
+  /* NUNCA POR DEBAJO DE CERO. Un reembolso cae en el mes en que se hace, y su
+     venta puede ser de un mes apartado: entonces el mes cubierto se queda el
+     reembolso sin la venta y la resta salía negativa —el IVA no repercutido
+     SUBÍA el beneficio—. Si pasa, se aparta como mucho lo que hay, y se dice. */
+  const vatTotal = (tb.fiscal||{}).difTuya || 0;
+  let vatShortfall = vatTotal - (vatSinVentas.difTuya || 0);
+  if(vatShortfall < 0 && vatTotal >= 0){ vatSinVentas.recortado = true; vatShortfall = 0; }
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost - vatShortfall;
   /* Publicidad e IVA no repercutido SE REPARTEN, y la pantalla tiene que
      decirlo. No se pueden medir por SKU con los informes de hoy: el de PPC no

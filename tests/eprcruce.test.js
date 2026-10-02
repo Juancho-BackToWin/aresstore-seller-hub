@@ -47,6 +47,7 @@ const FILAS = [
   base('B0DEMO0003','DE','GERMANY','','Primary Packaging',7),
   base('B0DEMO0004','FR','FRANCE','FR-IDU-1','Primary Packaging',3),
   base('B0DEMO0004','FR','FRANCE','','Textiles',3),
+  base('B0DEMO0004','FR','FRANCE','FR-PAP-7','Print Paper',3),
   base('B0DEMO0005','IT','ITALY','IT-CONAI-9','Primary Packaging',2),
   base('B0DEMO0006','IT','ITALY','','Primary Packaging',1),
   base('B0DEMO0007','PL','POLAND','PL-BDO-5','Primary Packaging',4)
@@ -129,6 +130,29 @@ fs.writeFileSync(path.join(FIX,'epr.txt'), '﻿'+[CAB.join('\t')].concat(FILAS.m
     return {cruce:s.cruce && s.cruce.tipo, estado:s.estado}; })()`);
   check('sin informe de EPR, ES vuelve a «declarado» por tu palabra y el cruce dice que no hay con qué cruzar',
     !S.__err && S.cruce==='sin-informe' && S.estado==='declarado', S.__err || (S.estado+' · '+S.cruce));
+
+  console.log('\n=== EPR-8 · PAPEL Y TEXTIL, CADA UNO CON SU NÚMERO ===');
+  /* Francia: Amazon tiene «FR-PAP-7» para papel impreso y nada para textil.
+     Anotas «fr pap 7» (el mismo, escrito de otra forma) y «FR-TEX-1».
+     Papel: coincide → no queda pendiente. Textil: Amazon no lo tiene → sí. */
+  await page.setInputFiles('#csvFile', []);
+  await page.evaluate(()=>go('datos'));
+  await page.setInputFiles('#csvFile', path.join(FIX,'epr.txt'));
+  for(let i=0;i<30;i++){ await page.waitForTimeout(150);
+    if(await page.evaluate(()=>((DB.imports.epr||{}).count||0)>0)) break; }
+  const O = await ev(`(()=>{ setCompOtra('FR','papel impreso','fr pap 7'); setCompOtra('FR','textil','FR-TEX-1');
+    const s = cumplEstados().filter(x=>x.code==='FR')[0];
+    return {otras:(s.cruce.otras||[]).map(o=>o.nombre+':'+o.tipo).join(','), pend:s.pendientes.join(' | '),
+            guardado: JSON.stringify(DB.compliance.FR.eprOtras)}; })()`);
+  check('el número de cada obligación se guarda aparte', !O.__err && /papel impreso/.test(O.guardado) && /textil/.test(O.guardado),
+    O.__err || O.guardado);
+  check('papel impreso coincide (escrito de otra forma) y textil, Amazon no lo tiene', !O.__err &&
+    /papel impreso:coincide/.test(O.otras) && /textil:amazon-no/.test(O.otras), O.__err || O.otras);
+  check('el pendiente dice que Amazon no tiene el de textil que tú sí tienes, y nada del papel', !O.__err &&
+    /textil.*FR-TEX-1: Amazon no lo tiene/.test(O.pend) && !/papel impreso/.test(O.pend), O.__err || O.pend);
+  await page.evaluate(()=>go('cumplimiento')); await page.waitForTimeout(300);
+  const inp = await page.evaluate(()=>document.querySelectorAll('#cumplEprTabla input[data-otra]').length);
+  check('y en la tabla hay dónde anotar cada una', inp>=2, inp+' casillas');
 
   check('sin errores de JS', errors.length===0, errors.slice(0,3).join(' | ') || 'limpio');
   await browser.close();

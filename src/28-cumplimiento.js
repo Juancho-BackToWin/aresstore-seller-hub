@@ -195,18 +195,47 @@ function cumplCruceEpr(code, epr, eprNum){
   const P = epr.paises[code];
   if(!P || !P.filasEnvase){
     const otrasSinNum = P ? Object.keys(P.otras).filter(n=>P.otras[n].vacias===P.otras[n].filas) : [];
-    return {tipo:'sin-filas', unidades: P ? P.unidades : 0, otrasSinNum};
+    return {tipo:'sin-filas', unidades: P ? P.unidades : 0, otrasSinNum, otras: P ? cumplCruceOtras(code, P) : []};
   }
   const regs = Object.keys(P.regEnvase);
   const tuyo = eprNormNum(eprNum);
   const otrasSinNum = Object.keys(P.otras).filter(n=>P.otras[n].vacias===P.otras[n].filas);
-  const base = {regs, unidades:P.unidades, filas:P.filasEnvase, vacias:P.vaciasEnvase, otrasSinNum,
+  const otras = cumplCruceOtras(code, P);
+  const base = {regs, unidades:P.unidades, filas:P.filasEnvase, vacias:P.vaciasEnvase, otrasSinNum, otras,
                 periodo: epr.periodo};
   if(!regs.length) return Object.assign(base, {tipo:'amazon-no'});
   if(!tuyo) return Object.assign(base, {tipo:'solo-amazon'});
   if(!regs.some(r=>eprNormNum(r)===tuyo)) return Object.assign(base, {tipo:'distinto'});
   if(P.vaciasEnvase || regs.length>1) return Object.assign(base, {tipo:'mixto'});
   return Object.assign(base, {tipo:'coincide'});
+}
+/* PAPEL IMPRESO, TEXTIL… CADA UNO CON SU NÚMERO.
+   Francia tiene tres obligaciones EPR distintas en el informe real —envases,
+   papel impreso y textil—, cada una con su registro y su eco-organismo. Con un
+   solo campo por país no había dónde anotar las otras dos, y la pantalla no
+   podía distinguir «no lo tienes» de «lo tienes y Amazon no». Se anotan en
+   `DB.compliance[pais].eprOtras[categoría]` y se cruzan igual que el de envases. */
+function cumplCruceOtras(code, P){
+  const anot = (((typeof DB==='object' && DB && DB.compliance) ? DB.compliance[code] : null) || {}).eprOtras || {};
+  return Object.keys(P.otras).sort().map(nombre=>{
+    const O = P.otras[nombre];
+    const regs = Object.keys(O.registros||{});
+    const tuyo = eprNormNum(anot[nombre]);
+    let tipo;
+    if(!regs.length) tipo = 'amazon-no';
+    else if(!tuyo) tipo = 'solo-amazon';
+    else if(!regs.some(r=>eprNormNum(r)===tuyo)) tipo = 'distinto';
+    else if(O.vacias) tipo = 'mixto';
+    else tipo = 'coincide';
+    return {nombre, regs, anotado: String(anot[nombre]||'').trim(), tipo, filas:O.filas, vacias:O.vacias};
+  });
+}
+function setCompOtra(code, nombre, v){
+  if(!DB.compliance[code]) DB.compliance[code] = {};
+  const o = DB.compliance[code].eprOtras || (DB.compliance[code].eprOtras = {});
+  const t = String(v==null?'':v).trim();
+  if(t) o[nombre] = t; else delete o[nombre];
+  saveDB(); renderComp(); try{ renderPanel(); }catch(e){}
 }
 const EPR_CRUCE_TXT = {
   'coincide'   :'Amazon tiene el mismo número',
@@ -252,7 +281,7 @@ function cumplEstadoPais(code, epr){
      que tenga otro, o que lo tenga a medias. Y las obligaciones de papel o
      textil que el informe trae sin ningún número. */
   const cruceMalo = ['amazon-no','distinto','mixto'].indexOf(cruce.tipo)>=0;
-  const otrasSinNum = cruce.otrasSinNum || [];
+  const otrasSinNum = (cruce.otras||[]).filter(o=>o.tipo!=='coincide').map(o=>o.nombre);
 
   let estado = 'inactivo';
   if(obligado){
@@ -272,8 +301,15 @@ function cumplEstadoPais(code, epr){
   if(cruce.tipo==='mixto') pendientes.push('Amazon tiene el número solo en parte: '+cruce.vacias+' de '+cruce.filas+
                     ' filas sin él'+(cruce.regs.length>1?', y con '+cruce.regs.length+' números distintos':''));
   if(cruce.tipo==='solo-amazon') pendientes.push('Amazon tiene el número '+cruce.regs.join(', ')+' y aquí no está anotado');
-  if(otrasSinNum.length) pendientes.push('el informe trae también '+otrasSinNum.join(' y ')+
-                    ', con su propio registro, y ninguna fila lleva número');
+  (cruce.otras||[]).forEach(o=>{
+    if(o.tipo==='coincide') return;
+    const que = o.nombre+' (otra obligación EPR, con su propio registro)';
+    if(o.tipo==='amazon-no') pendientes.push(que+': ninguna fila del informe lleva número'+
+      (o.anotado ? ', aunque tú tienes anotado '+o.anotado+': Amazon no lo tiene' : ', y tampoco lo tienes anotado'));
+    else if(o.tipo==='solo-amazon') pendientes.push(que+': Amazon tiene '+o.regs.join(', ')+' y aquí no está anotado');
+    else if(o.tipo==='distinto') pendientes.push(que+': Amazon tiene '+o.regs.join(', ')+', que no es el que has anotado');
+    else if(o.tipo==='mixto') pendientes.push(que+': Amazon lo tiene solo en parte');
+  });
   if(obligado && faltaVat) pendientes.push('sin NIF-IVA local anotado, y aquí guardas stock');
   if(obligado && esq.estado!=='ok') pendientes.push('el hub no ha verificado qué registro aplica en este país');
 
@@ -703,8 +739,12 @@ function cumplPintarEstados(){
         '<td class="num">'+num(P.kilos,3)+' kg</td>'+
         '<td>'+(Object.keys(P.otras).length
           ? Object.keys(P.otras).sort().map(n=>{ const O=P.otras[n];
+              const anot = (((DB.compliance||{})[k]||{}).eprOtras||{})[n] || '';
               return esc(n)+(O.kilos?' · '+num(O.kilos,3)+' kg':'')+
-                (O.vacias===O.filas?' <span class="cumpl-badge cumpl-riesgo">sin nº</span>':''); }).join('<br>')
+                (O.vacias===O.filas?' <span class="cumpl-badge cumpl-riesgo">sin nº en Amazon</span>':'')+
+                '<br><input type="text" style="width:140px;font-size:11px" placeholder="tu nº de '+esc(n)+'" '+
+                'data-otra="'+esc(k+'|'+n)+'" value="'+esc(anot)+'" '+
+                'onchange="setCompOtra(\''+k+'\',this.getAttribute(\'data-otra\').split(\'|\').slice(1).join(\'|\'),this.value)">'; }).join('<br>')
           : '—')+'</td><td>'+celda+'</td>'+
         '<td>'+(function(){ const anot = ((DB.compliance||{})[k]||{}).eprNum;
           const X = cumplCruceEpr(k, epr, anot);

@@ -406,40 +406,271 @@ function impAvisos(rep, map, filasNorm){
 }
 
 /* =========================================================================
-   6 · .XLSX  ·  por qué no se lee, y qué hacer
-   Se envuelve `handleFiles` en vez de editarlo: no es de este carril. Lo único
-   que hace la envoltura es apartar los libros de Excel antes de que el flujo
-   normal los vea; lo demás pasa intacto a la función original.
-   // COSTURA → carril de integración: `handleFiles` no es de ningún carril y
-   // el mensaje de .xlsx vive dentro. Se envuelve, no se edita.
+   6 · .XLSX  ·  se lee, sin librerías y sin fiarse de la cabecera
+
+   ANTES SE RECHAZABA, y por una razón buena que sigue vigente: el .xlsx que
+   exporta el gestor de campañas declara en `<dimension>` un rango de UNA sola
+   celda («A1») teniendo más de mil filas. Un lector que se fiara de ese dato
+   importaría una celda y no daría ningún error. Este no lo mira: recorre las
+   filas que hay de verdad.
+
+   POR QUÉ HACÍA FALTA. Juancho tiene quince informes de términos de búsqueda
+   descargados en .xlsx —de mayo de 2025 a agosto de 2026— y Amazon ya no deja
+   volver a pedir la mayoría de esos periodos. Exigir CSV era dejar un año de
+   publicidad fuera del hub.
+
+   CÓMO. Un .xlsx es un ZIP con XML dentro. El ZIP se descomprime con
+   `DecompressionStream('deflate-raw')`, que está en Chrome, Edge, Safari y
+   Firefox actuales; el XML se lee con expresiones regulares acotadas a las
+   cuatro etiquetas que importan. Se convierte en un TSV y entra por el mismo
+   camino que un .txt: detección, columnas, deduplicación y avisos idénticos.
+
+   LO QUE SE CUIDA, porque cada punto era un número creíble y falso:
+   · Un número de Excel puede venir en notación científica («4.18E-3»). `toNum`
+     quita la «E» y leería 4,18: mil veces más. Aquí se escribe en decimal.
+   · Las fechas son números de serie con un formato de celda. Sin mirar el
+     estilo, «46217» sería un número y el informe quedaría sin fechas, con el
+     gasto sin poder cortarse por periodo. Se convierten a AAAA-MM-DD.
+   · Las filas OCULTAS en Excel (un filtro que alguien dejó puesto) son datos:
+     se leen igual y se dice cuántas había.
+   · Una celda con comillas dobles —«pulsera 18"»— rompería el TSV si no se
+     entrecomilla. Se entrecomilla.
+   · Una celda con error de fórmula (#N/A) no es un cero: se deja vacía y se
+     cuenta.
+   Un .xls (formato binario antiguo) sigue sin leerse, y se dice.
    ========================================================================= */
+
+/* ── ZIP: el directorio central, no las cabeceras locales ─────────────────────
+   Las cabeceras locales pueden llevar los tamaños a cero (bit 3, «data
+   descriptor»); el directorio central del final siempre los trae. */
+async function xlsxUnzip(buf){
+  const b = new Uint8Array(buf), dv = new DataView(buf);
+  const u16 = o=>dv.getUint16(o,true), u32 = o=>dv.getUint32(o,true);
+  let eocd = -1;
+  for(let i=b.length-22; i>=Math.max(0,b.length-65557); i--){
+    if(u32(i)===0x06054b50){ eocd=i; break; }
+  }
+  if(eocd<0) throw new Error('no es un ZIP: no encuentro su índice');
+  const total = u16(eocd+10); let p = u32(eocd+16);
+  const td = new TextDecoder('utf-8');
+  const out = {};
+  for(let n=0;n<total;n++){
+    if(u32(p)!==0x02014b50) throw new Error('índice del ZIP dañado');
+    const metodo = u16(p+10), comp = u32(p+20);
+    const lNom = u16(p+28), lExtra = u16(p+30), lCom = u16(p+32), local = u32(p+42);
+    const nombre = td.decode(b.subarray(p+46, p+46+lNom));
+    p += 46 + lNom + lExtra + lCom;
+    out[nombre] = {metodo, comp, local};
+  }
+  const leer = async nombre=>{
+    const e = out[nombre]; if(!e) return null;
+    const ini = e.local + 30 + u16(e.local+26) + u16(e.local+28);
+    const datos = b.subarray(ini, ini+e.comp);
+    if(e.metodo===0) return td.decode(datos);
+    if(e.metodo!==8) throw new Error('compresión ZIP no soportada ('+e.metodo+')');
+    const ds = new DecompressionStream('deflate-raw');
+    const txt = await new Response(new Blob([datos]).stream().pipeThrough(ds)).arrayBuffer();
+    return td.decode(txt);
+  };
+  return {nombres:Object.keys(out), leer};
+}
+
+function xlsxEnt(s){
+  return String(s).replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (m,c)=>{
+    const l = c.toLowerCase();
+    if(l==='amp') return '&'; if(l==='lt') return '<'; if(l==='gt') return '>';
+    if(l==='quot') return '"'; if(l==='apos') return "'";
+    const cp = l[1]==='x' ? parseInt(l.slice(2),16) : parseInt(l.slice(1),10);
+    return isFinite(cp) ? String.fromCodePoint(cp) : m;
+  });
+}
+/* El texto de un `<si>` o de un `<is>`: todos sus `<t>`, MENOS los de la
+   guía fonética `<rPh>`, que es una transcripción y no el texto. */
+function xlsxTexto(xml){
+  const sinFon = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g,'');
+  let s=''; const re=/<t\b[^>]*>([\s\S]*?)<\/t>/g; let m;
+  while((m=re.exec(sinFon))) s += m[1];
+  return xlsxEnt(s);
+}
+function xlsxAttr(tag, nom){
+  const m = tag.match(new RegExp('\\b'+nom+'="([^"]*)"'));
+  return m ? m[1] : null;
+}
+function xlsxCol(ref){
+  const m = /^([A-Z]+)/.exec(ref||''); if(!m) return -1;
+  let n=0; for(const ch of m[1]) n = n*26 + (ch.charCodeAt(0)-64);
+  return n-1;
+}
+/* ¿Este formato de número es una fecha? Los incorporados de Excel que lo son,
+   y los propios cuyo código lleva día o año fuera de comillas y corchetes.
+   «MMM dd, yyyy» es el que pone Amazon. */
+const XLSX_FMT_FECHA = [14,15,16,17,18,19,20,21,22,27,28,29,30,31,32,33,34,35,36,45,46,47,50,51,52,53,54,55,56,57,58];
+function xlsxEsFecha(id, codigo){
+  if(XLSX_FMT_FECHA.indexOf(id)>=0) return true;
+  if(!codigo) return false;
+  const limpio = codigo.replace(/"[^"]*"/g,'').replace(/\[[^\]]*\]/g,'').replace(/\\./g,'');
+  return /[dy]/i.test(limpio);
+}
+/* Serie de Excel → «AAAA-MM-DD» (y la hora solo si la hay). Se hace con UTC
+   para que el huso de quien abre el fichero no mueva el día: el fallo de
+   `iso()` que daba el día anterior en horario español entró por ahí. */
+function xlsxFecha(serie, base1904){
+  const ms = Math.round((serie + (base1904 ? 1462 : 0) - 25569) * 86400000);
+  const d = new Date(ms); if(isNaN(d.getTime())) return '';
+  const p = n=>String(n).padStart(2,'0');
+  let s = d.getUTCFullYear()+'-'+p(d.getUTCMonth()+1)+'-'+p(d.getUTCDate());
+  const seg = Math.round((serie % 1) * 86400);
+  if(seg>0 && seg<86400) s += ' '+p(Math.floor(seg/3600))+':'+p(Math.floor(seg%3600/60))+':'+p(seg%60);
+  return s;
+}
+/* Un número de Excel en decimal, nunca en notación científica. */
+function xlsxNum(txt){
+  const n = Number(txt);
+  if(!isFinite(n)) return String(txt);
+  if(Number.isInteger(n)) return String(n);
+  const s = n.toFixed(10).replace(/0+$/,'').replace(/\.$/,'');
+  return s==='-0' ? '0' : s;
+}
+
+/* El libro entero → {hoja, hojas, filas:[[celdas]], ocultas, errores, fechas}.
+   Lee la PRIMERA hoja del libro en el orden en que el libro las declara. */
+async function xlsxLeer(buf){
+  const z = await xlsxUnzip(buf);
+  const wb = await z.leer('xl/workbook.xml');
+  if(!wb) throw new Error('el ZIP no trae xl/workbook.xml: no es un libro de Excel');
+  const hojasDecl = []; const reH = /<sheet\b[^>]*>/g; let m;
+  while((m=reH.exec(wb))) hojasDecl.push({nombre:xlsxEnt(xlsxAttr(m[0],'name')||''),
+    rid:xlsxAttr(m[0],'r:id')});
+  const base1904 = /<workbookPr\b[^>]*date1904="(1|true)"/.test(wb);
+  let ruta = null;
+  const rels = await z.leer('xl/_rels/workbook.xml.rels');
+  if(rels && hojasDecl.length){
+    const reR = /<Relationship\b[^>]*>/g; let r;
+    while((r=reR.exec(rels))){
+      if(xlsxAttr(r[0],'Id')===hojasDecl[0].rid){
+        let t = xlsxAttr(r[0],'Target')||'';
+        t = t.replace(/^\/?xl\//,'').replace(/^\//,'');
+        ruta = 'xl/'+t; break;
+      }
+    }
+  }
+  if(!ruta || z.nombres.indexOf(ruta)<0)
+    ruta = z.nombres.filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort()[0];
+  if(!ruta) throw new Error('el libro no trae ninguna hoja');
+
+  const ss = [];
+  const ssXml = await z.leer('xl/sharedStrings.xml');
+  if(ssXml){ const reS=/<si\b[^>]*>([\s\S]*?)<\/si>|<si\b[^>]*\/>/g; let s;
+    while((s=reS.exec(ssXml))) ss.push(s[1]==null ? '' : xlsxTexto(s[1])); }
+
+  const estiloFecha = [];
+  const st = await z.leer('xl/styles.xml');
+  if(st){
+    const codigos = {}; const reF=/<numFmt\b[^>]*>/g; let f;
+    while((f=reF.exec(st))) codigos[+xlsxAttr(f[0],'numFmtId')] = xlsxEnt(xlsxAttr(f[0],'formatCode')||'');
+    const xfs = (st.match(/<cellXfs\b[\s\S]*?<\/cellXfs>/)||[''])[0];
+    const reX=/<xf\b[^>]*>/g; let x;
+    while((x=reX.exec(xfs))){ const id=+(xlsxAttr(x[0],'numFmtId')||0);
+      estiloFecha.push(xlsxEsFecha(id, codigos[id])); }
+  }
+
+  const hoja = await z.leer(ruta);
+  const filas = []; let ocultas=0, errores=0, fechas=0;
+  const reFila = /<row\b([^>]*)>([\s\S]*?)<\/row>|<row\b[^>]*\/>/g; let rf;
+  while((rf=reFila.exec(hoja))){
+    if(rf[2]==null) continue;
+    if(/\bhidden="(1|true)"/.test(rf[1]||'')) ocultas++;
+    const celdas = [];
+    const reC = /<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g; let c;
+    let auto = 0;
+    while((c=reC.exec(rf[2]))){
+      const at = c[1], cuerpo = c[3]||'';
+      let col = xlsxCol(xlsxAttr(at,'r')); if(col<0) col = auto;
+      auto = col+1;
+      const t = xlsxAttr(at,'t'), s = +(xlsxAttr(at,'s')||0);
+      const vm = cuerpo.match(/<v>([\s\S]*?)<\/v>/), v = vm ? xlsxEnt(vm[1]) : '';
+      let val = '';
+      if(t==='s') val = ss[+v]!=null ? ss[+v] : '';
+      else if(t==='inlineStr') val = xlsxTexto(cuerpo);
+      else if(t==='str') val = v;
+      else if(t==='b') val = v==='1' ? 'TRUE' : 'FALSE';
+      else if(t==='e'){ val = ''; errores++; }
+      else if(v!==''){
+        if(estiloFecha[s]){ val = xlsxFecha(Number(v), base1904); fechas++; }
+        else val = xlsxNum(v);
+      }
+      celdas[col] = val;
+    }
+    for(let i=0;i<celdas.length;i++) if(celdas[i]===undefined) celdas[i]='';
+    filas.push(celdas);
+  }
+  /* Las filas que Excel deja completamente vacías al final no son datos. */
+  while(filas.length && !filas[filas.length-1].some(v=>String(v).trim()!=='')) filas.pop();
+  return {hoja: hojasDecl[0] ? hojasDecl[0].nombre : ruta, hojas: hojasDecl.length||1,
+          filas, ocultas, errores, fechas};
+}
+
+/* Filas → TSV que `parseDelimited` lee sin ambigüedad. */
+function xlsxATsv(filas){
+  const ancho = filas.reduce((a,f)=>Math.max(a,f.length),0);
+  return filas.map(f=>{
+    const out=[]; for(let i=0;i<ancho;i++){
+      let v = f[i]==null ? '' : String(f[i]);
+      v = v.replace(/[\t\r\n]+/g,' ');
+      if(v.indexOf('"')>=0) v = '"'+v.replace(/"/g,'""')+'"';
+      out.push(v);
+    }
+    return out.join('\t');
+  }).join('\n');
+}
+
+/* Nombre del fichero convertido: se conserva el original, para que volver a
+   cargar el mismo .xlsx se reconozca como el mismo fichero. */
+function xlsxNombre(n){ return String(n).replace(/\.xlsx$/i,'')+' (xlsx).tsv'; }
+
 if(typeof handleFiles === 'function' && !window.__impXlsx){
   window.__impXlsx = true;
   const _handleFilesBase = handleFiles;
-  handleFiles = function(files){
+  const fila = (nombre, html, clase, el)=>{
+    const list = document.getElementById('fileList'); if(!list) return null;
+    if(!el){ el = document.createElement('div'); el.className = 'fileitem'; list.appendChild(el); }
+    el.innerHTML = '<span class="f-dot '+(clase||'err')+'"></span><span class="f-name">'+esc(nombre)+'</span>'+
+      '<span class="f-meta">'+html+'</span>';
+    return el;
+  };
+  handleFiles = async function(files){
     const resto = [];
-    Array.from(files||[]).forEach(f=>{
-      if(!/\.xlsx?$/i.test(f.name)){ resto.push(f); return; }
-      const list = document.getElementById('fileList');
-      if(!list) return;
-      const el = document.createElement('div');
-      el.className = 'fileitem';
-      el.innerHTML = '<span class="f-dot err"></span><span class="f-name">'+esc(f.name)+'</span>'+
-        '<span class="f-meta"><strong>No leo libros de Excel, y prefiero decírtelo a adivinar.</strong> '+
-        'Un .xlsx es un ZIP con XML dentro, y el que exporta el gestor de campañas declara en su cabecera '+
-        'un rango de <em>una sola celda</em> teniendo más de mil filas: un lector que se fiara de ese dato '+
-        'te importaría una celda y no daría ningún error. Un informe vacío «en verde» es peor que este mensaje.'+
-        '<br><strong>Cómo sacar el CSV:</strong> en <em>Publicidad › Gestor de campañas › Informes</em>, al '+
-        'descargar elige <em>CSV</em> en vez de XLSX. En los informes de Logística de Amazon el enlace de '+
-        'descarga ya da .txt. Y si solo tienes el .xlsx, ábrelo y usa '+
-        '<em>Archivo › Guardar como › CSV UTF-8 (delimitado por comas)</em>.'+
-        '<br>Si puedes elegir, coge <strong>.txt</strong>: el CSV se come los ceros a la izquierda de los SKU.'+
-        '</span>';
-      list.appendChild(el);
-    });
+    for(const f of Array.from(files||[])){
+      if(/\.xls$/i.test(f.name)){
+        fila(f.name, '<strong>Es un .xls antiguo (formato binario) y ese no lo leo.</strong> '+
+          'Ábrelo en Excel y guárdalo como <em>.xlsx</em> o como <em>CSV UTF-8</em>.');
+        continue;
+      }
+      if(!/\.xlsx$/i.test(f.name)){ resto.push(f); continue; }
+      /* Mientras se descomprime, que se vea: un libro de tres mil filas tarda un
+         momento, y sin esto la pantalla parecía no haber hecho caso. Usa el
+         mismo «leyendo…» que el resto de ficheros. */
+      const el = fila(f.name, 'leyendo… (libro de Excel)', 'wait');
+      try{
+        const L = await xlsxLeer(await f.arrayBuffer());
+        if(L.filas.length<2){ fila(f.name, 'El libro no tiene filas de datos en su primera hoja.', 'err', el); continue; }
+        const notas = [];
+        if(L.hojas>1) notas.push('el libro trae '+L.hojas+' hojas y leo la primera, «'+esc(L.hoja)+'»');
+        if(L.ocultas) notas.push(num(L.ocultas)+' fila'+(L.ocultas===1?' estaba oculta':'s estaban ocultas')+' en Excel y se leen igual');
+        if(L.errores) notas.push(num(L.errores)+' celda'+(L.errores===1?'':'s')+' con error de fórmula se dejan vacías');
+        const tsv = xlsxATsv(L.filas);
+        const conv = new File([tsv], xlsxNombre(f.name), {type:'text/tab-separated-values'});
+        if(notas.length) fila(f.name, 'Libro de Excel convertido: '+notas.join(' · ')+'.', 'ok', el);
+        else if(el && el.parentNode) el.parentNode.removeChild(el);
+        resto.push(conv);
+      }catch(e){
+        fila(f.name, '<strong>No he podido leer este libro de Excel</strong> ('+esc(e.message||String(e))+'). '+
+          'Si está protegido con contraseña o se guardó en otro formato, ábrelo en Excel y usa '+
+          '<em>Archivo › Guardar como › CSV UTF-8</em>.', 'err', el);
+      }
+    }
     if(resto.length) return _handleFilesBase.call(this, resto);
     try{ refreshAll(); }catch(e){}
-    return Promise.resolve();
   };
 }
 

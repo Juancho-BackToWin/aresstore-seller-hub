@@ -465,6 +465,9 @@ function exportarDossierGestoria(){
   filas.push([]);
   filas.push(['AVISO', CUMPL_AVISO]);
   filas.push(['Origen', 'vatReport() sobre el informe de IVA importado · '+D.vat.rows+' filas leídas']);
+  if(D.vat.reembolsos) filas.push(['Reembolsos', D.vat.reembolsos+' filas REFUND · '+D.vat.reembolsosReducidos+
+    ' a tipo reducido, que restan '+r2(-D.vat.difReembolsos)+' de la diferencia (o '+r2(-D.vat.difReembolsosIncl)+
+    ' con el criterio de precio con IVA incluido). Ya descontados en las cifras por país.']);
   filas.push(['Generado', typeof iso==='function' ? iso(today()) : '']);
   if(typeof descargarCSV==='function') descargarCSV('dossier-gestoria', cab, filas);
   return {filas:filas.length, paises:D.filas.length};

@@ -715,6 +715,9 @@ function renderRent(){
         (V.diferenciaIvaIncluido>0?'<br>Esa cifra supone que la base de cada venta era la correcta. Si la gestoría '+
           'aplica el criterio de que el precio pagado ya incluía el IVA, la diferencia sería '+
           '<strong>'+fmt(V.diferenciaIvaIncluido,2)+'</strong>. Cuál toca lo decide ella: el hub resta la primera, que es la prudente.':'')+
+        (V.reembolsosReducidos>0?'<br>Ya descontados '+num(V.reembolsosReducidos)+' reembolso'+(V.reembolsosReducidos===1?'':'s')+
+          ' de ventas a tipo reducido: rectifican la base de la venta que anulan y restan '+fmt(-V.difReembolsos,2)+
+          ' de la diferencia.':'')+
         (V.ventasB2BCero>0?'<br>'+num(V.ventasB2BCero)+' venta'+(V.ventasB2BCero===1?'':'s')+' a tipo cero a empresas con NIF-IVA '+
           '(entrega intracomunitaria o inversión del sujeto pasivo) no cuenta'+(V.ventasB2BCero===1?'':'n')+' como deuda.':'')+
         (V.sinResponsable>0?'<br>En '+num(V.sinResponsable)+' ventas el informe no dice quién responde, así que las cargo a tu cuenta: equivocarme por ahí es más barato que enseñarte un margen que no tienes.':'')+

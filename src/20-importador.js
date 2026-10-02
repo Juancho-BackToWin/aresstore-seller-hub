@@ -129,9 +129,21 @@ function impFusionar(repId, entradas){
   const rows = [], descartadas = [];
   let brutas = 0, duplicadas = 0, degeneradas = 0;
 
+  /* FILAS IDÉNTICAS SIN CLAVE: SE CUENTAN COMO UN MULTICONJUNTO.
+     Medido el 3-10-2026 en el informe real de transacciones: un pedido de dos
+     unidades del mismo SKU trae DOS filas idénticas —misma hora, mismo pedido,
+     mismo importe—, y su reembolso otras dos, y sus tarifas de devolución otras
+     dos. Son transacciones reales. Tratar «fila idéntica» como «la misma fila»
+     tiraba nueve en ese informe, sin decir nada más que «9 ya estaban».
+     La regla buena: dentro de un fichero, cada fila cuenta; entre ficheros, una
+     fila que traen los dos cuenta tantas veces como en el fichero que más veces
+     la trae. Un fichero descargado dos veces sigue sin contar doble, y dos
+     filas iguales en un mismo fichero siguen siendo dos. */
+  const copias = Object.create(null);     // huella → [posiciones en rows]
   entradas.forEach(e=>{
     e.filas = e.filas || [];
     e.brutas = e.filas.length; e.nuevas = 0; e.duplicadas = 0; e.degeneradas = 0;
+    const vistasAqui = Object.create(null); // huella → veces en ESTE fichero
     e.filas.forEach(f=>{
       brutas++;
       f.__fs = e.fid;
@@ -141,6 +153,18 @@ function impFusionar(repId, entradas){
       if(kv !== null){
         if(IMP_CLAVE_DEGENERADA.test(kv)){ degeneradas++; e.degeneradas++; }
         else k = 'k:'+kv;
+      }
+      if(k.charAt(0)==='h'){
+        const n = vistasAqui[k] = (vistasAqui[k]||0) + 1;
+        const lista = copias[k] || (copias[k] = []);
+        if(n > lista.length){ lista.push(rows.length); rows.push(f); e.nuevas++; return; }
+        /* La n-ésima vez en este fichero es la n-ésima copia ya guardada. */
+        duplicadas++; e.duplicadas++;
+        const g = rows[lista[n-1]];
+        const fs = String(g.__fs||'').split(',').filter(Boolean);
+        if(fs.indexOf(e.fid)<0) fs.push(e.fid);
+        g.__fs = fs.join(',');
+        return;
       }
       const pos = indice[k];
       if(pos === undefined){ indice[k] = rows.length; rows.push(f); e.nuevas++; return; }

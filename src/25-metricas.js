@@ -221,11 +221,19 @@ function cascada(P){
     P.ppcSource==='ninguno' ? 'no hay informe de publicidad ni gasto diario puesto'
       : P.ppcSource==='informe-sin-fechas' ? 'el informe no dice qué periodo cubre · cargado ENTERO, sin prorratear'
       : P.ppcSource==='diario' ? 'del gasto diario de ajustes, no de un informe'
-      : (P.adFactor===1 ? 'del informe, sin prorratear' : 'prorrateado desde un informe de '+num(P.adDays)+' días')+
-        (P.ppcImputado>0 ? ' · por SKU: '+fmt(P.ppcImputado,2)+' a los productos de sus campañas, '+
-          fmt(P.ppc-P.ppcImputado,2)+' repartido por ingreso' : ' · por SKU, repartido por ingreso (ninguna campaña asignada)')+
-        (P.ppcSinDestino>0 ? ' · '+fmt(P.ppcSinDestino,2)+' de campañas asignadas a productos sin ventas en el periodo va al reparto' : ''),
+      : (P.adFactor===1 ? 'del informe, sin prorratear' : 'prorrateado desde un informe de '+num(P.adDays)+' días'),
     P.ppcSource==='ninguno' ? 'informe de términos de búsqueda' : '');
+  /* Cómo baja la publicidad a los SKU, dicho aparte para que valga con
+     cualquier origen del gasto (con informe, sin fechas o diario). */
+  if(P.ppc>0){
+    const U = L[L.length-1];
+    if(U && U.id==='publicidad'){
+      U.nota = (U.nota||'') + (P.ppcImputado>0
+        ? ' · por SKU: '+fmt(P.ppcImputado,2)+' a los productos de sus campañas y '+fmt(P.ppc-P.ppcImputado,2)+' repartido por ingreso'
+        : ' · por SKU: todo repartido por ingreso')+
+        (P.ppcSinDestino>0 ? ' · '+fmt(P.ppcSinDestino,2)+' de campañas cuyos productos no han vendido aquí va al reparto' : '');
+    }
+  }
   push('reembolsos', 'Reembolsos recuperados', P.reimb,
     hasImp('reimb') ? 'medido' : (hayVentas ? 'desconocido' : 'medido'),
     hasImp('reimb') ? 'del informe de reembolsos' : 'sin informe de reembolsos no se sabe qué te ha devuelto Amazon',

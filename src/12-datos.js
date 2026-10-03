@@ -2147,18 +2147,32 @@ function pnl(){
   let ppcImputado = 0, ppcSinDestino = 0;
   if(ppc>0 && typeof pubPpcPorCampana==='function' && ads.spend>0){
     let C = []; try{ C = pubPpcPorCampana(); }catch(e){ C = []; }
+    /* LA PARTE IMPUTADA SIGUE LA MISMA PROPORCIÓN QUE LO OBSERVADO.
+       `ppc` incluye lo extrapolado a los días sin informe y las filas sin
+       término; las campañas solo traen lo observado. Si solo se imputara lo
+       observado, la mitad del gasto de un informe de medio periodo volvería a
+       caer en SKUs que no se anuncian (revisión del 3-10-2026). Así que cada
+       campaña se lleva su CUOTA del gasto total: gasto observado × ppc ÷
+       observado total. La suma de cuotas es `ppc` exacto, nunca más; y un
+       abono negativo sin término reduce todas las cuotas por igual en vez de
+       hacer saltar una campaña entera. */
+    const obsTot = C.reduce((a,c)=>a+c.gasto,0);
+    const f = obsTot>0 ? ppc/obsTot : 0;
+    const cf = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
     const porSkuMin = {}; Object.keys(SK).forEach(k=>porSkuMin[k.toLowerCase()] = k);
     C.forEach(c=>{
-      if(!c.skus.length || !(c.gasto>0)) return;
-      if(ppcImputado + c.gasto > ppc + 1e-9) return;      // nunca más de lo que hay
+      if(!c.skus.length || !(f>0)) return;
+      /* Con filtro de país, solo lo que la campaña gastó EN ese país. */
+      const g = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f;
+      if(!(g>0)) return;
       const ks = c.skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
       const T = ks.reduce((a,k)=>a+SK[k].revenue,0);
-      if(!ks.length || !(T>0)){ ppcSinDestino += c.gasto; return; }
+      if(!ks.length || !(T>0)){ ppcSinDestino += g; return; }
       let acc = 0, mayor = ks[0];
-      ks.forEach(k=>{ const v = c.gasto*(SK[k].revenue/T); SK[k].ppc += v; acc += v;
+      ks.forEach(k=>{ const v = g*(SK[k].revenue/T); SK[k].ppc += v; acc += v;
         if(SK[k].revenue > SK[mayor].revenue) mayor = k; });
-      SK[mayor].ppc += c.gasto - acc;
-      ppcImputado += c.gasto;
+      SK[mayor].ppc += g - acc;
+      ppcImputado += g;
     });
   }
   reparte(ppc - ppcImputado, 'ppc', b=>b.revenue);

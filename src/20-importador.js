@@ -246,7 +246,13 @@ function impGuardarFusion(repId, entradas, extra){
 function impAnadirFichero(repId, filasNorm, nombre, cols, how, map, avisos){
   const entradas = impEntradas(DB.imports[repId]);
   const huella = impHash(filasNorm.map(impHuellaFila).join('|'));
-  const yaIgual = entradas.filter(e=>e.nombre===nombre && e.huella===huella)[0];
+  /* «Ya estaba» exige también el MISMO número de filas guardadas. Una base
+     importada antes de la fusión por multiconjunto (3-10-2026) tiene la huella
+     del fichero entero pero le faltan las filas gemelas; volver a subir el
+     mismo fichero tiene que recuperarlas, no decir «nada ha cambiado». */
+  const sinClave = !IMP_CLAVES[repId];
+  const yaIgual = entradas.filter(e=>e.nombre===nombre && e.huella===huella &&
+                                     (!sinClave || (e.filas||[]).length===filasNorm.length))[0];
   if(yaIgual){
     const store = impGuardarFusion(repId, entradas);
     return {store, yaEstaba:true, entrada:store.ficheros.filter(f=>f.fid===yaIgual.fid)[0]};

@@ -125,6 +125,46 @@ const n2 = x => typeof x==='number' ? x.toFixed(2) : String(x);
   check('una palabra de dos líneas cuyo prefijo común arrastraría otra, no sugiere nada', !mez.__err && mez.b===null, mez.__err || String(mez.b));
   check('varios prefijos, sin distinguir mayúsculas', !mez.__err && mez.skus==='FBA0111,FBA0150', mez.__err || mez.skus);
 
+  console.log('\n=== PPC-R · REVISIÓN ADVERSARIAL DEL 3-10-2026 ===');
+  /* R3 · Lo extrapolado sigue la misma proporción que lo observado.
+     Informe de 15 días (hace 14…0) con una sola campaña «NS» a 1,00 €/día,
+     confirmada a FBANS; periodo de 30 días. Observado 15,00 €, extrapolado
+     15,00 €: los 30,00 € van a FBANS (15,00 cada uno), 0,00 € a FBASPB.
+     Con el arreglo anterior, FBASPB se llevaba 6,67 € de un gasto que no es suyo. */
+  const r3 = await ev(`(()=>{ DB.products = DB.products.filter(p=>/^FBANS010[12]$|^FBASPB0101$/.test(p.sku));
+    DB.ppcAsig = {}; const st = DB.imports.searchterm.rows.filter(r=>r._campaign==='18KOra NS EXACTA');
+    const corte = (()=>{ const d=new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-14); return d; })();
+    DB.imports.searchterm.rows = st.filter(r=>new Date(r._from+'T12:00:00')>=corte);
+    pubAsignar('18KOra NS EXACTA','FBANS'); periodDays=30; countryFilter='ALL';
+    const P=pnl(); const o={}; const L=P.bySku||[]; (Array.isArray(L)?L:Object.values(L)).forEach(b=>o[b.sku]=b.ppc);
+    return {ppc:P.ppc, imp:P.ppcImputado, spb:o.FBASPB0101, ns:(o.FBANS0101||0)+(o.FBANS0102||0)}; })()`);
+  check('R3 · con toda la publicidad asignada, lo extrapolado también va a sus productos: FBASPB 0,00 €',
+    !r3.__err && near(r3.ppc, 30) && near(r3.imp, 30) && near(r3.spb, 0) && near(r3.ns, 30),
+    r3.__err || ('ppc '+n2(r3.ppc)+' · imputado '+n2(r3.imp)+' · FBASPB '+n2(r3.spb)+' · FBANS '+n2(r3.ns)));
+
+  /* R2 · Con el filtro de un país, una campaña de otro país no se imputa.
+     Se añade «NS IT» (Italia, 2,00 €/día) asignada a FBANS. Ventas solo en ES.
+     Filtro ES: lo italiano no puede ir a ningún SKU de España como «imputado». */
+  const r2 = await ev(`(()=>{ const dia = k => { const d=new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()-k);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+    DB.imports.searchterm.rows.forEach(r=>r.country='España');
+    for(let k=0;k<15;k++) DB.imports.searchterm.rows.push({_term:'it '+k, _campaign:'NS IT', campaignname:'NS IT',
+      country:'Italia', _from:dia(k), _to:dia(k), _spend:'2', _sales:'0', _clicks:'5', _impr:'100'});
+    pubAsignar('NS IT','FBANS'); countryFilter='ES'; const P=pnl(); countryFilter='ALL';
+    const C = pubPpcPorCampana().filter(c=>c.campana==='NS IT')[0];
+    return {imp:P.ppcImputado, ppc:P.ppc, itES: C ? (C.porPais.ES||0) : null, itIT: C ? (C.porPais.IT||0) : null}; })()`);
+  check('R2 · el gasto se separa por país (NS IT: 0 € en ES, 30 € en IT)', !r2.__err && r2.itES===0 && near(r2.itIT, 30),
+    r2.__err || JSON.stringify(r2));
+  check('R2 · con el filtro ES, solo se imputa la cuota de lo gastado en España', !r2.__err && r2.imp < r2.ppc &&
+    near(r2.imp, r2.ppc*15/45), r2.__err || ('imputado '+n2(r2.imp)+' de '+n2(r2.ppc)));
+
+  /* R5 · La sugerencia por código no arrastra otra serie de letras. */
+  const r5 = await ev(`(()=>{ DB.products.push(
+      {id:'s1', sku:'FBASS0151', name:'Gamuza', cogs:1, freight:0, fba:1, referral:15, price:10, channel:'FBA', lots:[]},
+      {id:'s2', sku:'FBASSX0101', name:'Soporte', cogs:1, freight:0, fba:1, referral:15, price:10, channel:'FBA', lots:[]});
+    const s = pubSugerencia('SS Exacta ES'); return s ? s.prefijos.join(',') : null; })()`);
+  check('R5 · «SS» no sugiere FBASS si FBASS recogería también FBASSX', r5===null, String(r5));
+
   check('sin errores de JS', errors.length===0, errors.slice(0,2).join(' | ') || 'limpio');
   await browser.close();
   console.log(fails ? '\n✗ '+fails+' fallos' : '\n✓ todo correcto');

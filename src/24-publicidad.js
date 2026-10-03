@@ -860,8 +860,12 @@ function pubSugerencia(campana){
   const G = pubGrupos();
   const trozos = fold(String(campana||'')).split(/[^a-z0-9]+/).filter(Boolean);
   const porCodigo = {};
+  /* Solo si el prefijo no arrastra SKUs de otra serie de letras: «FBASS»
+     también recoge «FBASSX…», que es otra línea (revisión del 3-10-2026). */
   trozos.forEach(t=>{ if(t.length<2 || t.length>4) return;
-    const id = ('FBA'+t).toUpperCase(); if(G[id]) porCodigo[id] = 1; });
+    const id = ('FBA'+t).toUpperCase(); if(!G[id]) return;
+    if(pubSkusDePrefijos([id]).some(sk=>pubGrupoSku(sk)!==id)) return;
+    porCodigo[id] = 1; });
   const ks = Object.keys(porCodigo);
   if(ks.length===1) return {grupo:ks[0], prefijos:[ks[0]], por:'el código «'+ks[0].slice(3)+'» del nombre'};
   if(ks.length>1) return null;
@@ -900,10 +904,15 @@ function pubPrefijosDe(a){ return !a ? [] : (a.prefijos || (a.grupo ? [a.grupo] 
 function pubPpcPorCampana(){
   const A = pubAdStats();
   const m = {};
+  /* Por país también: con el filtro de un país, solo cuenta lo que esa
+     campaña gastó EN ese país. Sin país (informes antiguos), se guarda aparte
+     como «??» y con filtro no se imputa a nadie. */
   A.terms.forEach(t=>{ if(t.fueraDePeriodo) return;
     const k = fold(String(t.campaign||'')).trim();
-    const c = m[k] || (m[k] = {campana:t.campaign, gasto:0});
-    c.gasto += t.spend; });
+    const c = m[k] || (m[k] = {campana:t.campaign, gasto:0, porPais:{}});
+    c.gasto += t.spend;
+    const pc = pubPais(t.country) || '??';
+    c.porPais[pc] = (c.porPais[pc]||0) + t.spend; });
   return Object.keys(m).map(k=>{ const c = m[k]; const a = (DB.ppcAsig||{})[k] || null;
     c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
     c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];

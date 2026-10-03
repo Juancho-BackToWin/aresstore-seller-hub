@@ -107,6 +107,18 @@ fs.writeFileSync(path.join(FIX,'C.csv'), csv([GEMELA]));
   const f = await estado();
   check('cargados en el otro orden (C y luego A), también 3', f.filas===3 && Math.abs(f.total-246)<0.005, f.filas+' filas · '+f.total+' €');
 
+  console.log('\n=== GEM-5 · UNA BASE IMPORTADA ANTES DEL ARREGLO SE RECUPERA AL VOLVER A SUBIR EL FICHERO ===');
+  /* Revisión del 3-10-2026: con la fusión antigua, A quedaba en 2 filas. Volver
+     a subir A con el mismo nombre decía «nada ha cambiado» y las gemelas no
+     volvían nunca. Se simula la base vieja quitando una gemela guardada. */
+  await page.evaluate(()=>{ DB.imports = {}; saveDB(); });
+  await cargar('A.csv');
+  await page.evaluate(()=>{ const st = DB.imports.tx; st.rows.splice(1,1); st.count = st.rows.length; saveDB(); });
+  const v0 = await estado();
+  await cargar('A.csv');
+  const v1 = await estado();
+  check('la base vieja tenía 2 filas y, al volver a subir A, vuelve a 3', v0.filas===2 && v1.filas===3, v0.filas+' → '+v1.filas);
+
   check('sin errores de JS', errors.length===0, errors.slice(0,2).join(' | ') || 'limpio');
   await browser.close();
   console.log(fails ? '\n✗ '+fails+' fallos' : '\n✓ todo correcto');

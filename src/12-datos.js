@@ -2140,7 +2140,28 @@ function pnl(){
      Repartirlos por ingreso declarando que es un reparto es honesto; dejarlos
      fuera del desglose —que era lo que había— no lo era, porque hacía que la
      tabla enseñara beneficios que el negocio no tiene. */
-  reparte(ppc,          'ppc', b=>b.revenue);
+  /* Publicidad: primero lo que tiene destino confirmado (Publicidad › Campañas
+     → producto), a los SKUs de su grupo por su ingreso; el resto, por ingreso
+     entre todos. Ver `pubPpcPorCampana` en src/24-publicidad.js. La suma no
+     cambia: solo cambia quién la lleva. */
+  let ppcImputado = 0, ppcSinDestino = 0;
+  if(ppc>0 && typeof pubPpcPorCampana==='function' && ads.spend>0){
+    let C = []; try{ C = pubPpcPorCampana(); }catch(e){ C = []; }
+    const porSkuMin = {}; Object.keys(SK).forEach(k=>porSkuMin[k.toLowerCase()] = k);
+    C.forEach(c=>{
+      if(!c.skus.length || !(c.gasto>0)) return;
+      if(ppcImputado + c.gasto > ppc + 1e-9) return;      // nunca más de lo que hay
+      const ks = c.skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
+      const T = ks.reduce((a,k)=>a+SK[k].revenue,0);
+      if(!ks.length || !(T>0)){ ppcSinDestino += c.gasto; return; }
+      let acc = 0, mayor = ks[0];
+      ks.forEach(k=>{ const v = c.gasto*(SK[k].revenue/T); SK[k].ppc += v; acc += v;
+        if(SK[k].revenue > SK[mayor].revenue) mayor = k; });
+      SK[mayor].ppc += c.gasto - acc;
+      ppcImputado += c.gasto;
+    });
+  }
+  reparte(ppc - ppcImputado, 'ppc', b=>b.revenue);
   reparte(vatShortfall, 'vat', b=>b.revenue);
   /* Lo que ningún SKU puede llevarse. Se declara; no se esconde. */
   const noImputable = reimb - fixed;
@@ -2152,7 +2173,8 @@ function pnl(){
     bySkuBreak[k] = b; });
   return {
     bySku: bySkuBreak, noImputable, noImputableDetalle: {reimb, fixed},
-    repartidos: {ppc: ppc!==0, vat: vatShortfall!==0,
+    ppcImputado, ppcSinDestino,
+    repartidos: {ppc: (ppc - ppcImputado)!==0, vat: vatShortfall!==0,
                  storage: storage!==0, otherFee: otherFee!==0},
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,

@@ -796,6 +796,120 @@ registrarEstilo(
   '#pubPujaAviso{font-size:12.5px;margin:6px 0 2px}'+
   '.pub-ori{font-size:10.5px;color:#6b7a7f;display:block}');
 
+/* ═══ CAMPAÑAS → PRODUCTO · la publicidad imputada a quien la gasta ═══════════
+
+   POR QUÉ. Rentabilidad repartía TODA la publicidad entre SKUs por su ingreso:
+   un SKU que no se anuncia cargaba con el gasto de otro que sí, y el desglose
+   por SKU —la pantalla con la que se decide qué empujar y qué matar— salía
+   plano donde el negocio no lo es. Medido el 3-10-2026 con los quince informes
+   reales: las campañas nombran FAMILIAS (NS, SPB, SLB, SS, Vehilex…), no SKUs,
+   y el casamiento automático por código de SKU no casaba casi nada.
+
+   CÓMO, sin inventar:
+   · Cada campaña se asigna a un GRUPO de SKUs (los que comparten el prefijo de
+     letras: FBANS…, FBASPB…) o se marca «varias / reparto». Lo decide Juancho.
+   · El hub SUGIERE (el código de la campaña dentro del prefijo, o una palabra
+     del nombre que solo tiene un grupo), pero una sugerencia NO imputa nada
+     hasta que se confirma. Un gasto colgado del producto equivocado es peor que
+     uno repartido, porque parece medido.
+   · Se imputa el gasto OBSERVADO de la campaña en el periodo (el mismo que ve la
+     tabla de términos). Lo extrapolado y lo que no tiene fecha se sigue
+     repartiendo por ingreso, como todo lo no asignado. La suma del desglose no
+     cambia ni un céntimo: solo cambia quién la lleva.
+   · Dentro de un grupo, el gasto se reparte entre los SKUs del grupo que han
+     vendido en el periodo, por su ingreso. Si ninguno ha vendido, el gasto se
+     queda en el reparto general y se dice.                                   */
+registrarClaveDB('ppcAsig', {});
+function pubGrupoSku(sku){ const m = /^[A-Za-z]+/.exec(String(sku||'').trim()); return m ? m[0].toUpperCase() : ''; }
+function pubGrupos(){
+  const g = {};
+  (DB.products||[]).forEach(p=>{ const k = pubGrupoSku(p.sku); if(!k) return;
+    (g[k] || (g[k] = {id:k, skus:[], nombres:[]})).skus.push(String(p.sku));
+    g[k].nombres.push(String(p.name||'')); });
+  return g;
+}
+/* EL DESTINO ES UNA LISTA DE PREFIJOS DE SKU, no «las letras del principio».
+   Medido con el catálogo real (39 SKU): agrupar por letras dejaba 26 SKU en
+   «FBA», mezclando los paños Vehilex con tres líneas de pulseras; confirmar la
+   sugerencia de Vehilex habría repartido su gasto entre pulseras. Con prefijos,
+   Juancho escribe lo que de verdad anuncia la campaña: «FBANS», «FBA0500», o
+   «FBA011, FBA012» para la línea de cuero, y la pantalla dice cuántos SKU caen
+   dentro. */
+function pubPrefijos(v){
+  return String(v||'').toUpperCase().split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean);
+}
+function pubSkusDePrefijos(prefs){
+  const P = (prefs||[]).map(x=>String(x).toUpperCase());
+  return (DB.products||[]).map(p=>String(p.sku||'').trim()).filter(sk=>{
+    const u = sk.toUpperCase(); return P.some(pr=>u.indexOf(pr)===0); });
+}
+function pubPrefijoComun(skus){
+  if(!skus.length) return '';
+  let pre = skus[0].toUpperCase();
+  skus.forEach(s=>{ const u=s.toUpperCase(); let i=0; while(i<pre.length && i<u.length && pre[i]===u[i]) i++; pre=pre.slice(0,i); });
+  return pre;
+}
+/* Sugerencia, SOLO si un prefijo recoge exactamente lo que la campaña nombra:
+   · un código corto del nombre («NS», «SPB») que pegado a «FBA» es el prefijo
+     de letras de algún SKU; o
+   · una palabra del nombre (≥5 letras, no genérica) que aparece en el nombre de
+     un conjunto de productos cuyo prefijo común no recoge ningún otro.
+   Si no hay un prefijo así, no se sugiere nada: mejor una casilla vacía que una
+   sugerencia que mezcle productos. */
+function pubSugerencia(campana){
+  const G = pubGrupos();
+  const trozos = fold(String(campana||'')).split(/[^a-z0-9]+/).filter(Boolean);
+  const porCodigo = {};
+  trozos.forEach(t=>{ if(t.length<2 || t.length>4) return;
+    const id = ('FBA'+t).toUpperCase(); if(G[id]) porCodigo[id] = 1; });
+  const ks = Object.keys(porCodigo);
+  if(ks.length===1) return {grupo:ks[0], prefijos:[ks[0]], por:'el código «'+ks[0].slice(3)+'» del nombre'};
+  if(ks.length>1) return null;
+  const genericas = {exacta:1, manual:1, todas:1, todos:1, espana:1, italia:1, francia:1, alemania:1, belgica:1,
+                     auto:1, broad:1, phrase:1, exact:1, pulsera:1, pulseras:1, hombre:1, mujer:1};
+  const props = [];
+  trozos.forEach(t=>{ if(t.length<5 || genericas[t]) return;
+    const skus = (DB.products||[]).filter(p=>fold(String(p.name||'')).indexOf(t)>=0).map(p=>String(p.sku).trim());
+    if(!skus.length || skus.length===(DB.products||[]).length) return;
+    const pre = pubPrefijoComun(skus);
+    if(pre.length<3) return;
+    const recoge = pubSkusDePrefijos([pre]);
+    if(recoge.length!==skus.length) return;            // el prefijo arrastraría otros productos
+    props.push({pre, t, n:skus.length});
+  });
+  const distintos = Array.from(new Set(props.map(x=>x.pre)));
+  if(distintos.length===1){ const x = props[0];
+    return {grupo:x.pre, prefijos:[x.pre], por:'la palabra «'+x.t+'» ('+x.n+' SKU)'}; }
+  return null;
+}
+function pubAsignacion(campana){
+  const a = (DB.ppcAsig||{})[fold(String(campana||'')).trim()];
+  return a || null;
+}
+function pubAsignar(campana, valor){
+  if(!DB.ppcAsig) DB.ppcAsig = {};
+  const k = fold(String(campana||'')).trim();
+  const v = String(valor==null?'':valor).trim();
+  if(!v) delete DB.ppcAsig[k];
+  else if(v==='*') DB.ppcAsig[k] = {reparto:true, fecha:iso(today())};
+  else DB.ppcAsig[k] = {prefijos:pubPrefijos(v), fecha:iso(today())};
+  saveDB(); try{ refreshAll(); }catch(e){}
+}
+function pubPrefijosDe(a){ return !a ? [] : (a.prefijos || (a.grupo ? [a.grupo] : [])); }
+/* Gasto OBSERVADO en el periodo por campaña (sin extrapolar), con su destino. */
+function pubPpcPorCampana(){
+  const A = pubAdStats();
+  const m = {};
+  A.terms.forEach(t=>{ if(t.fueraDePeriodo) return;
+    const k = fold(String(t.campaign||'')).trim();
+    const c = m[k] || (m[k] = {campana:t.campaign, gasto:0});
+    c.gasto += t.spend; });
+  return Object.keys(m).map(k=>{ const c = m[k]; const a = (DB.ppcAsig||{})[k] || null;
+    c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
+    c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
+    return c; }).sort((a,b)=>b.gasto-a.gasto);
+}
+
 function pubPanelExtra(){
   let e = document.getElementById('pubExtra');
   if(e) return e;
@@ -811,6 +925,13 @@ function pubPanelExtra(){
       'margen del producto equivocado hace bajar pujas que estaban ganando dinero.</p></div></div>'+
       '<div class="tbl-wrap"><table class="grid" id="pubEqTable"></table></div>'+
       '<div id="pubEqNota" class="assumptions pub-note" style="margin-top:14px"></div></div>'+
+    '<div class="panel"><div class="panel-head"><div>'+
+      '<h2>Campañas → producto</h2>'+
+      '<p class="desc" style="margin:0">A qué productos va el gasto de cada campaña, para que Rentabilidad se lo cargue a '+
+      'ellos y no a todos por igual. El hub sugiere; <strong>solo cuenta lo que confirmas</strong>. Lo que no asignes se sigue '+
+      'repartiendo por ingreso, y la pantalla de Rentabilidad dice cuánto es cada cosa.</p></div></div>'+
+      '<div class="tbl-wrap"><table class="grid" id="pubAsigTable"></table></div>'+
+      '<div id="pubAsigNota" class="assumptions pub-note" style="margin-top:14px"></div></div>'+
     '<div class="panel"><div class="panel-head"><div>'+
       '<h2>Orgánico y pagado por SKU</h2>'+
       '<p class="desc" style="margin:0">El ACOS mide la eficiencia de lo pagado; el TACOS, cuánto del negocio de ese SKU '+
@@ -1007,6 +1128,33 @@ function pubRenderPublicidad(){
         'y solo se calcula con '+PUB_MIN_CLICS+' clics o más. Por debajo, la conversión observada es ruido.</span>';
     }
     eqn.innerHTML=n;
+  }
+
+  {
+    const C = pubPpcPorCampana();
+    tbl('pubAsigTable','<tr><th>Campaña</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
+      (C.length ? C.slice(0,80).map(c=>{
+        const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
+        const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
+          (c.skus.length && c.skus.length<=6 ? ': '+esc(c.skus.join(', ')) : '')+(c.skus.length===0?' · ningún SKU empieza así':'')+'</span>'
+          : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : '');
+        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong></td><td class="num">'+fmt(c.gasto)+'</td>'+
+          '<td><input type="text" style="width:170px" placeholder="FBANS · FBA011, FBA012 · *" value="'+esc(val)+'" '+
+          'data-campana="'+esc(c.campana)+'" onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value)">'+cuantos+'</td>'+
+          '<td>'+(c.sugerencia ? '<span class="mut">'+esc(c.sugerencia.prefijos.join(', '))+' por '+esc(c.sugerencia.por)+'</span> '+
+            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
+            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'))">confirmar</button>'
+            : (c.asig ? '<span class="mut">confirmado el '+esc(c.asig.fecha||'')+'</span>' : '<span class="mut">—</span>'))+'</td></tr>';
+      }).join('') : '<tr><td colspan="4" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
+    const an = document.getElementById('pubAsigNota');
+    if(an){
+      const tot = C.reduce((a,c)=>a+c.gasto,0), asig = C.filter(c=>c.skus.length).reduce((a,c)=>a+c.gasto,0);
+      const sug = C.filter(c=>c.sugerencia).reduce((a,c)=>a+c.gasto,0);
+      an.innerHTML = 'Del gasto observado en el periodo ('+fmt(tot)+'), <strong>'+fmt(asig)+'</strong> está asignado a un grupo de productos'+
+        (sug>0 ? ' y '+fmt(sug)+' tiene una sugerencia sin confirmar, que todavía no cuenta' : '')+
+        '. Escribe los prefijos de SKU que anuncia cada campaña, separados por comas («FBANS», «FBA011, FBA012»), o «*» si anuncia varias líneas. '+
+        'Lo extrapolado y lo que no tiene fecha se reparte siempre por ingreso.';
+    }
   }
 
   tbl('pubSkuTable','<tr><th>SKU</th><th class="num">Gasto</th><th class="num">Ventas pagadas</th>'+

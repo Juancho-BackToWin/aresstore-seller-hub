@@ -222,9 +222,18 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
     const hace60 = (()=>{ const d=new Date(); d.setDate(d.getDate()-60);
       return String(d.getDate()).padStart(2,'0')+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+d.getFullYear(); })();
     filas.forEach(r=>{ r.transactioncompletedate = hace60; });
+    /* Desde el 3-10-2026 la deuda de un mes SIN NINGÚN PEDIDO CARGADO no se
+       resta al beneficio (ver `ivaMesesSinVentas` y tests/ivacobertura.test.js).
+       Esta prueba no va de eso, va de cortar por periodo: se le da un pedido
+       de ese mes para que el mes esté cubierto, y se quita después. */
+    const pedidos = DB.imports.orders.rows;
+    const hace60iso = (()=>{ const d=new Date(); d.setDate(d.getDate()-60);
+      return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+    pedidos.push(Object.assign({}, pedidos[0], {purchasedate: hace60iso+'T10:00:00+00:00', _date: hace60iso+'T10:00:00+00:00'}));
     periodDays=30; o.viejas30 = linea();
     periodDays=90; o.viejas90 = linea();
     periodDays=0;  o.viejasTodo = linea();
+    pedidos.pop();
     filas.forEach(r=>{ delete r.transactioncompletedate; });
     periodDays=30; o.sinFecha30 = linea(); o.sinFechaN = pnl().vat.sinFecha;
     periodDays=0;  o.sinFechaTodo = linea();
@@ -310,6 +319,45 @@ fs.writeFileSync(F2,[H.join('\t')].concat(filas2.map(r=>r.join('\t'))).join('\n'
     G.dif+' €' + (near(G.dif,66,0.02) ? '  ← cuenta como deuda una venta entre empresas' : ''));
   check('España se queda sin deuda y las dos ventas se cuentan aparte',
     near(G.es, 0, 0.005) && G.b2b===2 && G.cero===2, 'ES '+G.es+' € · B2B a cero: '+G.b2b+' · a cero: '+G.cero);
+
+  console.log('\n=== FIS-H · UN REEMBOLSO RECTIFICA LA DEUDA DE LA VENTA QUE ANULA ===');
+  /* Medido el 2-10-2026 contra el informe real: 42 filas REFUND, con base e
+     IVA en negativo y el tipo reducido de la venta. El hub solo contaba
+     ventas y la deuda salía por encima de la real.
+     Aritmética, sobre los 45,00 € de FIS-G:
+       reembolso de una venta austriaca, base −50,00, IVA −5,00 al 10 %:
+         −50,00 × 20/100 − (−5,00) = −10,00 + 5,00 = −5,00   → 40,00 €
+       con el otro criterio: (−55,00) × 20/120 + 5,00 = −4,1667
+       un RETURN sin importes no mueve nada
+       un reembolso B2B a tipo cero con NIF tampoco: el cero era correcto
+     Y ninguno cuenta como venta: siguen siendo 9. */
+  const Hh = await page.evaluate(()=>{
+    const rows = DB.imports.vat.rows;
+    const antes = vatReport();
+    const at = rows.filter(r=>String(r.taxablejurisdiction||r._juris||'').toUpperCase()==='AUSTRIA')[0];
+    const es0 = rows.filter(r=>String(r.buyervatnumber||'').trim())[0];
+    const clona = (r, tipo, signo, vacio) => { const c = Object.assign({}, r);
+      ['transactiontype','_ttype'].forEach(k=>{ if(k in c || k==='transactiontype') c[k]=tipo; });
+      ['totalpriceofitemsamtvatexcl','_base','totalpriceofitemsvatamt','_vat'].forEach(k=>{
+        if(c[k]!==undefined && c[k]!=='') c[k] = vacio ? '' : String(signo*Math.abs(parseFloat(c[k]))); });
+      return c; };
+    rows.push(clona(at,'REFUND',-1,false));
+    rows.push(clona(at,'RETURN',1,true));
+    rows.push(clona(es0,'REFUND',-1,false));
+    const V = vatReport();
+    rows.splice(rows.length-3, 3);
+    return {antes:+antes.diferencia.toFixed(2), dif:+V.diferencia.toFixed(2), incl:+V.diferenciaIvaIncluido.toFixed(4),
+            inclAntes:+antes.diferenciaIvaIncluido.toFixed(4), ventas:V.ventas, ventasAntes:antes.ventas,
+            reemb:V.reembolsos, reembRed:V.reembolsosReducidos, at:+V.porPais.AT.dif.toFixed(2)};
+  });
+  check('el reembolso de una venta a tipo reducido resta su deuda', near(Hh.dif, 40, 0.02),
+    Hh.antes+' € → '+Hh.dif+' €' + (near(Hh.dif,45,0.02) ? '  ← el reembolso no rectifica nada: solo se cuentan ventas' : ''));
+  check('también con el criterio de precio con IVA incluido', near(Hh.inclAntes - Hh.incl, 4.1667, 0.001),
+    (Hh.inclAntes-Hh.incl).toFixed(4)+' € menos');
+  check('y en su país', near(Hh.at, 5, 0.02), 'AT '+Hh.at+' €');
+  check('ni el RETURN sin importe ni el reembolso B2B mueven la deuda, y nada cuenta como venta',
+    Hh.ventas===Hh.ventasAntes && Hh.reemb===2 && Hh.reembRed===1,
+    'ventas '+Hh.ventasAntes+'→'+Hh.ventas+' · reembolsos '+Hh.reemb+' · a tipo reducido '+Hh.reembRed);
 
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));

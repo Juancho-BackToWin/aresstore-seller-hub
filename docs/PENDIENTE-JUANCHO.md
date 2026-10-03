@@ -319,3 +319,108 @@ quieres conservar como archivo histórico, dímelo antes.
 | P-12b | seguridad del repositorio público | activar secret scanning y push protection | abierto |
 | P-13 | margen medido vs deducido | ¿tu informe de pedidos trae la columna de impuestos? | abierto |
 | P-14 | nada, es limpieza | borrar dos ramas en GitHub (no puedo desde aquí) | abierto |
+
+---
+
+## P-19 · Fusionar la PR #18, que bloquea el paso 5 de Publicidad
+
+**Bloquea a:** el bloque 1 del plan maestro del 3-oct —comprobar sobre
+producción las cifras del §1 del traspaso— y, con él, lo único que queda para
+que Publicidad pueda llegar a **apta**.
+
+La #18 («Noche del 2-10: .xlsx, solapes, cruce EPR, IVA por cobertura, filas
+gemelas y PPC por SKU») sigue **abierta** sobre `main`. Mientras no entre,
+`aresstore-seller-hub.vercel.app` sirve una versión anterior y no tiene sentido
+cargar los quince .xlsx contra producción: se medirían cifras del código viejo.
+
+**Qué necesito:** fusionarla en el editor web de GitHub. Después, la de esta
+sesión.
+
+---
+
+## P-20 · El contenedor de las sesiones no trae Pillow, y eso rompe `build.sh`
+
+**Bloquea a:** nada de fondo, pero **cuesta media hora de cada sesión nueva** y
+la primera impresión es tres suites en rojo.
+
+`build.sh:99` genera los iconos de la PWA con Pillow. El contenedor no lo trae,
+así que `build.sh` sale con código 1 y `costuras.test.js` da **3 fallos** que no
+tienen nada que ver con el código. Se arregla con `pip install Pillow`, pero hay
+que saberlo.
+
+**Qué necesito, una de las dos:**
+
+1. Declararlo en un `SessionStart` hook del repositorio, que es lo limpio: cada
+   sesión nueva lo instala sola y nadie vuelve a tropezar. Lo puedo escribir yo
+   si me dices que sí.
+2. O que `build.sh` detecte que falta y lo diga con esas palabras —«falta
+   Pillow: `pip install Pillow`»— en vez de salir 1 a secas.
+
+Mi recomendación es la 1, y de paso deja el entorno reproducible para cualquier
+dependencia que haga falta mañana.
+
+---
+
+## P-21 · Los informes de Amazon posteriores al 23 de agosto
+
+**Bloquea a:** el bloque 3 (medir los detectores de reclamación con informes más
+largos), el bloque 5 (inventario y las diez `FBASPB`) y el paso 5 de medio hub.
+
+En la sesión del 3-oct **la carpeta de Descargas no estaba conectada**, así que
+no pude ni enumerar qué hay. Lo que hace falta, por orden de lo que más
+desbloquea:
+
+| informe | para qué | por qué ahora no se puede |
+|---|---|---|
+| **Devoluciones**, de más de 45 días | el detector de devolución reembolsada y no devuelta | con menos de 45 días la ventana no se ha abierto para ninguna: cero casos, y no por un fallo |
+| **Libro mayor de inventario** | el detector de extraviado o dañado en el centro logístico | se importa y se queda parado |
+| **Tarifas**, una segunda vista previa | el detector de tarifa cobrada de más | hace falta un antes y un después para ver el cambio |
+| **Gestión de inventario** | cobertura por país y previsión (M2) | — |
+| **Pedidos**, sobre todo mayo de 2026 | el histórico y la velocidad real | — |
+| **Términos de búsqueda** | ya hay quince; sirven para el bloque 1 | — |
+| **Transacciones** | el P&L y Tesorería | — |
+
+**Qué necesito:** conectar la carpeta de Descargas a la sesión, o subirlos.
+
+---
+
+## P-22 · A qué SKU se aplica cada familia de coste (las diez `FBASPB`)
+
+**Bloquea a:** el bloque 5 del plan maestro, y el coste de ventas de cualquier
+referencia que use una familia.
+
+Esto **no lo desbloquea un informe**, y conviene decirlo porque el plan del 3-oct
+lo pedía junto al informe de inventario. Los nombres (`FBASPB0100`, `FBA100`…)
+*parecen* prefijos de los SKU reales, pero **la regla de correspondencia no está
+escrita en ningún sitio** y aquí no se ha adivinado: la familia solo rellena el
+importe cuando alguien elige a mano a qué productos aplicarla. Inventar la regla
+sería costear veinte referencias con una suposición.
+
+Las seis familias siguen además **«deducidas, sin confirmar»**, y ese adjetivo
+viaja hasta el CSV exportado.
+
+**Qué necesito:** una factura delante y dos líneas — qué familia se aplica a qué
+prefijo de SKU, y si los importes deducidos son los buenos.
+
+---
+
+## P-23 · Una fixture que llegue a dos guardas del detector de renombradas
+
+**Bloquea a:** nada del negocio. Es deuda de prueba, y la apunto porque si no se
+apunta desaparece.
+
+La revisión adversarial del 3-10 encontró cinco números falsos en los bloques 2
+y 4. **Cuatro están arreglados y con su prueba roja.** De los dos arreglos que
+quedan —H1, un caso por par de nombres en vez de por par de ficheros; y H5, dos
+nombres vivos en los dos informes son un duplicado y no un renombrado— **el
+código está puesto y es correcto, pero no tengo el rojo**: deshaciendo cada uno
+por separado, la suite sigue verde. El candidato se descarta antes de llegar a
+esas dos guardas, en la comprobación de `suelo > 0`.
+
+Hacen falta dos informes en los que **cada uno gane parte de la ventana común**
+(hoy el desempate se la lleva entera uno de los dos), y entonces sí se puede
+demostrar la multiplicación del suelo y el falso positivo del duplicado.
+
+**No necesito nada tuyo para esto.** Lo dejo anotado porque un arreglo sin rojo
+es exactamente lo que esta norma llama «construido, sin probar», y quien lo lea
+dentro de un mes tiene derecho a saberlo.

@@ -607,6 +607,328 @@ const LAB = `
   check('con todo cargado, la pantalla se completa', estados[2].filas>1 && estados[2].kpis===6,
     estados[2].filas+' filas');
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     BLOQUE 2 · LA MISMA CAMPANA EN DOS PAISES
+
+     «SP · Multi · exacta» existe en España y en Alemania y anuncia productos
+     distintos en cada uno. La fixture: España 30,00 € sobre «rodillo de
+     espuma», Alemania 70,00 € sobre «bandas elasticas». Total 100,00 €.
+
+     LA CUENTA A MANO
+     Asignando TEST-ROD al par (campaña, ES) y TEST-BAN al par (campaña, DE):
+        ES → TEST-ROD  30,00 €
+        DE → TEST-BAN  70,00 €
+     Antes del arreglo la clave era solo el nombre, así que la segunda
+     asignación PISABA la primera y las dos filas acababan en el mismo SKU: o
+     100,00 € al rodillo o 100,00 € a las bandas, según cuál se escribiera
+     última. Cuarenta euros mal puestos sobre cien, y el ACOS del producto
+     equivocado moviéndose en consecuencia.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── bloque 2 · la misma campaña en dos países ──');
+  {
+    const r = await importar('terminos-dos-paises.csv');
+    check('la fixture de dos países se importa', r.ok === true, r.meta);
+    await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+    await page.waitForTimeout(400);
+
+    const filas = await ev(`(()=>{ const C = pubPpcPorCampana();
+      return C.map(c=>({campana:c.campana, pais:c.pais, gasto:c.gasto})); })()`);
+    check('una fila por campaña Y país, no una por campaña',
+      Array.isArray(filas) && filas.length === 2 &&
+      filas.filter(f=>f.pais==='ES').length === 1 && filas.filter(f=>f.pais==='DE').length === 1,
+      err(filas) || (Array.isArray(filas) ? filas.map(f=>f.pais+':'+n2(f.gasto)).join(' · ') : String(filas)));
+    const es = Array.isArray(filas) ? filas.find(f=>f.pais==='ES') : null;
+    const de = Array.isArray(filas) ? filas.find(f=>f.pais==='DE') : null;
+    check('cada país se queda con SU gasto · ES 30,00 y DE 70,00',
+      !!es && !!de && near(es.gasto, 30) && near(de.gasto, 70),
+      err(filas) || (es&&de ? 'ES '+n2(es.gasto)+' · DE '+n2(de.gasto) : 'sin filas por país'));
+
+    /* El corazón del bloque: dos asignaciones distintas que NO se pisan. */
+    const dos = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-ROD','ES');
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? {gasto:c.gasto, skus:c.skus} : null; };
+      return {es:f('ES'), de:f('DE'), claves:Object.keys(DB.ppcAsig||{}).length}; })()`);
+    check('asignar Alemania NO reasigna España · dos claves guardadas',
+      dos && !dos.__err && dos.claves === 2,
+      err(dos) || ('claves: '+((dos&&dos.claves)!==undefined?dos.claves:'—')));
+    check('España se queda con TEST-ROD y sus 30,00 €',
+      dos && !dos.__err && dos.es && dos.es.skus.length===1 && dos.es.skus[0]==='TEST-ROD' && near(dos.es.gasto,30),
+      err(dos) || (dos&&dos.es ? (dos.es.skus.join(',')||'ninguno')+' · '+n2(dos.es.gasto) : '—'));
+    check('Alemania se queda con TEST-BAN y sus 70,00 €',
+      dos && !dos.__err && dos.de && dos.de.skus.length===1 && dos.de.skus[0]==='TEST-BAN' && near(dos.de.gasto,70),
+      err(dos) || (dos&&dos.de ? (dos.de.skus.join(',')||'ninguno')+' · '+n2(dos.de.gasto) : '—'));
+
+    /* NO ROMPER LO GUARDADO · una asignación vieja (clave = nombre plegado, sin
+       país) tiene que seguir aplicándose a LOS DOS países. Es la forma exacta en
+       que están guardadas todas las que Juancho ya ha confirmado. */
+    const vieja = await ev(`(()=>{
+      DB.ppcAsig = {}; DB.ppcAsig[fold('SP · Multi · exacta').trim()] = {prefijos:['TEST-ROD'], fecha:'2026-09-01'};
+      saveDB();
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? c.skus : null; };
+      return {es:f('ES'), de:f('DE')}; })()`);
+    check('una asignación ya guardada (sin país) sigue valiendo para los dos países',
+      vieja && !vieja.__err && vieja.es && vieja.de &&
+      vieja.es.length===1 && vieja.es[0]==='TEST-ROD' && vieja.de.length===1 && vieja.de[0]==='TEST-ROD',
+      err(vieja) || (vieja&&vieja.es ? 'ES '+vieja.es.join(',')+' · DE '+(vieja.de||[]).join(',') : '—'));
+
+    /* Y la específica gana a la global, que es lo que permite diferenciar un
+       país sin tener que borrar lo que ya estaba puesto. */
+    const gana = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? c.skus : null; };
+      return {es:f('ES'), de:f('DE')}; })()`);
+    check('la del país gana a la global, y la global sigue rigiendo el resto',
+      gana && !gana.__err && gana.es && gana.de &&
+      gana.es[0]==='TEST-ROD' && gana.de[0]==='TEST-BAN',
+      err(gana) || (gana&&gana.es ? 'ES '+gana.es.join(',')+' · DE '+(gana.de||[]).join(',') : '—'));
+
+    /* EL DINERO. Con filtro de país, el P&L por SKU tiene que llevar el gasto
+       de ESE país al SKU de ESE país. 30,00 € al rodillo en España; y el
+       rodillo no puede llevarse ni un céntimo de los 70,00 € alemanes. */
+    const dinero = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-ROD','ES');
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const g = (p,sku) => { const c = C.find(x=>x.pais===p); return c && c.skus.indexOf(sku)>=0 ? (c.porPais||{})[p]||0 : 0; };
+      return {rodEnES:g('ES','TEST-ROD'), banEnDE:g('DE','TEST-BAN'),
+              rodEnDE:g('DE','TEST-ROD'), banEnES:g('ES','TEST-BAN')}; })()`);
+    check('el gasto alemán NO toca al producto español, ni al revés',
+      dinero && !dinero.__err && near(dinero.rodEnES,30) && near(dinero.banEnDE,70) &&
+      dinero.rodEnDE===0 && dinero.banEnES===0,
+      err(dinero) || (dinero ? 'ROD/ES '+n2(dinero.rodEnES)+' · BAN/DE '+n2(dinero.banEnDE)+
+        ' · ROD/DE '+n2(dinero.rodEnDE)+' · BAN/ES '+n2(dinero.banEnES) : '—'));
+
+    /* La suma no cambia: el arreglo reparte, no inventa. */
+    const suma = await ev(`(()=>{ const C=pubPpcPorCampana(); return C.reduce((a,c)=>a+c.gasto,0); })()`);
+    check('la suma observada sigue siendo 100,00 € · se reparte, no se inventa',
+      near(suma, 100), err(suma) || n2(suma));
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     BLOQUE 4 · UNA CAMPANA RENOMBRADA ENTRE DOS INFORMES
+
+     El solape se deduplica por NOMBRE de campaña. Si el nombre cambió entre dos
+     descargas, ninguno de los dos informes «trae» la campaña del otro, cada uno
+     es dueño único de sus propios días, y el gasto de los días comunes se cuenta
+     DOS VECES. El 3-10 quedó como sospecha; aquí está medido.
+
+     LA CUENTA A MANO · filas de un solo día para que salga exacta:
+        v1  días 14, 13 y 12  ·  10,00 cada uno  =  30,00   (rango 12..14)
+        v2  días 13, 12 y 11  ·  20,00 cada uno  =  60,00   (rango 11..13)
+        días comunes: el 13 y el 12  →  2 días
+        v1 dentro de esos dos días: 10 + 10 =  20,00
+        v2 dentro de esos dos días: 20 + 20 =  40,00
+        suelo de lo contado dos veces = min(20, 40) = 20,00 €
+
+     Y «SP · Otra · amplia» NO debe saltar: su propio grupo de anuncios y un solo
+     término en común. Compartir una palabra genérica no es un renombrado.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── bloque 4 · campaña renombrada entre informes ──');
+  {
+    /* Los dos informes tienen que convivir, así que este importador ACUMULA en
+       vez de vaciar `DB.imports` como hace `importar`. Es justamente lo que pasa
+       en la realidad: Juancho tiene quince informes cargados a la vez. */
+    const importarMas = async (fichero) => {
+      await page.evaluate(()=>go('datos'));
+      await page.setInputFiles('#csvFile', []);
+      await page.setInputFiles('#csvFile', path.resolve(FIX, fichero));
+      await page.waitForTimeout(1200);
+      return page.evaluate(()=>Object.keys(DB.imports||{}).length);
+    };
+    await page.evaluate(()=>{ DB.imports={}; DB.mappings={}; saveDB();
+      const l=document.getElementById('fileList'); if(l) l.innerHTML=''; refreshAll(); });
+    await page.waitForTimeout(200);
+    await importarMas('terminos-renombrada-1.csv');
+    await importarMas('terminos-renombrada-2.csv');
+    await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+    await page.waitForTimeout(500);
+
+    const nFich = await page.evaluate(()=>{ const f=(DB.imports.searchterm||{}).ficheros;
+      return f ? Object.keys(f).length : ((DB.imports.searchterm||{}).count?1:0); });
+    const R = await ev(`(()=>{ const r = pubRenombradas();
+      return r.map(x=>({a:x.a.campana, b:x.b.campana, pais:x.pais, dias:x.dias,
+                        ga:x.a.gasto, gb:x.b.gasto, suelo:x.suelo,
+                        comunes:x.comunes, de:x.de})); })()`);
+
+    /* Esto mide el escenario, no el arreglo: si los dos informes no conviven,
+       todo lo de abajo mediría otra cosa sin avisar. */
+    check('los dos informes conviven, no se sustituyen', nFich >= 1, 'ficheros: '+nFich);
+    check('detecta UN solo candidato a renombrado',
+      Array.isArray(R) && R.length === 1,
+      err(R) || (Array.isArray(R) ? R.length+' candidatos: '+R.map(x=>x.a+'/'+x.b).join(' · ') : String(R)));
+
+    const c = Array.isArray(R) && R[0] ? R[0] : null;
+    check('señala las dos versiones del nombre, y no otra campaña',
+      !!c && /v1|v2/.test(String(c.a)) && /v1|v2/.test(String(c.b)) &&
+      !/Otra/.test(String(c.a)+String(c.b)),
+      err(R) || (c ? c.a+' ↔ '+c.b : '—'));
+    check('cuenta los 2 días comunes',
+      !!c && c.dias === 2, err(R) || (c ? c.dias+' días' : '—'));
+    check('el gasto de cada nombre DENTRO de la ventana común · 20,00 y 40,00',
+      !!c && ((near(c.ga,20) && near(c.gb,40)) || (near(c.ga,40) && near(c.gb,20))),
+      err(R) || (c ? n2(c.ga)+' y '+n2(c.gb) : '—'));
+    check('el suelo de lo contado dos veces es el MENOR · 20,00 €',
+      !!c && near(c.suelo, 20), err(R) || (c ? n2(c.suelo) : '—'));
+    check('«SP · Otra · amplia» no salta: UN par en común no es evidencia',
+      Array.isArray(R) && !R.some(x=>/Otra/.test(String(x.a)+String(x.b))),
+      err(R) || (Array.isArray(R) ? R.map(x=>x.a+'/'+x.b).join(' · ') : '—'));
+
+    /* Y el aviso tiene que LLEGAR A LA PANTALLA con su cifra: un detector que
+       solo existe en el motor no avisa a nadie. */
+    const pantalla = await page.evaluate(async ()=>{ go('publicidad');
+      await new Promise(r=>setTimeout(r,600));
+      const e = document.getElementById('pubRenomAviso');
+      return e ? e.textContent.replace(/\s+/g,' ').trim() : '(sin nodo)'; });
+    check('el aviso aparece en Publicidad y dice el gasto en juego',
+      /renombrado|renombrad/i.test(pantalla) && /20,00/.test(pantalla),
+      pantalla.slice(0, 150));
+
+    /* Y cuando NO hay renombrado, el aviso no está: un panel que siempre dice
+       algo entrena a no mirarlo. */
+    const limpio = await page.evaluate(async ()=>{
+      DB.imports={}; DB.mappings={}; saveDB(); go('publicidad');
+      await new Promise(r=>setTimeout(r,500));
+      const e = document.getElementById('pubRenomAviso');
+      return e ? e.textContent.trim() : '(sin nodo)'; });
+    check('sin informes solapados el aviso no aparece', limpio === '', '«'+limpio.slice(0,60)+'»');
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     LOS HALLAZGOS DE LA REVISION ADVERSARIAL DEL 3-10-2026
+
+     Un revisor independiente -que no habia visto el codigo- encontro cinco
+     numeros creibles y falsos en los bloques 2 y 4. Los cuatro de aqui abajo
+     los confirmé yo mismo antes de arreglarlos, y esta es su prueba. El quinto
+     -el del pais fundido en la clave de `pubAdStats`- lo cubre ya la fixture de
+     dos paises, corregida para usar el MISMO termino en los dos.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── revisión adversarial 3-10 · los hallazgos, como prueba ──');
+  {
+    const cargar = async (...ficheros) => {
+      await page.evaluate(()=>{ DB.imports={}; DB.mappings={}; saveDB();
+        const l=document.getElementById('fileList'); if(l) l.innerHTML=''; refreshAll(); });
+      await page.waitForTimeout(200);
+      for(const f of ficheros){
+        await page.evaluate(()=>go('datos'));
+        await page.setInputFiles('#csvFile', []);
+        await page.setInputFiles('#csvFile', path.resolve(FIX, f));
+        await page.waitForTimeout(1100);
+      }
+      await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+      await page.waitForTimeout(400);
+    };
+    const renom = () => ev(`(()=>pubRenombradas().map(x=>({a:x.a.campana,b:x.b.campana,pais:x.pais,suelo:x.suelo})))()`);
+
+    /* HALLAZGO 1 · v1 en un informe, v2 en DOS. Antes salian DOS candidatos del
+       mismo renombrado y la pantalla sumaba los dos suelos; con 8 informes de un
+       nombre y 7 del otro eran 56, y 3.080 € de «suelo» sobre una cuenta de 110.
+       Tiene que salir UNO. */
+    await cargar('terminos-renombrada-1.csv','terminos-renombrada-2.csv','terminos-renombrada-3.csv');
+    const h1 = await renom();
+    /* AVISO SOBRE ESTAS DOS · NO SON PRUEBA DE FALLO, SON ESCENARIO.
+       Los arreglos de H1 (un caso por par de NOMBRES) y de H5 (dos nombres
+       vivos en los dos ficheros = duplicado) estan puestos y son correctos, pero
+       NO he conseguido ponerlos rojos con estas fixtures: deshaciendo cada uno
+       -y comprobando con `assert` que el reemplazo entraba de verdad, porque el
+       primer intento fallo en silencio y dio un rojo falso- la suite sigue
+       verde. El candidato se cae antes de llegar a esas dos guardas, en el
+       `suelo > 0`.
+       Asi que lo que estas dos lineas comprueban es el ESCENARIO, no el
+       mecanismo. Queda pendiente una fixture en la que los dos ficheros ganen
+       parte de la ventana comun, que es la unica forma de que la multiplicacion
+       del suelo y el duplicado lleguen a esas guardas. Esta en P-23. */
+    check('H1 · un renombrado en tres informes es UN caso, no uno por par de ficheros',
+      Array.isArray(h1) && h1.length === 1,
+      err(h1) || (Array.isArray(h1) ? h1.length+' casos · suelos '+h1.map(x=>n2(x.suelo)).join('+') : String(h1)));
+    check('H1 · y su suelo no se multiplica · sigue siendo 20,00 €',
+      Array.isArray(h1) && h1[0] && near(h1[0].suelo, 20),
+      err(h1) || (Array.isArray(h1)&&h1[0] ? n2(h1[0].suelo) : '—'));
+
+    /* HALLAZGO 4 · en libras. El gasto en otra divisa no entra en NINGUNA cifra
+       del hub, asi que no puede haber nada contado dos veces que avisar, y
+       menos con el simbolo del euro. */
+    await cargar('terminos-gbp-1.csv','terminos-gbp-2.csv');
+    const h4 = await renom();
+    const divisaFuera = await ev(`(()=>{ const T=pubAdStats(); return {otra:T.gastoOtraDivisa||0, spend:T.spend}; })()`);
+    check('H4 · el gasto en otra divisa está fuera de las cifras del hub',
+      divisaFuera && !divisaFuera.__err && divisaFuera.otra > 0 && near(divisaFuera.spend, 0),
+      err(divisaFuera) || (divisaFuera ? 'otra divisa '+n2(divisaFuera.otra)+' · spend '+n2(divisaFuera.spend) : '—'));
+    check('H4 · y por eso NO se avisa de un renombrado en libras',
+      Array.isArray(h4) && h4.length === 0,
+      err(h4) || (Array.isArray(h4) ? h4.map(x=>x.a+'/'+x.b+' '+n2(x.suelo)).join(' · ') : String(h4)));
+
+    /* HALLAZGO 5 · dos campanas duplicadas de verdad, las dos vivas en los dos
+       informes. La firma coincide al 100 % y los umbrales no las separan nunca:
+       lo que las separa es que un renombrado hace DESAPARECER el nombre viejo.
+       Y el aviso no puede llevar encima «borra el informe viejo»: sobre un falso
+       positivo eso destruye gasto real. */
+    await cargar('terminos-duplicada-1.csv','terminos-duplicada-2.csv');
+    const h5 = await renom();
+    /* La asercion de aqui abajo la escribi primero como «gastoSolape === 0» y
+       salio roja con 50,00. El fallo era de la prueba: `gastoSolape` es el gasto
+       que la deduplicacion DEJA FUERA porque dos informes se pisan, o sea la
+       deduplicacion funcionando, no un doble conteo. Lo que de verdad hay que
+       comprobar es que cada campana se cuenta UNA vez:
+          crudo   f1: 40+40 (alta) + 10+10 (baja) = 100 · f2 lo mismo = 200
+          tras deduplicar los dias comunes: alta 120 + baja 30 = 150 = spendBruto
+          y los 50 que faltan son exactamente `gastoSolape`. */
+    const solape5 = await ev(`(()=>{ const T=pubAdStats();
+      const C = pubPpcPorCampana();
+      return {bruto:T.spendBruto, solape:T.gastoSolape, suma:C.reduce((a,c)=>a+c.gasto,0),
+              alta:(C.find(c=>/alta/.test(c.campana))||{}).gasto,
+              baja:(C.find(c=>/baja/.test(c.campana))||{}).gasto}; })()`);
+    check('H5 · dos campañas duplicadas no son un renombrado',
+      Array.isArray(h5) && h5.length === 0,
+      err(h5) || (Array.isArray(h5) ? h5.map(x=>x.a+'/'+x.b+' '+n2(x.suelo)).join(' · ') : String(h5)));
+    check('H5 · cada campaña se cuenta UNA vez · alta 120,00 y baja 30,00, suman 150,00',
+      solape5 && !solape5.__err && near(solape5.alta,120) && near(solape5.baja,30) &&
+      near(solape5.suma,150) && near(solape5.bruto,150),
+      err(solape5) || (solape5 ? 'alta '+n2(solape5.alta)+' · baja '+n2(solape5.baja)+
+        ' · suma '+n2(solape5.suma)+' · bruto '+n2(solape5.bruto) : '—'));
+    check('H5 · y los 50,00 de los días pisados los quita la deduplicación, no se duplican',
+      solape5 && !solape5.__err && near(solape5.solape, 50),
+      err(solape5) || (solape5 ? n2(solape5.solape) : '—'));
+    const consejo = await page.evaluate(()=>{
+      const e=document.getElementById('pubRenomAviso'); return e ? e.textContent : ''; });
+    check('H5 · el aviso no dice en ningún caso que se borre un informe',
+      !/borra el viejo|borra el informe/i.test(consejo), '«'+consejo.slice(0,60)+'»');
+
+    /* HALLAZGO 3 · con una global guardada, VACIAR la fila de un pais tiene que
+       quitar el dinero de ahi. Antes el `delete` borraba una clave que no
+       existia, la global sobrevivia y los 70,00 € seguian encima del producto
+       equivocado DESPUES de que el usuario los hubiera quitado. */
+    await cargar('terminos-dos-paises.csv');
+    const h3 = await ev(`(()=>{
+      DB.ppcAsig = {}; DB.ppcAsig[fold('SP · Multi · exacta').trim()] = {prefijos:['TEST-ROD'], fecha:'2026-09-01'};
+      saveDB();
+      const antes = pubPpcPorCampana().find(c=>c.pais==='DE');
+      pubAsignar('SP · Multi · exacta','','DE');          // el usuario vacía la fila de Alemania
+      const C = pubPpcPorCampana();
+      const de = C.find(c=>c.pais==='DE'), es = C.find(c=>c.pais==='ES');
+      return {antesDE: antes ? antes.skus.slice() : null,
+              deSkus: de ? de.skus.slice() : null, deGasto: de ? de.gasto : null,
+              esSkus: es ? es.skus.slice() : null}; })()`);
+    check('H3 · antes de vaciar, la global sí regía Alemania',
+      h3 && !h3.__err && h3.antesDE && h3.antesDE.length===1 && h3.antesDE[0]==='TEST-ROD',
+      err(h3) || (h3&&h3.antesDE ? h3.antesDE.join(',') : '—'));
+    check('H3 · vaciar la fila de Alemania SÍ le quita el destino · ningún SKU',
+      h3 && !h3.__err && Array.isArray(h3.deSkus) && h3.deSkus.length === 0,
+      err(h3) || (h3&&h3.deSkus ? (h3.deSkus.join(',')||'ninguno') : '—'));
+    check('H3 · y España se queda como estaba · la global sigue rigiendo el resto',
+      h3 && !h3.__err && h3.esSkus && h3.esSkus.length===1 && h3.esSkus[0]==='TEST-ROD',
+      err(h3) || (h3&&h3.esSkus ? h3.esSkus.join(',') : '—'));
+    const h3b = await page.evaluate(async ()=>{ go('publicidad');
+      await new Promise(r=>setTimeout(r,500));
+      const t=(document.getElementById('pubAsigTable')||{}).textContent||'';
+      return t.replace(/\s+/g,' '); });
+    check('H3 · y la pantalla lo dice en vez de repintar el valor de antes',
+      /nada en este país/.test(h3b), h3b.slice(0,120));
+  }
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

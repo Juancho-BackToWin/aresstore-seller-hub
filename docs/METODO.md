@@ -159,10 +159,14 @@ Revisado el 18 de agosto de 2026 ejecutando cada pantalla, no leyéndola.
 | Tesorería | verificado con datos sintéticos | la fase del ciclo de cobro de Amazon se asume, y eso mueve el mínimo entre 1.424 € y 5.501 € en el ejemplo. Va en P-8 |
 | Inventario | verificado con datos sintéticos | **M2**: cobertura por país cuando haya informe multipaís, y previsión |
 | Compras | verificado con datos sintéticos | **M3**: cuándo lanzar el pedido para no romper stock. Necesita P-5 |
-| Publicidad | verificado con datos sintéticos | **M4**: ACOS de equilibrio. El gasto se prorratea y se dice que se prorratea |
+| Publicidad | verificado con datos sintéticos | **M4**: ACOS de equilibrio. El gasto se prorratea y se dice que se prorratea. Desde el 3-10-2026 la asignación campaña→producto puede ser **por campaña y país** —antes una campaña homónima en dos países compartía destino, y además `pubAdStats` fundía en una sola fila el mismo término corriendo en dos países, con el gasto sumado y el país de la primera fila: los 90 € de Alemania acababan sobre el producto español. Lo encontró la revisión adversarial del 3-10, no las pruebas— y hay un aviso de **campañas renombradas entre informes**, que son días contados dos veces. El aviso no une los dos nombres solo: dice el suelo del gasto en juego y decide quien mira. **Dos de sus cinco arreglos de la revisión del 3-10 están sin rojo** (P-23): construidos, sin probar |
 | Cumplimiento | registro manual | **M6**: diferenciales europeos. Hoy es una ficha que rellenas tú; no lee ningún informe, ni siquiera el de IVA por país, que se importa y se queda parado |
 | Validar producto · Comparador PanEU | construido, sin probar | calculadora independiente: **no usa tus datos importados**, todo se teclea. Su modelo de devoluciones es el más completo del hub y es el que se ha llevado al P&L |
-| Detectores de reembolso (M5) | no construido | el informe de reembolsos ya se importa y suma en el P&L; los detectores que buscan lo que Amazon te debe y no te ha pagado, no |
+| Detectores de reembolso (M5) | construido, sin probar contra informes largos | las cuatro ventanas de reclamación están **re-verificadas contra las páginas vivas de Amazon el 3-10-2026**, con las frases literales pegadas en el código. La de tarifas cobradas de más **sigue sin fuente oficial** y por eso sigue sin cifra. Lo que falta es medir los detectores con un informe de devoluciones de más de 45 días, el libro mayor de inventario y una segunda foto de tarifas |
+
+*Revisado de nuevo el 3 de octubre de 2026 sobre los bloques 2, 3 y 4. El
+detalle del día, con el rojo demostrado, está en `docs/TRASPASO-2026-10-03.md`;
+el mapa de la carpeta, en `docs/INDICE.md`.*
 
 **Ninguna es apta todavía.** Todas están verificadas contra aritmética hecha a
 mano y contra una revisión adversarial que buscaba el número creíble y falso —de

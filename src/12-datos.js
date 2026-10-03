@@ -1949,7 +1949,35 @@ function pnl(){
   reparte(storage,  'storage',  b=>b.units);
   reparte(otherFee, 'otherFee', b=>b.units);
   Object.keys(cost.bySku||{}).forEach(k=>{ skuDe({sku:k}).cogs += cost.bySku[k].cogs||0; });
-  const ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
+  let ppc = ads.spend || (DB.settings.cash.ppcDaily||0)*daysInPeriod();
+  /* CON EL FILTRO DE UN PAÍS, LA PUBLICIDAD DE ESE PAÍS. Antes el P&L de
+     España cargaba con todo el gasto del informe, el de Italia incluido: un
+     país que apenas se anuncia salía hundido y el que más gasta, aliviado.
+     Lo encontró la tarde del 3-10-2026 al probar «Campañas → producto» por
+     país. Ahora `ppc` es la cuota del país en lo observado: su gasto con país,
+     más la parte del gasto SIN país (informes viejos) en la misma proporción
+     que el gasto con país. Si ninguna fila trae país no hay con qué repartir:
+     se queda entero y la pantalla lo dice (`ppcPaisSinDato`). */
+  let ppcPaisCuota = null, ppcPaisSinDato = false, ppcPaisRepartido = 0;
+  const filtroPais = typeof countryFilter!=='undefined' && countryFilter!=='ALL';
+  if(filtroPais && ads.spend>0){
+    /* El gasto de cada país con sus tres componentes (`porPaisGasto`, ver
+       pubAdStats): observado, extrapolado con la mezcla del tramo del que
+       sale el ritmo, y sin fecha. Suma `ads.spend`. Lo que no dice país se
+       reparte en la proporción de lo que sí lo dice. Si algún país sale
+       negativo (abonos), una proporción no significa nada: no se reparte y se
+       dice que es el gasto de todos. */
+    const M = ads.porPaisGasto||{};
+    const tot = Object.keys(M).reduce((a,k)=>a+M[k],0), sinPais = M['??']||0, cfg = M[countryFilter]||0;
+    const conocido = tot - sinPais;
+    const negativos = Object.keys(M).some(k=>k!=='??' && M[k] < -0.005);
+    if(tot>0 && conocido>0 && !negativos){ ppcPaisCuota = (cfg + sinPais*cfg/conocido)/tot;
+      ppcPaisRepartido = ppc*(sinPais*cfg/conocido)/tot; ppc = ppc*ppcPaisCuota; }
+    else ppcPaisSinDato = true;
+  }
+  /* Sin informe, el gasto diario de ajustes es de toda la cuenta: con filtro
+     es el de todos los países y se dice. */
+  else if(filtroPais && ppc>0) ppcPaisSinDato = true;
   /* De dónde sale ese gasto, que no es lo mismo y la pantalla lo tenía todo
      bajo la misma etiqueta:
        informe            · con su rango, prorrateado a los días del periodo
@@ -2157,13 +2185,29 @@ function pnl(){
        abono negativo sin término reduce todas las cuotas por igual en vez de
        hacer saltar una campaña entera. */
     const obsTot = C.reduce((a,c)=>a+c.gasto,0);
-    const f = obsTot>0 ? ppc/obsTot : 0;
+    let f = obsTot>0 ? ppc/obsTot : 0;
+    if(ppcPaisCuota!=null){
+      /* Con filtro, `ppc` es lo de este país: se reparte sobre lo que sus
+         campañas observaron en él (más su parte de lo que no dice país), nunca
+         sobre el total, o un país se imputaría más de lo que le toca. */
+      const cfObs = C.reduce((a,c)=>a+((c.porPais||{})[countryFilter]||0),0);
+      const unk = C.reduce((a,c)=>a+((c.porPais||{})['??']||0),0), known = obsTot - unk;
+      const den = cfObs + (known>0 ? unk*cfObs/known : 0);
+      f = den>0 ? ppc/den : 0;
+    }
     const cf = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
     const porSkuMin = {}; Object.keys(SK).forEach(k=>porSkuMin[k.toLowerCase()] = k);
+    /* TOPE: nunca se imputa más que `ppc`. Un abono con término resta del
+       denominador pero no se imputa a nadie, y sin tope la campaña positiva
+       se llevaba más que todo el gasto, y el reparto general salía negativo
+       (tercera revisión de la tarde del 3-10-2026). */
+    let gPos = 0;
+    C.forEach(c=>{ if(!c.skus.length) return; const g0 = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f; if(g0>0) gPos += g0; });
+    const tope = (gPos > ppc && ppc>0) ? ppc/gPos : (ppc>0 ? 1 : 0);
     C.forEach(c=>{
       if(!c.skus.length || !(f>0)) return;
       /* Con filtro de país, solo lo que la campaña gastó EN ese país. */
-      const g = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f;
+      const g = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f * tope;
       if(!(g>0)) return;
       const ks = c.skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
       const T = ks.reduce((a,k)=>a+SK[k].revenue,0);
@@ -2194,7 +2238,8 @@ function pnl(){
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
     vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall, vatSinVentas,
     vatVentasReducidas: (tb.fiscal||{}).ventasReducidas||0,
-    ppcSource, adSpanUnknown: ads.spanUnknown,
+    ppcSource, adSpanUnknown: ads.spanUnknown, ppcPaisCuota, ppcPaisSinDato, ppcPaisRepartido,
+    adExtrapolado: (ads.spendExtrapolado||0) > 0.005 || !!ads.fueraDePeriodo,
     refMedido, fbaMedido,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,
     feeSkus: Object.keys(tarifas).filter(k=>!/\|\*$/.test(k)).length, feeUnits: udsConTarifa,

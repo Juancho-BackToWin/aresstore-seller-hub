@@ -150,13 +150,16 @@ const n2 = x => typeof x==='number' ? x.toFixed(2) : String(x);
     DB.imports.searchterm.rows.forEach(r=>r.country='España');
     for(let k=0;k<15;k++) DB.imports.searchterm.rows.push({_term:'it '+k, _campaign:'NS IT', campaignname:'NS IT',
       country:'Italia', _from:dia(k), _to:dia(k), _spend:'2', _sales:'0', _clicks:'5', _impr:'100'});
-    pubAsignar('NS IT','FBANS'); countryFilter='ES'; const P=pnl(); countryFilter='ALL';
+    pubAsignar('NS IT','FBANS'); const T=pnl(); countryFilter='ES'; const P=pnl(); countryFilter='ALL';
     const C = pubPpcPorCampana().filter(c=>c.campana==='NS IT')[0];
-    return {imp:P.ppcImputado, ppc:P.ppc, itES: C ? (C.porPais.ES||0) : null, itIT: C ? (C.porPais.IT||0) : null}; })()`);
+    return {imp:P.ppcImputado, ppc:P.ppc, ppcTodo:T.ppc, itES: C ? (C.porPais.ES||0) : null, itIT: C ? (C.porPais.IT||0) : null}; })()`);
   check('R2 · el gasto se separa por país (NS IT: 0 € en ES, 30 € en IT)', !r2.__err && r2.itES===0 && near(r2.itIT, 30),
     r2.__err || JSON.stringify(r2));
-  check('R2 · con el filtro ES, solo se imputa la cuota de lo gastado en España', !r2.__err && r2.imp < r2.ppc &&
-    near(r2.imp, r2.ppc*15/45), r2.__err || ('imputado '+n2(r2.imp)+' de '+n2(r2.ppc)));
+  /* Desde la tarde del 3-10-2026 (H6 de ppcpais.test.js), con el filtro ES la
+     publicidad del P&L ya es solo la de España: 15 de los 45 € observados, la
+     misma cuota del gasto total. Toda ella va a FBANS, así que imputado = ppc. */
+  check('R2 · con el filtro ES, la publicidad es la cuota de España y se imputa entera', !r2.__err &&
+    near(r2.ppc, r2.ppcTodo*15/45) && near(r2.imp, r2.ppc), r2.__err || ('imputado '+n2(r2.imp)+' de '+n2(r2.ppc)+' (sin filtro '+n2(r2.ppcTodo)+')'));
 
   /* R5 · La sugerencia por código no arrastra otra serie de letras. */
   const r5 = await ev(`(()=>{ DB.products.push(

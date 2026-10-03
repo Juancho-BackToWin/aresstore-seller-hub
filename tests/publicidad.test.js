@@ -797,6 +797,138 @@ const LAB = `
     check('sin informes solapados el aviso no aparece', limpio === '', '«'+limpio.slice(0,60)+'»');
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     LOS HALLAZGOS DE LA REVISION ADVERSARIAL DEL 3-10-2026
+
+     Un revisor independiente -que no habia visto el codigo- encontro cinco
+     numeros creibles y falsos en los bloques 2 y 4. Los cuatro de aqui abajo
+     los confirmé yo mismo antes de arreglarlos, y esta es su prueba. El quinto
+     -el del pais fundido en la clave de `pubAdStats`- lo cubre ya la fixture de
+     dos paises, corregida para usar el MISMO termino en los dos.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── revisión adversarial 3-10 · los hallazgos, como prueba ──');
+  {
+    const cargar = async (...ficheros) => {
+      await page.evaluate(()=>{ DB.imports={}; DB.mappings={}; saveDB();
+        const l=document.getElementById('fileList'); if(l) l.innerHTML=''; refreshAll(); });
+      await page.waitForTimeout(200);
+      for(const f of ficheros){
+        await page.evaluate(()=>go('datos'));
+        await page.setInputFiles('#csvFile', []);
+        await page.setInputFiles('#csvFile', path.resolve(FIX, f));
+        await page.waitForTimeout(1100);
+      }
+      await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+      await page.waitForTimeout(400);
+    };
+    const renom = () => ev(`(()=>pubRenombradas().map(x=>({a:x.a.campana,b:x.b.campana,pais:x.pais,suelo:x.suelo})))()`);
+
+    /* HALLAZGO 1 · v1 en un informe, v2 en DOS. Antes salian DOS candidatos del
+       mismo renombrado y la pantalla sumaba los dos suelos; con 8 informes de un
+       nombre y 7 del otro eran 56, y 3.080 € de «suelo» sobre una cuenta de 110.
+       Tiene que salir UNO. */
+    await cargar('terminos-renombrada-1.csv','terminos-renombrada-2.csv','terminos-renombrada-3.csv');
+    const h1 = await renom();
+    /* AVISO SOBRE ESTAS DOS · NO SON PRUEBA DE FALLO, SON ESCENARIO.
+       Los arreglos de H1 (un caso por par de NOMBRES) y de H5 (dos nombres
+       vivos en los dos ficheros = duplicado) estan puestos y son correctos, pero
+       NO he conseguido ponerlos rojos con estas fixtures: deshaciendo cada uno
+       -y comprobando con `assert` que el reemplazo entraba de verdad, porque el
+       primer intento fallo en silencio y dio un rojo falso- la suite sigue
+       verde. El candidato se cae antes de llegar a esas dos guardas, en el
+       `suelo > 0`.
+       Asi que lo que estas dos lineas comprueban es el ESCENARIO, no el
+       mecanismo. Queda pendiente una fixture en la que los dos ficheros ganen
+       parte de la ventana comun, que es la unica forma de que la multiplicacion
+       del suelo y el duplicado lleguen a esas guardas. Esta en P-23. */
+    check('H1 · un renombrado en tres informes es UN caso, no uno por par de ficheros',
+      Array.isArray(h1) && h1.length === 1,
+      err(h1) || (Array.isArray(h1) ? h1.length+' casos · suelos '+h1.map(x=>n2(x.suelo)).join('+') : String(h1)));
+    check('H1 · y su suelo no se multiplica · sigue siendo 20,00 €',
+      Array.isArray(h1) && h1[0] && near(h1[0].suelo, 20),
+      err(h1) || (Array.isArray(h1)&&h1[0] ? n2(h1[0].suelo) : '—'));
+
+    /* HALLAZGO 4 · en libras. El gasto en otra divisa no entra en NINGUNA cifra
+       del hub, asi que no puede haber nada contado dos veces que avisar, y
+       menos con el simbolo del euro. */
+    await cargar('terminos-gbp-1.csv','terminos-gbp-2.csv');
+    const h4 = await renom();
+    const divisaFuera = await ev(`(()=>{ const T=pubAdStats(); return {otra:T.gastoOtraDivisa||0, spend:T.spend}; })()`);
+    check('H4 · el gasto en otra divisa está fuera de las cifras del hub',
+      divisaFuera && !divisaFuera.__err && divisaFuera.otra > 0 && near(divisaFuera.spend, 0),
+      err(divisaFuera) || (divisaFuera ? 'otra divisa '+n2(divisaFuera.otra)+' · spend '+n2(divisaFuera.spend) : '—'));
+    check('H4 · y por eso NO se avisa de un renombrado en libras',
+      Array.isArray(h4) && h4.length === 0,
+      err(h4) || (Array.isArray(h4) ? h4.map(x=>x.a+'/'+x.b+' '+n2(x.suelo)).join(' · ') : String(h4)));
+
+    /* HALLAZGO 5 · dos campanas duplicadas de verdad, las dos vivas en los dos
+       informes. La firma coincide al 100 % y los umbrales no las separan nunca:
+       lo que las separa es que un renombrado hace DESAPARECER el nombre viejo.
+       Y el aviso no puede llevar encima «borra el informe viejo»: sobre un falso
+       positivo eso destruye gasto real. */
+    await cargar('terminos-duplicada-1.csv','terminos-duplicada-2.csv');
+    const h5 = await renom();
+    /* La asercion de aqui abajo la escribi primero como «gastoSolape === 0» y
+       salio roja con 50,00. El fallo era de la prueba: `gastoSolape` es el gasto
+       que la deduplicacion DEJA FUERA porque dos informes se pisan, o sea la
+       deduplicacion funcionando, no un doble conteo. Lo que de verdad hay que
+       comprobar es que cada campana se cuenta UNA vez:
+          crudo   f1: 40+40 (alta) + 10+10 (baja) = 100 · f2 lo mismo = 200
+          tras deduplicar los dias comunes: alta 120 + baja 30 = 150 = spendBruto
+          y los 50 que faltan son exactamente `gastoSolape`. */
+    const solape5 = await ev(`(()=>{ const T=pubAdStats();
+      const C = pubPpcPorCampana();
+      return {bruto:T.spendBruto, solape:T.gastoSolape, suma:C.reduce((a,c)=>a+c.gasto,0),
+              alta:(C.find(c=>/alta/.test(c.campana))||{}).gasto,
+              baja:(C.find(c=>/baja/.test(c.campana))||{}).gasto}; })()`);
+    check('H5 · dos campañas duplicadas no son un renombrado',
+      Array.isArray(h5) && h5.length === 0,
+      err(h5) || (Array.isArray(h5) ? h5.map(x=>x.a+'/'+x.b+' '+n2(x.suelo)).join(' · ') : String(h5)));
+    check('H5 · cada campaña se cuenta UNA vez · alta 120,00 y baja 30,00, suman 150,00',
+      solape5 && !solape5.__err && near(solape5.alta,120) && near(solape5.baja,30) &&
+      near(solape5.suma,150) && near(solape5.bruto,150),
+      err(solape5) || (solape5 ? 'alta '+n2(solape5.alta)+' · baja '+n2(solape5.baja)+
+        ' · suma '+n2(solape5.suma)+' · bruto '+n2(solape5.bruto) : '—'));
+    check('H5 · y los 50,00 de los días pisados los quita la deduplicación, no se duplican',
+      solape5 && !solape5.__err && near(solape5.solape, 50),
+      err(solape5) || (solape5 ? n2(solape5.solape) : '—'));
+    const consejo = await page.evaluate(()=>{
+      const e=document.getElementById('pubRenomAviso'); return e ? e.textContent : ''; });
+    check('H5 · el aviso no dice en ningún caso que se borre un informe',
+      !/borra el viejo|borra el informe/i.test(consejo), '«'+consejo.slice(0,60)+'»');
+
+    /* HALLAZGO 3 · con una global guardada, VACIAR la fila de un pais tiene que
+       quitar el dinero de ahi. Antes el `delete` borraba una clave que no
+       existia, la global sobrevivia y los 70,00 € seguian encima del producto
+       equivocado DESPUES de que el usuario los hubiera quitado. */
+    await cargar('terminos-dos-paises.csv');
+    const h3 = await ev(`(()=>{
+      DB.ppcAsig = {}; DB.ppcAsig[fold('SP · Multi · exacta').trim()] = {prefijos:['TEST-ROD'], fecha:'2026-09-01'};
+      saveDB();
+      const antes = pubPpcPorCampana().find(c=>c.pais==='DE');
+      pubAsignar('SP · Multi · exacta','','DE');          // el usuario vacía la fila de Alemania
+      const C = pubPpcPorCampana();
+      const de = C.find(c=>c.pais==='DE'), es = C.find(c=>c.pais==='ES');
+      return {antesDE: antes ? antes.skus.slice() : null,
+              deSkus: de ? de.skus.slice() : null, deGasto: de ? de.gasto : null,
+              esSkus: es ? es.skus.slice() : null}; })()`);
+    check('H3 · antes de vaciar, la global sí regía Alemania',
+      h3 && !h3.__err && h3.antesDE && h3.antesDE.length===1 && h3.antesDE[0]==='TEST-ROD',
+      err(h3) || (h3&&h3.antesDE ? h3.antesDE.join(',') : '—'));
+    check('H3 · vaciar la fila de Alemania SÍ le quita el destino · ningún SKU',
+      h3 && !h3.__err && Array.isArray(h3.deSkus) && h3.deSkus.length === 0,
+      err(h3) || (h3&&h3.deSkus ? (h3.deSkus.join(',')||'ninguno') : '—'));
+    check('H3 · y España se queda como estaba · la global sigue rigiendo el resto',
+      h3 && !h3.__err && h3.esSkus && h3.esSkus.length===1 && h3.esSkus[0]==='TEST-ROD',
+      err(h3) || (h3&&h3.esSkus ? h3.esSkus.join(',') : '—'));
+    const h3b = await page.evaluate(async ()=>{ go('publicidad');
+      await new Promise(r=>setTimeout(r,500));
+      const t=(document.getElementById('pubAsigTable')||{}).textContent||'';
+      return t.replace(/\s+/g,' '); });
+    check('H3 · y la pantalla lo dice en vez de repintar el valor de antes',
+      /nada en este país/.test(h3b), h3b.slice(0,120));
+  }
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

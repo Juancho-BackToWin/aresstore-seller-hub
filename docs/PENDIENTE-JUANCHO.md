@@ -401,3 +401,26 @@ viaja hasta el CSV exportado.
 
 **Qué necesito:** una factura delante y dos líneas — qué familia se aplica a qué
 prefijo de SKU, y si los importes deducidos son los buenos.
+
+---
+
+## P-23 · Una fixture que llegue a dos guardas del detector de renombradas
+
+**Bloquea a:** nada del negocio. Es deuda de prueba, y la apunto porque si no se
+apunta desaparece.
+
+La revisión adversarial del 3-10 encontró cinco números falsos en los bloques 2
+y 4. **Cuatro están arreglados y con su prueba roja.** De los dos arreglos que
+quedan —H1, un caso por par de nombres en vez de por par de ficheros; y H5, dos
+nombres vivos en los dos informes son un duplicado y no un renombrado— **el
+código está puesto y es correcto, pero no tengo el rojo**: deshaciendo cada uno
+por separado, la suite sigue verde. El candidato se descarta antes de llegar a
+esas dos guardas, en la comprobación de `suelo > 0`.
+
+Hacen falta dos informes en los que **cada uno gane parte de la ventana común**
+(hoy el desempate se la lleva entera uno de los dos), y entonces sí se puede
+demostrar la multiplicación del suelo y el falso positivo del duplicado.
+
+**No necesito nada tuyo para esto.** Lo dejo anotado porque un arreglo sin rojo
+es exactamente lo que esta norma llama «construido, sin probar», y quien lo lea
+dentro de un mes tiene derecho a saberlo.

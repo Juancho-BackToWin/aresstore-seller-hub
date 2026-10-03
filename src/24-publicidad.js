@@ -45,6 +45,12 @@
 
 /* ── Parámetros declarados, no escondidos en medio de una fórmula ─────────── */
 const PUB_MIN_CLICS   = 10;   // clics mínimos para que una conversión observada signifique algo
+/* Tope de filas de «Campañas → producto». Una fila por campaña Y PAÍS desde el
+   3-10-2026, así que el número se multiplica por los países en los que corre la
+   cuenta: con los 8 de PanEU, 15 campañas son 120 filas. 400 deja sitio a 50
+   campañas en los 8 países, y la nota de abajo avisa si aún así se corta: lo que
+   no está en la página no se puede asignar, y ese gasto cae al reparto. */
+const PUB_MAX_FILAS_ASIG = 400;
 const PUB_HORAS_REGLA = 72;   // la regla de las 72 horas entre cambios de puja
 const PUB_DIAS_RUIDO  = 3;    // los últimos tres días siguen moviéndose (atribución)
 const PUB_MUESTRA_RITMO = 7;  // días con informe, como mínimo, para sacar el ritmo de los días sin informe (una semana)
@@ -268,7 +274,14 @@ function pubTraeCampana(c, kc, kp){
    siempre, solo que en el aviso.
    ─────────────────────────────────────────────────────────────────────────── */
 function pubRenombradas(filas, cob){
-  filas = filas || pubFilas();
+  /* HALLAZGO 4 de la revision del 3-10-2026 · LA DIVISA.
+     `pubAdStats` descarta las filas en otra divisa antes de contar nada
+     (`filas.filter(f=>!(f.divisa && f.divisa!==DIVISA_VENTAS))`), asi que su
+     gasto no entra en NINGUNA cifra del hub. Aqui no se filtraba, y `fmt()`
+     imprime el simbolo del euro: una campana britanica renombrada avisaba de
+     «al menos 100,00 €» de un gasto en libras que no se cuenta ni una vez.
+     Falso positivo del 100 %, en la divisa equivocada. */
+  filas = (filas || pubFilas()).filter(f=>!(f.divisa && f.divisa!==DIVISA_VENTAS));
   cob = cob || pubCobertura(filas);
 
   /* Firma por (fichero, campana plegada, pais) y gasto por dia. */
@@ -286,8 +299,21 @@ function pubRenombradas(filas, cob){
     });
   });
 
+  /* En que ficheros aparece cada (campana, pais). Lo necesita el hallazgo 5. */
+  const ficherosDe = {};
+  Object.keys(info).forEach(k=>{ const o = info[k];
+    const kk = o.kc + '\u0000' + o.kp;
+    (ficherosDe[kk] || (ficherosDe[kk] = {}))[o.fid] = 1; });
+
   const claves = Object.keys(info);
-  const fuera = [];
+  /* HALLAZGO 1 de la revision del 3-10-2026 · UN CASO POR PAR DE NOMBRES.
+     El bucle empareja (fichero, campana, pais) con (fichero, campana, pais), asi
+     que un renombrado con 8 informes del nombre viejo y 7 del nuevo devolvia 56
+     candidatos del MISMO renombrado, y la pantalla sumaba 56 suelos del mismo
+     duplicado: 3.080 € de «suelo» sobre una cuenta de 110 €, presentados como
+     minimo garantizado. Ahora se agrupa por par de nombres y se conserva UN
+     caso por par -el de mas dias comunes-. */
+  const porPar = {};
   for(let i=0;i<claves.length;i++){
     for(let j=i+1;j<claves.length;j++){
       const a = info[claves[i]], b = info[claves[j]];
@@ -295,37 +321,70 @@ function pubRenombradas(filas, cob){
       if(a.kc === b.kc) continue;            // mismo nombre: de eso ya se ocupa pubDuenoDia
       if(a.kp !== b.kp) continue;            // paises distintos son campanas distintas (bloque 2)
 
+      /* HALLAZGO 5 · RENOMBRADO O DUPLICADO. El duplicador de campanas de
+         Amazon copia los grupos de anuncios y las palabras clave literalmente,
+         asi que dos campanas simultaneas, reales y distintas, tienen firma
+         identica: los umbrales de abajo no las separan y nunca lo haran.
+         Lo que SI distingue: un renombrado implica que el nombre viejo DEJA de
+         aparecer y el nuevo EMPIEZA. Si los DOS nombres estan vivos en LOS DOS
+         ficheros, no es un renombrado, es un duplicado, y su gasto se cuenta
+         una sola vez cada uno -medido: `gastoSolape` da 0-. */
+      const fa = ficherosDe[a.kc + '\u0000' + a.kp] || {};
+      const fb = ficherosDe[b.kc + '\u0000' + b.kp] || {};
+      if(fa[b.fid] && fb[a.fid]) continue;
+
       const ca = cob[a.fid], cb = cob[b.fid];
       if(!ca || !cb) continue;
       const diasComunes = pubSolape(ca.ini, ca.fin, cb.ini, cb.fin);
       if(!(diasComunes > 0)) continue;       // sin dias comunes no se cuenta nada dos veces
 
-      const fa = Object.keys(a.firmas), fb = Object.keys(b.firmas);
-      const comunes = fa.filter(x=>b.firmas[x]);
-      const minTam = Math.min(fa.length, fb.length);
+      const sa = Object.keys(a.firmas), sb = Object.keys(b.firmas);
+      const comunes = sa.filter(x=>b.firmas[x]);
+      const minTam = Math.min(sa.length, sb.length);
       if(comunes.length < 2) continue;
       if(!(minTam > 0) || comunes.length / minTam < 0.6) continue;
 
       /* La ventana comun, en fechas. */
       const ini = ca.ini > cb.ini ? ca.ini : cb.ini;
       const fin = ca.fin < cb.fin ? ca.fin : cb.fin;
-      const dentro = o => o.filas.reduce((acc,f)=>
-        (f.desde && f.hasta && f.hasta >= ini && f.desde <= fin) ? acc + f.spend : acc, 0);
+      /* HALLAZGO 1 (segunda parte) · SOLO LOS DIAS QUE ESE INFORME GANA.
+         `dentro` sumaba todas las filas del fichero en la ventana comun, sin
+         mirar si `pubDuenoDia` le adjudico esos dias. Con quince informes, trece
+         no aportan un euro a ninguna cifra del hub -los pisa el ganador del
+         desempate- y su gasto aparecia igual como «en juego». Varios candidatos
+         nombraban dos informes de los que ninguno de los dos contaba. */
+      const cacheDueno = {};
+      const dentro = o => o.filas.reduce((acc,f)=>{
+        if(!f.desde || !f.hasta || f.hasta < ini || f.desde > fin) return acc;
+        let propios = 0;
+        for(let d=0; d<f.dias; d++){
+          const dia = addDays(f.desde, d);
+          if(dia < ini || dia > fin) continue;
+          if(pubDuenoDia(cob, o.kc, o.kp, dia, cacheDueno) === o.fid) propios++;
+        }
+        return propios ? acc + f.spend*(propios/f.dias) : acc;
+      }, 0);
       const ga = dentro(a), gb = dentro(b);
       const suelo = Math.min(ga, gb);
       if(!(suelo > 0)) continue;
 
-      fuera.push({
+      const kPar = (a.kc < b.kc ? a.kc+'\u0000'+b.kc : b.kc+'\u0000'+a.kc) + '\u0000' + a.kp;
+      const caso = {
         pais: a.kp, dias: diasComunes,
         ini: iso(ini), fin: iso(fin),
         a: {campana: a.campana, fid: a.fid, gasto: ga},
         b: {campana: b.campana, fid: b.fid, gasto: gb},
         comunes: comunes.length, de: minTam,
         suelo
-      });
+      };
+      /* Un caso por par de nombres: el de MAS dias comunes, que es el que mejor
+         describe el solape. Nunca la suma de los pares, que es lo que inflaba
+         el aviso. */
+      const prev = porPar[kPar];
+      if(!prev || caso.dias > prev.dias) porPar[kPar] = caso;
     }
   }
-  return fuera.sort((x,y)=>y.suelo-x.suelo);
+  return Object.keys(porPar).map(k=>porPar[k]).sort((x,y)=>y.suelo-x.suelo);
 }
 function pubDuenoDia(cob, kc, kp, dia, cache){
   const k = kc+'|'+kp+'|'+dia.getTime();
@@ -456,7 +515,24 @@ function pubAdStats(){
     }
 
     if(!f.term) return;
-    const k = fold(f.term)+'|'+fold(f.campaign);
+    /* ── EL PAIS ENTRA EN LA CLAVE · revision adversarial del 3-10-2026 ─────
+       Era `fold(term)+'|'+fold(campaign)`, SIN pais, y `country` se quedaba con
+       el de la PRIMERA fila que creaba el grupo. Asi que el mismo termino
+       corriendo en dos paises -lo normal en PanEU: la marca, el generico
+       principal- se fundia en UNA fila, con el gasto sumado y el pais del azar
+       de que fila escribio Amazon primero.
+
+       Medido: misma campana, termino «rodillo», ES 30,00 y DE 90,00. Daba UNA
+       fila `{pais:'ES', gasto:120}`. La asignacion por pais de Alemania se
+       guardaba y no imputaba nada: los 90 € alemanes acababan en el producto
+       espanol, que es palabra por palabra el fallo que esta sesion decia haber
+       arreglado. Y la etiqueta de pais se invertia solo con cambiar el orden de
+       las filas del informe.
+
+       Con el pais en la clave, dos paises son dos filas. Un termino que corre
+       en ES y en DE son dos cosas distintas tambien para el ACOS de
+       equilibrio: su conversion no es la misma y promediarla era mezclar. */
+    const k = fold(f.term)+'|'+fold(f.campaign)+'|'+(pubPais(f.country)||'');
     if(!grupos[k]) grupos[k] = {term:f.term, campaign:f.campaign, adgroup:f.adgroup,
       country:f.country, match:f.match, spend:0, sales:0, orders:0, clicks:0, impr:0,
       spendTot:0, salesTot:0, ordersTot:0, clicksTot:0, imprTot:0, fueraDePeriodo:false,
@@ -1025,7 +1101,25 @@ function pubAsignar(campana, valor, pais){
   if(!DB.ppcAsig) DB.ppcAsig = {};
   const k = pubClaveAsig(campana, pais);
   const v = String(valor==null?'':valor).trim();
-  if(!v) delete DB.ppcAsig[k];
+  if(!v){
+    /* HALLAZGO 3 de la revision del 3-10-2026 · BORRAR EN UN PAIS NO BORRABA.
+       Toda asignacion anterior a este cambio es global, y el flujo natural es
+       «diferencio el pais donde no vale». Si en ese pais la campana no anuncia
+       nada atribuible, lo que hace el usuario es VACIAR el campo. El `delete`
+       borraba una clave que no existia, `pubAsignacion` caia a la global, la
+       fila se repintaba con el valor de antes y el gasto seguia imputandose:
+       medido, 90 € alemanes encima del producto espanol DESPUES de que el
+       usuario los hubiera quitado explicitamente.
+
+       `*` no servia de salida: significa reparto, no vacio. Asi que vaciar una
+       fila que tiene una global por encima guarda un centinela `{nada:true}`,
+       que es como se dice «en este pais, nada». Vaciar la fila global -o una
+       de pais sin global por encima- sigue borrando, que es lo que se espera. */
+    const hayGlobal = !!(DB.ppcAsig[pubClaveAsig(campana)]);
+    const esDePais = !!(pais && pais !== '??');
+    if(esDePais && hayGlobal) DB.ppcAsig[k] = {nada:true, fecha:iso(today())};
+    else delete DB.ppcAsig[k];
+  }
   else if(v==='*') DB.ppcAsig[k] = {reparto:true, fecha:iso(today())};
   else DB.ppcAsig[k] = {prefijos:pubPrefijos(v), fecha:iso(today())};
   saveDB(); try{ refreshAll(); }catch(e){}
@@ -1056,7 +1150,7 @@ function pubPpcPorCampana(){
   return Object.keys(m).map(k=>{ const c = m[k];
     const a = pubAsignacion(c.campana, c.pais);
     c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
-    c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
+    c.skus = (a && !a.reparto && !a.nada) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
     return c; }).sort((a,b)=>b.gasto-a.gasto);
 }
 
@@ -1287,11 +1381,18 @@ function pubRenderPublicidad(){
   {
     const C = pubPpcPorCampana();
     tbl('pubAsigTable','<tr><th>Campaña</th><th>País</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
-      (C.length ? C.slice(0,120).map(c=>{
-        const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
-        const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
+      /* HALLAZGO 7 de la revision del 3-10-2026 · EL TOPE. Con una fila por
+         campana Y pais, el numero de filas se multiplica por el de paises: 30
+         campanas en 5 paises son 150 filas, y con un tope de 120 quedaban 30
+         pares inalcanzables -300 € del gasto, medido- sin que la nota lo
+         dijera. Con los 8 paises de PanEU, 15 campanas ya desbordaban. */
+      (C.length ? C.slice(0, PUB_MAX_FILAS_ASIG).map(c=>{
+        const val = (c.asig && !c.asig.nada) ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
+        const cuantos = (c.asig && c.asig.nada)
+          ? '<span class="pub-ori">nada en este país · su gasto va al reparto por ingreso</span>'
+          : (c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
           (c.skus.length && c.skus.length<=6 ? ': '+esc(c.skus.join(', ')) : '')+(c.skus.length===0?' · ningún SKU empieza así':'')+'</span>'
-          : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : '');
+          : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : ''));
         /* BLOQUE 2 · el pais viaja en el `data-pais`, y de ahi a `pubAsignar`.
            Sin esto, escribir en la fila de Alemania guardaria la clave global y
            reasignaria tambien Espana. «??» = informe sin pais: la clave se
@@ -1333,8 +1434,17 @@ function pubRenderPublicidad(){
           'si el renombrado es real, uno de los dos cuerpos de gasto duplica al otro, y lo contado dos veces '+
           'es al menos el menor de los dos. '+
           'El hub <strong>no los une solo</strong> a propósito: si el detector se equivocara, habría sumado dos '+
-          'campañas de verdad distintas y nadie lo sabría. Si son la misma, descarga de nuevo el informe del '+
-          'periodo completo con el nombre actual y borra el viejo.</span></div>';
+          'campañas de verdad distintas y nadie lo sabría. '+
+          /* HALLAZGO 5 de la revision del 3-10-2026: aqui decia «descarga de
+             nuevo el informe del periodo completo y borra el viejo». Sobre un
+             falso positivo -dos campanas duplicadas de verdad- seguir ese
+             consejo BORRA gasto real, infla el beneficio y hace escalar un
+             producto que pierde dinero. El aviso no puede llevar encima una
+             instruccion destructiva: dice que lo compruebes, no que borres. */
+          '<strong>No borres ningún informe por este aviso.</strong> '+
+          'Compruébalo en Seller Central: si las dos son la misma campaña renombrada, el nombre viejo habrá '+
+          'dejado de existir; si las dos siguen vivas, son dos campañas y aquí no hay nada contado dos veces.'+
+          '</span></div>';
       }
     }
 
@@ -1342,7 +1452,15 @@ function pubRenderPublicidad(){
     if(an){
       const tot = C.reduce((a,c)=>a+c.gasto,0), asig = C.filter(c=>c.skus.length).reduce((a,c)=>a+c.gasto,0);
       const sug = C.filter(c=>c.sugerencia).reduce((a,c)=>a+c.gasto,0);
-      an.innerHTML = 'Del gasto observado en el periodo ('+fmt(tot)+'), <strong>'+fmt(asig)+'</strong> está asignado a un grupo de productos'+
+      /* HALLAZGO 7 · si el tope corta, decirlo con el gasto que deja fuera: el
+         denominador de esta frase se calcula sobre C COMPLETO, asi que sin este
+         aviso mediria un universo que no esta en la pantalla. */
+      const cortadas = C.length - Math.min(C.length, PUB_MAX_FILAS_ASIG);
+      const gastoCortado = cortadas ? C.slice(PUB_MAX_FILAS_ASIG).reduce((a,c)=>a+c.gasto,0) : 0;
+      an.innerHTML = (cortadas ? '<strong>La tabla enseña las '+PUB_MAX_FILAS_ASIG+' filas de más gasto; '+
+        cortadas+' par'+(cortadas===1?'':'es')+' (campaña, país) con '+fmt(gastoCortado)+' no caben y no se pueden '+
+        'asignar desde aquí: ese gasto va al reparto por ingreso.</strong><br>' : '')+
+        'Del gasto observado en el periodo ('+fmt(tot)+'), <strong>'+fmt(asig)+'</strong> está asignado a un grupo de productos'+
         (sug>0 ? ' y '+fmt(sug)+' tiene una sugerencia sin confirmar, que todavía no cuenta' : '')+
         '. Escribe los prefijos de SKU que anuncia cada campaña, separados por comas («FBANS», «FBA011, FBA012»), o «*» si anuncia varias líneas. '+
         'Lo extrapolado y lo que no tiene fecha se reparte siempre por ingreso.';

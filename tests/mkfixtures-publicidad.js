@@ -104,8 +104,15 @@ function fila(f, paisForzado){
    ───────────────────────────────────────────────────────────────────────── */
 const FILAS_DOS_PAISES = [
   // termino,              campana,              d0, d1, impr, clics, ped, ventas, gasto, gastoTxt, pais
+  /* EL MISMO TERMINO EN LOS DOS PAISES, y es el punto entero de la fixture.
+     La primera version usaba un termino DISTINTO en cada pais, y asi la prueba
+     pasaba sin medir nada: `pubAdStats` agrupaba por (termino, campana) sin
+     pais, de modo que con terminos distintos los grupos no se fundian y el
+     bloque 2 parecia funcionar. Con el MISMO termino se fundian en una fila con
+     el gasto sumado y el pais de la primera, y los 70,00 alemanes se imputaban
+     al producto espanol. Lo encontro la revision adversarial del 3-10-2026. */
   ['rodillo de espuma',    'SP · Multi · exacta', 5,  5, 1000,  50, 2,  60.00, 30.00, null, 'España'],
-  ['bandas elasticas',     'SP · Multi · exacta', 5,  5, 1400,  70, 3,  90.00, 70.00, null, 'Alemania']
+  ['rodillo de espuma',    'SP · Multi · exacta', 5,  5, 1400,  70, 3,  90.00, 70.00, null, 'Alemania']
 ];
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -159,8 +166,71 @@ const FILAS_RENOM_2 = [
   ['rodillo de espuma',       'SP · Otra · amplia',13, 13, 200, 10, 0,  0.00,  5.00, null, 'España', 'AG-ROD']
 ];
 
+/* ─────────────────────────────────────────────────────────────────────────
+   LAS FIXTURES DE LA REVISION ADVERSARIAL DEL 3-10-2026
+
+   Cada hallazgo confirmado tiene la suya. Los numeros son redondos a proposito.
+
+   · HALLAZGO 1 · un TERCER informe con el nombre nuevo. Con v1 en un fichero y
+     v2 en dos, el bucle emparejaba (f1,v1)x(f2,v2) y (f1,v1)x(f3,v2): DOS
+     candidatos del MISMO renombrado, y la pantalla sumaba los dos suelos. Debe
+     salir UNO.
+   · HALLAZGO 4 · la campana renombrada, en LIBRAS. `pubAdStats` descarta las
+     filas en otra divisa antes de contar, asi que su gasto no entra en ninguna
+     cifra del hub; avisar de «100,00 €» de eso es un falso positivo del 100 %.
+     Debe salir CERO.
+   · HALLAZGO 5 · dos campanas DUPLICADAS de verdad, las dos vivas en LOS DOS
+     informes. El duplicador de Amazon copia grupos y palabras clave, asi que la
+     firma coincide al 100 % y los umbrales no las separan. Lo que las separa es
+     que un renombrado hace que el nombre viejo DEJE de aparecer. Debe salir
+     CERO.
+   ───────────────────────────────────────────────────────────────────────── */
+const FILAS_RENOM_3 = [
+  ['rodillo de espuma',       'SP · Rodillo · v2', 12, 12, 800, 40, 2, 60.00, 20.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · v2', 11, 11, 800, 40, 2, 60.00, 20.00, null, 'España', 'AG-ROD']
+];
+/* En libras. La columna Divisa la fija `filaDivisa`. */
+const FILAS_GBP_1 = [
+  ['foam roller',  'SP · UK · v1', 14, 14, 400, 20, 1, 300.00, 100.00, null, 'Reino Unido', 'AG-UK'],
+  ['muscle roller','SP · UK · v1', 13, 13, 400, 20, 1, 300.00, 100.00, null, 'Reino Unido', 'AG-UK']
+];
+const FILAS_GBP_2 = [
+  ['foam roller',  'SP · UK · v2', 13, 13, 800, 40, 2, 600.00, 200.00, null, 'Reino Unido', 'AG-UK'],
+  ['muscle roller','SP · UK · v2', 12, 12, 800, 40, 2, 600.00, 200.00, null, 'Reino Unido', 'AG-UK']
+];
+/* Los DOS nombres en LOS DOS informes: duplicado, no renombrado. */
+const FILAS_DUP_1 = [
+  ['rodillo de espuma',       'SP · Rodillo · puja alta', 14, 14, 400, 20, 1, 120.00, 40.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · puja alta', 13, 13, 400, 20, 1, 120.00, 40.00, null, 'España', 'AG-ROD'],
+  ['rodillo de espuma',       'SP · Rodillo · puja baja', 14, 14, 200, 10, 0,   0.00, 10.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · puja baja', 13, 13, 200, 10, 0,   0.00, 10.00, null, 'España', 'AG-ROD']
+];
+const FILAS_DUP_2 = [
+  ['rodillo de espuma',       'SP · Rodillo · puja alta', 13, 13, 400, 20, 1, 120.00, 40.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · puja alta', 12, 12, 400, 20, 1, 120.00, 40.00, null, 'España', 'AG-ROD'],
+  ['rodillo de espuma',       'SP · Rodillo · puja baja', 13, 13, 200, 10, 0,   0.00, 10.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · puja baja', 12, 12, 200, 10, 0,   0.00, 10.00, null, 'España', 'AG-ROD']
+];
+
+/* Igual que `fila` pero cambiando la divisa de la columna 4. */
+function filaDivisa(f, divisa){
+  const p = fila(f).split(';');
+  p[3] = divisa;
+  return p.join(';');
+}
+
 function escribir(dir){
   fs.mkdirSync(dir, {recursive:true});
+
+  const esc1 = (nom, FL, div) => {
+    const cuerpo = [CAB.join(';')].concat(FL.map(f=>div ? filaDivisa(f,div) : fila(f))).join('\r\n')+'\r\n';
+    fs.writeFileSync(path.join(dir,nom), '\ufeff'+cuerpo, 'utf8');
+  };
+  esc1('terminos-renombrada-3.csv', FILAS_RENOM_3);
+  esc1('terminos-gbp-1.csv',        FILAS_GBP_1, 'GBP');
+  esc1('terminos-gbp-2.csv',        FILAS_GBP_2, 'GBP');
+  esc1('terminos-duplicada-1.csv',  FILAS_DUP_1);
+  esc1('terminos-duplicada-2.csv',  FILAS_DUP_2);
 
   const r1 = [CAB.join(';')].concat(FILAS_RENOM_1.map(f=>fila(f))).join('\r\n')+'\r\n';
   fs.writeFileSync(path.join(dir,'terminos-renombrada-1.csv'), '\ufeff'+r1, 'utf8');

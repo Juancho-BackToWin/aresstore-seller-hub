@@ -42,7 +42,7 @@ Ejecuta de principio a fin sin preguntar. **Pégalo tal cual.**
 > sin él `build.sh` sale con código 1 y `costuras.test.js` da tres fallos que no
 > son del código (ver P-20; si puedes, deja el `SessionStart` hook que lo
 > arregle de una vez). Compila y corre `node tests/run-all.js`. Esperado:
-> **33 suites, 1.389 comprobaciones, 0 fallos** (o más, si alguien ha añadido).
+> **33 suites, 1.401 comprobaciones, 0 fallos** (o más, si alguien ha añadido).
 > Mira si las PR #18 y la de la noche del 3-oct están fusionadas; si lo están,
 > trabaja desde `main`. Enumera mi carpeta de Descargas y apunta qué informes de
 > Amazon hay **más nuevos que el 23 de agosto** (la tabla de P-21 dice cuáles
@@ -75,7 +75,20 @@ Ejecuta de principio a fin sin preguntar. **Pégalo tal cual.**
 > por país (M2). **Lo de las `FBASPB` no lo desbloquea un informe**: es P-22 y
 > necesita una factura mía. No lo adivines.
 >
-> ### Bloque 4 · Publicidad: lo que el aviso de renombradas deje a la vista
+> ### Bloque 4 · Cerrar las dos deudas de prueba del 3-oct
+> **P-23**, y es lo primero de este bloque: dos arreglos del detector de
+> renombradas —un caso por par de nombres, y duplicado contra renombrado— están
+> puestos y **sin rojo**. Hace falta una fixture en la que **cada informe gane
+> parte de la ventana común**; hoy el desempate se la lleva entera uno de los
+> dos y el candidato se descarta en el `suelo > 0` antes de llegar a esas
+> guardas. Y comprueba con `assert` que cada reemplazo del rojo entra de verdad:
+> en el 3-oct un reemplazo falló en silencio y dio un rojo falso.
+> Después, **H6**: `pubRenombradas()` es O(n²), corre entera en cada repintado y
+> recalcula `pubFilas()` y `pubCobertura()` que `pubAdStats()` acaba de calcular
+> (208–517 ms medidos con 15 informes). Y **H8**: escribir en la fila con país
+> deja el gasto «sin país» fuera de la imputación sin avisar.
+>
+> ### Bloque 5 · Publicidad: lo que el aviso de renombradas deje a la vista
 > `pubRenombradas()` avisa con el **suelo** del gasto en juego y no une los dos
 > nombres solo, a propósito. Si con los informes reales aparecen candidatos
 > ciertos, el siguiente paso es decidir **cómo** se unen sin que el hub pueda
@@ -83,12 +96,16 @@ Ejecuta de principio a fin sin preguntar. **Pégalo tal cual.**
 > escribirlo, y que la decisión de unir sea mía y quede fechada, como las
 > familias de coste.
 >
-> ### Bloque 5 · Lo que encuentres
+> ### Bloque 6 · Lo que encuentres
 > Si en cualquier bloque aparece un número creíble y falso en otra parte del
 > hub, se arregla antes de seguir, con su prueba. En la sesión del 3-oct los dos
 > que salieron fueron **de las propias pruebas**, no del código: una fixture que
 > hacía pasar una aserción por el motivo equivocado y una fecha duplicada en dos
-> sitios de la misma suite. Mira con ese ojo.
+> sitios de la misma suite. Y el revisor independiente encontró un tercero del
+> mismo tipo, **el peor**: la fixture del bloque 2 usaba un término distinto en
+> cada país, así que esquivaba el fallo que el bloque decía cerrar y lo dejaba
+> vivo. Mira con ese ojo: **el verde de una suite no prueba nada si la fixture
+> está construida del lado seguro del agujero.**
 >
 > ### Cierre
 > Revisión adversarial independiente de todo lo hecho; suites completas; PR

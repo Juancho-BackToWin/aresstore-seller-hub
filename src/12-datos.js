@@ -1236,19 +1236,85 @@ function vatFechaFila(r){
 
    Una fila sin fecha legible no se puede colocar en ningún periodo: con corte
    se queda fuera y se cuenta en `sinFecha`, para que la pantalla lo diga. */
+/* ── LA DEUDA DE IVA DE UN MES SIN PEDIDOS CARGADOS NO SE RESTA AL BENEFICIO ──
+
+   Medido el 2-10-2026 con los informes reales: el de IVA cubre mayo, junio y
+   julio de 2026; los de pedidos, agosto y septiembre de 2025 y junio y julio de
+   2026. En «Todo», el P&L restaba la deuda de MAYO contra un ingreso que no
+   tenía las ventas de mayo: la línea de IVA era la verdadera y el beneficio,
+   falso, porque comparaba un coste de tres meses con ingresos de dos.
+
+   Aquí se separan los meses que el informe de IVA trae con ventas y para los
+   que NO hay ni un pedido cargado. Su deuda no se resta al beneficio del
+   periodo —no hay con qué compararla— y la pantalla dice cuánto es y de qué
+   meses. No desaparece: sigue entera en la pantalla de IVA y en el dossier de
+   la gestoría, que no pasan por aquí.
+
+   Lo que NO hace: mirar la cobertura por día. Un mes con un solo pedido cargado
+   cuenta como cubierto. Es la granularidad con que se descargan los informes,
+   y se dice. */
+function ivaMesesSinVentas(S, pais, desde){
+  const out = {meses:[], difTuya:0, diferencia:0, ventas:0};
+  const rows = imp('vat');
+  if(!rows.length) return out;
+  /* La cobertura es la del INFORME de pedidos, no la de las ventas que se
+     miran: con el filtro de un país, que Italia no venda un mes no quiere decir
+     que falte el informe de ese mes. Por eso se leen las fechas de todos los
+     pedidos importados, sin periodo ni país. */
+  const conVentas = {};
+  /* Un pedido cancelado o pendiente, o en otra divisa, no es una venta del
+     P&L: no puede dar un mes por cubierto (lo encontró la revisión adversarial
+     del 3-10-2026: un único pedido cancelado hacía restar la deuda del mes
+     entero contra cero ingresos de ese mes). */
+  imp('orders').forEach(r=>{
+    const st = String(gv(r,'_status','itemstatus','orderstatus')||'').toLowerCase();
+    if(st.indexOf('cancel')>=0 || st.indexOf('anulad')>=0 || st==='pending' || st==='pendiente') return;
+    const cur = String(gv(r,'_cur','currency','divisa')||'').trim().toUpperCase();
+    if(cur && cur!==DIVISA_VENTAS) return;
+    const d = parseDate(gv(r,'_date','purchasedate'));
+    if(d && !isNaN(d)) conVentas[iso(d).slice(0,7)] = 1; });
+  const mesesIva = {};
+  rows.forEach(r=>{
+    const t = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
+    if(t && t.indexOf('SALE')<0) return;
+    const f = vatFechaFila(r); if(!f) return;
+    if(desde && f < startOfDay(desde)) return;
+    mesesIva[iso(f).slice(0,7)] = 1;
+  });
+  Object.keys(mesesIva).sort().forEach(m=>{
+    if(conVentas[m]) return;
+    const y = +m.slice(0,4), mo = +m.slice(5,7);
+    let ini = new Date(y, mo-1, 1), fin = new Date(y, mo, 0);
+    if(desde && ini < startOfDay(desde)) ini = startOfDay(desde);
+    const V = vatReport({desde:ini, hasta:fin, pais});
+    if(!V.ventas && !V.difTuya) return;
+    out.meses.push(m); out.difTuya += V.difTuya; out.diferencia += V.diferencia; out.ventas += V.ventas;
+  });
+  return out;
+}
+
 function vatReport(opts){
   const rows = imp('vat');
   const out = {rows:rows.length, ventas:0, base:0, vat:0, diferencia:0, ventasReducidas:0,
                difTuya:0, difDelMercado:0, sinResponsable:0,
                porPais:{}, porCodigo:{}, porPedido:{}, periodos:{}, sinJuris:0, ventasCero:0,
-               sinFecha:0, fueraDeCorte:0, cortado:!!opts, ventasB2BCero:0, baseB2BCero:0, diferenciaIvaIncluido:0};
+               sinFecha:0, fueraDeCorte:0, cortado:!!opts, ventasB2BCero:0, baseB2BCero:0, diferenciaIvaIncluido:0,
+               reembolsos:0, baseReembolsos:0, reembolsosReducidos:0, difReembolsos:0,
+               difReembolsosIncl:0, reembSinJuris:0};
   if(!rows.length) return out;
   const corte = opts || null;
   rows.forEach(r=>{
     const tipoTx = String(gv(r,'_ttype','transactiontype')||'').toUpperCase();
-    /* Solo ventas. Devoluciones y ajustes tienen su propio signo y mezclarlos
-       aquí daría un tipo medio que no es el de ninguna transacción. */
-    if(tipoTx && tipoTx.indexOf('SALE')<0) return;
+    /* Ventas y REEMBOLSOS. El resto —traslados entre almacenes (FC_TRANSFER),
+       devoluciones físicas sin importe (RETURN), facturas y abonos de Amazon a
+       ti (INVOICE, CREDIT_NOTE)— no es venta tuya a un cliente.
+
+       Los reembolsos entran desde el 2-10-2026, medido contra el informe real:
+       42 filas REFUND con base e IVA en negativo y el mismo tipo reducido de la
+       venta que anulan. Un reembolso rectifica la base de esa venta, y con ella
+       la deuda. Contando solo ventas, la deuda salía por encima de la real. */
+    const esReemb = tipoTx.indexOf('REFUND') >= 0;
+    if(tipoTx && tipoTx.indexOf('SALE')<0 && !esReemb) return;
     if(corte && (corte.desde || corte.hasta)){
       const f = vatFechaFila(r);
       if(!f){ out.sinFecha++; return; }
@@ -1275,12 +1341,19 @@ function vatReport(opts){
     if(pct > 1) pct = pct/100;
     /* Y si no viene, se calcula del propio importe, que es más fiable que
        suponer. */
-    if(!(pct>0) && base>0 && iva>0) pct = iva/base;
+    if(!(pct>0) && base!==0 && iva/base>0) pct = iva/base;
     const aplicado = pct*100;
     const general  = VAT_GENERAL[pais];
 
+    if(pais && !out.porPais[pais]) out.porPais[pais] = {ventas:0, base:0, vat:0, dif:0, tipos:{}};
+    if(esReemb){
+      /* Un reembolso no es una venta: no suma a ventas, base ni tipos. Solo
+         rectifica la deuda de abajo, y se cuenta aparte. */
+      out.reembolsos++; out.baseReembolsos += base;
+      if(!pais) out.reembSinJuris++;
+    } else {
     out.ventas++; out.base += base; out.vat += iva;
-    if(pais) { const P = out.porPais[pais] || (out.porPais[pais] = {ventas:0, base:0, vat:0, dif:0, tipos:{}});
+    if(pais) { const P = out.porPais[pais];
       P.ventas++; P.base += base; P.vat += iva;
       P.tipos[aplicado.toFixed(1)] = (P.tipos[aplicado.toFixed(1)]||0)+1; }
     else out.sinJuris++;
@@ -1300,6 +1373,7 @@ function vatReport(opts){
        mas llaman la atencion a un inspector. Antes quedaba fuera por exigir
        `aplicado > 0`. Se cuenta aparte para poder senalarla. */
     if(rateSeen && aplicado <= 0.05) out.ventasCero = (out.ventasCero||0) + 1;
+    }
     /* Una venta a tipo CERO a un comprador con NIF-IVA no es una deuda: es una
        venta entre empresas —entrega intracomunitaria exenta, o inversión del
        sujeto pasivo cuando el vendedor no está establecido en ese país— y el
@@ -1309,8 +1383,10 @@ function vatReport(opts){
        la gestoría las vea, pero no suman. */
     const nifComprador = String(gv(r,'buyervatnumber')||'').trim();
     if(rateSeen && aplicado <= 0.05 && nifComprador){
-      out.ventasB2BCero++; out.baseB2BCero += base;
-      if(pais) out.porPais[pais].b2bCero = (out.porPais[pais].b2bCero||0) + 1;
+      if(!esReemb){
+        out.ventasB2BCero++; out.baseB2BCero += base;
+        if(pais) out.porPais[pais].b2bCero = (out.porPais[pais].b2bCero||0) + 1;
+      }
       return;
     }
     if(general > 0 && (aplicado > 0 || rateSeen) && aplicado < general - 0.05){
@@ -1319,7 +1395,9 @@ function vatReport(opts){
          nominales: el importe de cada linea viene ya redondeado al centimo y
          restar tipos deja un residuo que no existe en ningun sitio. */
       const dif = base*general/100 - iva;
-      out.diferencia += dif; out.ventasReducidas++;
+      out.diferencia += dif;
+      if(esReemb){ out.reembolsosReducidos++; out.difReembolsos += dif; }
+      else out.ventasReducidas++;
       if(pais) out.porPais[pais].dif += dif;
       /* La MISMA deuda con el otro criterio que puede aplicar Hacienda: que lo
          que pagó el cliente ya incluía el IVA (TJUE C-249/12, Tulică). Entonces
@@ -1327,6 +1405,7 @@ function vatReport(opts){
          lo decide la gestoría, no el hub: se enseñan los dos. */
       const difIncl = (base+iva)*general/(100+general) - iva;
       out.diferenciaIvaIncluido += difIncl;
+      if(esReemb) out.difReembolsosIncl += difIncl;
       if(pais) out.porPais[pais].difIncl = (out.porPais[pais].difIncl||0) + difIncl;
       /* De quién es la deuda. Cuando Amazon actúa como sujeto pasivo —el
          `TAX_COLLECTION_RESPONSIBILITY` es del mercado— el que responde ante
@@ -1617,8 +1696,10 @@ function taxBasis(S){
       const pais = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
       /* «Todo» (periodDays = 0) no corta por fecha: ahí también cuentan las
          filas sin fecha legible, que en cualquier otro periodo se quedan fuera. */
-      if(!periodDays) return pais ? vatReport({pais}) : vatReport();
-      return vatReport({desde: periodStart(), hasta: today(), pais});
+      const F = !periodDays ? (pais ? vatReport({pais}) : vatReport())
+                            : vatReport({desde: periodStart(), hasta: today(), pais});
+      F.sinVentas = ivaMesesSinVentas(S, pais, periodDays ? periodStart() : null);
+      return F;
     })(),
     porSku, porPais, porMes,
     paisesDeducidos: paises,
@@ -2042,7 +2123,16 @@ function pnl(){
   /* El IVA que Amazon no repercutió y que responde tu NIF sigue siendo tuyo
      ante Hacienda: es un coste real del periodo, no una advertencia. Sin esta
      línea todos los márgenes salían optimistas en unos once puntos. */
-  const vatShortfall = (tb.fiscal||{}).difTuya || 0;
+  /* Menos la de los meses del informe de IVA sin un solo pedido cargado: ver
+     `ivaMesesSinVentas`. Se guarda aparte para poder decirlo. */
+  const vatSinVentas = ((tb.fiscal||{}).sinVentas) || {meses:[], difTuya:0};
+  /* NUNCA POR DEBAJO DE CERO. Un reembolso cae en el mes en que se hace, y su
+     venta puede ser de un mes apartado: entonces el mes cubierto se queda el
+     reembolso sin la venta y la resta salía negativa —el IVA no repercutido
+     SUBÍA el beneficio—. Si pasa, se aparta como mucho lo que hay, y se dice. */
+  const vatTotal = (tb.fiscal||{}).difTuya || 0;
+  let vatShortfall = vatTotal - (vatSinVentas.difTuya || 0);
+  if(vatShortfall < 0 && vatTotal >= 0){ vatSinVentas.recortado = true; vatShortfall = 0; }
   const profit = net - referral - fba - ship - storage - otherFee - cogs - ppc - fixed + reimb - returnsCost - vatShortfall;
   /* Publicidad e IVA no repercutido SE REPARTEN, y la pantalla tiene que
      decirlo. No se pueden medir por SKU con los informes de hoy: el de PPC no
@@ -2050,7 +2140,42 @@ function pnl(){
      Repartirlos por ingreso declarando que es un reparto es honesto; dejarlos
      fuera del desglose —que era lo que había— no lo era, porque hacía que la
      tabla enseñara beneficios que el negocio no tiene. */
-  reparte(ppc,          'ppc', b=>b.revenue);
+  /* Publicidad: primero lo que tiene destino confirmado (Publicidad › Campañas
+     → producto), a los SKUs de su grupo por su ingreso; el resto, por ingreso
+     entre todos. Ver `pubPpcPorCampana` en src/24-publicidad.js. La suma no
+     cambia: solo cambia quién la lleva. */
+  let ppcImputado = 0, ppcSinDestino = 0;
+  if(ppc>0 && typeof pubPpcPorCampana==='function' && ads.spend>0){
+    let C = []; try{ C = pubPpcPorCampana(); }catch(e){ C = []; }
+    /* LA PARTE IMPUTADA SIGUE LA MISMA PROPORCIÓN QUE LO OBSERVADO.
+       `ppc` incluye lo extrapolado a los días sin informe y las filas sin
+       término; las campañas solo traen lo observado. Si solo se imputara lo
+       observado, la mitad del gasto de un informe de medio periodo volvería a
+       caer en SKUs que no se anuncian (revisión del 3-10-2026). Así que cada
+       campaña se lleva su CUOTA del gasto total: gasto observado × ppc ÷
+       observado total. La suma de cuotas es `ppc` exacto, nunca más; y un
+       abono negativo sin término reduce todas las cuotas por igual en vez de
+       hacer saltar una campaña entera. */
+    const obsTot = C.reduce((a,c)=>a+c.gasto,0);
+    const f = obsTot>0 ? ppc/obsTot : 0;
+    const cf = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
+    const porSkuMin = {}; Object.keys(SK).forEach(k=>porSkuMin[k.toLowerCase()] = k);
+    C.forEach(c=>{
+      if(!c.skus.length || !(f>0)) return;
+      /* Con filtro de país, solo lo que la campaña gastó EN ese país. */
+      const g = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f;
+      if(!(g>0)) return;
+      const ks = c.skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
+      const T = ks.reduce((a,k)=>a+SK[k].revenue,0);
+      if(!ks.length || !(T>0)){ ppcSinDestino += g; return; }
+      let acc = 0, mayor = ks[0];
+      ks.forEach(k=>{ const v = g*(SK[k].revenue/T); SK[k].ppc += v; acc += v;
+        if(SK[k].revenue > SK[mayor].revenue) mayor = k; });
+      SK[mayor].ppc += g - acc;
+      ppcImputado += g;
+    });
+  }
+  reparte(ppc - ppcImputado, 'ppc', b=>b.revenue);
   reparte(vatShortfall, 'vat', b=>b.revenue);
   /* Lo que ningún SKU puede llevarse. Se declara; no se esconde. */
   const noImputable = reimb - fixed;
@@ -2062,11 +2187,12 @@ function pnl(){
     bySkuBreak[k] = b; });
   return {
     bySku: bySkuBreak, noImputable, noImputableDetalle: {reimb, fixed},
-    repartidos: {ppc: ppc!==0, vat: vatShortfall!==0,
+    ppcImputado, ppcSinDestino,
+    repartidos: {ppc: (ppc - ppcImputado)!==0, vat: vatShortfall!==0,
                  storage: storage!==0, otherFee: otherFee!==0},
     grossInc, tax, net, units, cogs, cogsKnown, referral, fba, ship, fbmUnits, fbaUnits, storage, otherFee, ppc, fixed, reimb, profit,
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
-    vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall,
+    vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall, vatSinVentas,
     vatVentasReducidas: (tb.fiscal||{}).ventasReducidas||0,
     ppcSource, adSpanUnknown: ads.spanUnknown,
     refMedido, fbaMedido,

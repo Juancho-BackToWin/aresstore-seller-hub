@@ -166,7 +166,88 @@ const EPR_ESQUEMAS = {
    Nota de diseño: `declarado` exige NÚMERO de registro, no una casilla. Una
    casilla se marca sin salir de la pantalla; un número hay que ir a buscarlo.
    Esa es toda la diferencia entre un recordatorio y un registro de evidencia. */
-function cumplEstadoPais(code){
+/* ── EL CRUCE CON EL INFORME DE EPR DE AMAZON ─────────────────────────────────
+
+   Hasta aquí, «declarado» era tu palabra y nada más. Pero hay una fuente que SÍ
+   se puede mirar sin consultar ningún registro oficial: el informe de EPR de
+   Amazon trae, fila a fila, el número de registro que Amazon tiene de ti en ese
+   país. Medido en el informe real de abril-junio de 2026: vacío en los cuatro
+   países con ventas. Si Amazon no tiene el número, da igual que tú lo tengas
+   apuntado en esta pantalla: es Amazon quien bloquea el listado.
+
+   Lo que el cruce dice, y lo que no:
+   · coincide      · Amazon tiene el mismo número que anotaste. Sigue sin ser una
+                     comprobación contra LUCID o el RPP; es que los dos papeles
+                     dicen lo mismo.
+   · amazon-no     · el informe trae filas de envase de ese país y ninguna con
+                     número. Estés o no registrado, Amazon no lo sabe.
+   · distinto      · Amazon tiene un número y no es el que anotaste.
+   · mixto         · unas filas con número y otras sin él.
+   · solo-amazon   · Amazon tiene un número que tú no has anotado aquí.
+   · sin-informe / sin-filas · no hay con qué cruzar: no se afirma nada.
+   La comparación ignora espacios, guiones, puntos y mayúsculas: «DE 1234-56» y
+   «de123456» son el mismo número escrito de dos formas, y llamarlos distintos
+   sería otra alarma falsa. */
+function eprNormNum(s){ return String(s||'').toUpperCase().replace(/[\s\-_.\/]/g,''); }
+function cumplCruceEpr(code, epr, eprNum){
+  if(!epr) epr = eprPorPais();
+  if(!epr.filas) return {tipo:'sin-informe'};
+  const P = epr.paises[code];
+  if(!P || !P.filasEnvase){
+    const otrasSinNum = P ? Object.keys(P.otras).filter(n=>P.otras[n].vacias===P.otras[n].filas) : [];
+    return {tipo:'sin-filas', unidades: P ? P.unidades : 0, otrasSinNum, otras: P ? cumplCruceOtras(code, P) : []};
+  }
+  const regs = Object.keys(P.regEnvase);
+  const tuyo = eprNormNum(eprNum);
+  const otrasSinNum = Object.keys(P.otras).filter(n=>P.otras[n].vacias===P.otras[n].filas);
+  const otras = cumplCruceOtras(code, P);
+  const base = {regs, unidades:P.unidades, filas:P.filasEnvase, vacias:P.vaciasEnvase, otrasSinNum, otras,
+                periodo: epr.periodo};
+  if(!regs.length) return Object.assign(base, {tipo:'amazon-no'});
+  if(!tuyo) return Object.assign(base, {tipo:'solo-amazon'});
+  if(!regs.some(r=>eprNormNum(r)===tuyo)) return Object.assign(base, {tipo:'distinto'});
+  if(P.vaciasEnvase || regs.length>1) return Object.assign(base, {tipo:'mixto'});
+  return Object.assign(base, {tipo:'coincide'});
+}
+/* PAPEL IMPRESO, TEXTIL… CADA UNO CON SU NÚMERO.
+   Francia tiene tres obligaciones EPR distintas en el informe real —envases,
+   papel impreso y textil—, cada una con su registro y su eco-organismo. Con un
+   solo campo por país no había dónde anotar las otras dos, y la pantalla no
+   podía distinguir «no lo tienes» de «lo tienes y Amazon no». Se anotan en
+   `DB.compliance[pais].eprOtras[categoría]` y se cruzan igual que el de envases. */
+function cumplCruceOtras(code, P){
+  const anot = (((typeof DB==='object' && DB && DB.compliance) ? DB.compliance[code] : null) || {}).eprOtras || {};
+  return Object.keys(P.otras).sort().map(nombre=>{
+    const O = P.otras[nombre];
+    const regs = Object.keys(O.registros||{});
+    const tuyo = eprNormNum(anot[nombre]);
+    let tipo;
+    if(!regs.length) tipo = 'amazon-no';
+    else if(!tuyo) tipo = 'solo-amazon';
+    else if(!regs.some(r=>eprNormNum(r)===tuyo)) tipo = 'distinto';
+    else if(O.vacias) tipo = 'mixto';
+    else tipo = 'coincide';
+    return {nombre, regs, anotado: String(anot[nombre]||'').trim(), tipo, filas:O.filas, vacias:O.vacias};
+  });
+}
+function setCompOtra(code, nombre, v){
+  if(!DB.compliance[code]) DB.compliance[code] = {};
+  const o = DB.compliance[code].eprOtras || (DB.compliance[code].eprOtras = {});
+  const t = String(v==null?'':v).trim();
+  if(t) o[nombre] = t; else delete o[nombre];
+  saveDB(); renderComp(); try{ renderPanel(); }catch(e){}
+}
+const EPR_CRUCE_TXT = {
+  'coincide'   :'Amazon tiene el mismo número',
+  'amazon-no'  :'Amazon NO tiene tu número',
+  'distinto'   :'Amazon tiene OTRO número',
+  'mixto'      :'Amazon lo tiene solo en parte',
+  'solo-amazon':'Amazon tiene un número que no has anotado',
+  'sin-filas'  :'el informe no trae envases de aquí',
+  'sin-informe':'sin informe con que cruzar'
+};
+
+function cumplEstadoPais(code, epr){
   const c = COUNTRIES.filter(x=>x.code===code)[0];
   if(!c) return null;
   const x = (typeof DB==='object' && DB && DB.compliance && DB.compliance[code]) || {};
@@ -175,31 +256,65 @@ function cumplEstadoPais(code){
   /* Por qué hay obligación. Dos motivos independientes y hay que separarlos:
      vender allí (EPR: pones envase en ese mercado) y almacenar allí (IVA: el
      stock crea hecho imponible local aunque no vendas ni una unidad). */
-  const vende  = !!x.active;
-  const guarda = !!(c.storage && x.active);
-  const obligado = vende || guarda;
-
+  /* Vender allí lo dices tú (la casilla de mercado activo) O LO DICE AMAZON:
+     si el informe de EPR trae unidades vendidas en un país que no tienes
+     marcado, el hub no puede decir «no activo · no afirma nada». Medido: el
+     informe real trae Alemania con ventas. */
   const eprNum = String(x.eprNum||'').trim();
   const vatNum = String(x.vatNum||'').trim();
+  let cruce = {tipo:'sin-informe'};
+  try{ cruce = cumplCruceEpr(code, epr, eprNum); }catch(e){}
+  const vendeSegunAmazon = (cruce.unidades||0) > 0;
+  const vende  = !!x.active || vendeSegunAmazon;
+  const guarda = !!(c.storage && x.active);
+  const obligado = vende || guarda;
   const faltaEpr = !eprNum;
   /* El NIF-IVA local solo se exige donde hay almacén. Donde se sirve por EFN
      transfronterizo, el OSS basta y pedirlo sería inventar una obligación. */
-  const faltaVat = c.storage && !vatNum;
+  /* `guarda`, no `c.storage`: que un país sea de almacén PanEU no dice que TÚ
+     guardes stock allí. Antes daba igual porque solo había obligación con la
+     casilla marcada; ahora un país puede estar obligado porque Amazon dice que
+     vendiste allí, y afirmar «aquí guardas stock» sería inventárselo. */
+  const faltaVat = guarda && !vatNum;
+
+  /* Lo que el cruce no deja llamar «declarado»: que Amazon no tenga tu número,
+     que tenga otro, o que lo tenga a medias. Y las obligaciones de papel o
+     textil que el informe trae sin ningún número. */
+  const cruceMalo = ['amazon-no','distinto','mixto'].indexOf(cruce.tipo)>=0;
+  const otrasSinNum = (cruce.otras||[]).filter(o=>o.tipo!=='coincide').map(o=>o.nombre);
 
   let estado = 'inactivo';
   if(obligado){
     if(faltaEpr) estado = 'riesgo';
-    else if(faltaVat) estado = 'parcial';
+    else if(faltaVat || cruceMalo || otrasSinNum.length) estado = 'parcial';
     else estado = 'declarado';
   }
 
   const pendientes = [];
+  if(vendeSegunAmazon && !x.active)
+    pendientes.push('el informe de EPR de Amazon trae '+cruce.unidades+' unidad'+(cruce.unidades===1?'':'es')+
+                    ' vendida'+(cruce.unidades===1?'':'s')+' aquí y no lo tienes marcado como mercado');
   if(obligado && faltaEpr) pendientes.push('sin número de registro EPR anotado');
+  if(cruce.tipo==='amazon-no') pendientes.push('Amazon no tiene tu número de envases en este país: vacío en '+
+                    (cruce.filas===1?'la única fila':'las '+cruce.filas+' filas')+' del informe de EPR');
+  if(cruce.tipo==='distinto') pendientes.push('Amazon tiene '+cruce.regs.join(', ')+', que no es el número que has anotado');
+  if(cruce.tipo==='mixto') pendientes.push('Amazon tiene el número solo en parte: '+cruce.vacias+' de '+cruce.filas+
+                    ' filas sin él'+(cruce.regs.length>1?', y con '+cruce.regs.length+' números distintos':''));
+  if(cruce.tipo==='solo-amazon') pendientes.push('Amazon tiene el número '+cruce.regs.join(', ')+' y aquí no está anotado');
+  (cruce.otras||[]).forEach(o=>{
+    if(o.tipo==='coincide') return;
+    const que = o.nombre+' (otra obligación EPR, con su propio registro)';
+    if(o.tipo==='amazon-no') pendientes.push(que+': ninguna fila del informe lleva número'+
+      (o.anotado ? ', aunque tú tienes anotado '+o.anotado+': Amazon no lo tiene' : ', y tampoco lo tienes anotado'));
+    else if(o.tipo==='solo-amazon') pendientes.push(que+': Amazon tiene '+o.regs.join(', ')+' y aquí no está anotado');
+    else if(o.tipo==='distinto') pendientes.push(que+': Amazon tiene '+o.regs.join(', ')+', que no es el que has anotado');
+    else if(o.tipo==='mixto') pendientes.push(que+': Amazon lo tiene solo en parte');
+  });
   if(obligado && faltaVat) pendientes.push('sin NIF-IVA local anotado, y aquí guardas stock');
   if(obligado && esq.estado!=='ok') pendientes.push('el hub no ha verificado qué registro aplica en este país');
 
   return {code, pais:c, conf:x, esquema:esq, estado, obligado, vende, guarda,
-          eprNum, vatNum, pendientes,
+          eprNum, vatNum, pendientes, cruce, vendeSegunAmazon,
           reglaVerificada: esq.estado==='ok',
           /* Lo que la pantalla puede decir, en una frase, y nunca «cumples». */
           etiqueta: {
@@ -212,7 +327,8 @@ function cumplEstadoPais(code){
 
 /* Todos los países, en el orden de COUNTRIES. */
 function cumplEstados(){
-  return COUNTRIES.map(c=>cumplEstadoPais(c.code)).filter(Boolean);
+  let epr = null; try{ epr = eprPorPais(); }catch(e){}
+  return COUNTRIES.map(c=>cumplEstadoPais(c.code, epr)).filter(Boolean);
 }
 
 /* ── Lo que este carril NO puede arreglar desde aquí ────────────────────────
@@ -353,7 +469,8 @@ function eprPorPais(){
     if(p0 && !out.periodo) out.periodo = p0;
     if(!code){ out.sinPais++; return; }
     const P = out.paises[code] || (out.paises[code] =
-      {code, filas:0, unidades:0, kilos:0, materiales:{}, registros:{}, vacias:0, otras:{}});
+      {code, filas:0, unidades:0, kilos:0, materiales:{}, registros:{}, vacias:0, otras:{},
+       regEnvase:{}, vaciasEnvase:0, filasEnvase:0});
     P.filas++;
     /* (1) una venta por ASIN y país, aunque salga en varias categorías */
     const asin = String(gv(r,'_asin','asin')||'').trim().toUpperCase();
@@ -378,13 +495,20 @@ function eprPorPais(){
          declare. Nunca las dos cosas a la vez. */
       if(!hay) kg = toNum(gv(r,'_kg','totalreportedweightkg'));
       P.kilos += kg;
+      /* El número de registro de ENVASES va aparte de los de papel o textil:
+         es el que se cruza con el que anotas en esta pantalla. */
+      P.filasEnvase++;
+      const rEnv = String(gv(r,'_reg','registrationnumber')||'').trim();
+      if(rEnv) P.regEnvase[rEnv] = (P.regEnvase[rEnv]||0)+1; else P.vaciasEnvase++;
     }else{
       /* (3) papel impreso, textil…: otra obligación, contada aparte */
       const nom = eprNombreCategoria(cat);
       const O = P.otras[nom] || (P.otras[nom] = {filas:0, kilos:0, vacias:0});
       O.filas++;
       O.kilos += toNum(gv(r,'_kg','totalreportedweightkg'));
-      if(!String(gv(r,'_reg','registrationnumber')||'').trim()) O.vacias++;
+      const rO = String(gv(r,'_reg','registrationnumber')||'').trim();
+      if(!rO) O.vacias++;
+      else { O.registros = O.registros || {}; O.registros[rO] = 1; }
     }
     const reg = String(gv(r,'_reg','registrationnumber')||'').trim();
     if(reg) P.registros[reg] = (P.registros[reg]||0)+1; else P.vacias++;
@@ -465,6 +589,9 @@ function exportarDossierGestoria(){
   filas.push([]);
   filas.push(['AVISO', CUMPL_AVISO]);
   filas.push(['Origen', 'vatReport() sobre el informe de IVA importado · '+D.vat.rows+' filas leídas']);
+  if(D.vat.reembolsos) filas.push(['Reembolsos', D.vat.reembolsos+' filas REFUND · '+D.vat.reembolsosReducidos+
+    ' a tipo reducido, que restan '+r2(-D.vat.difReembolsos)+' de la diferencia (o '+r2(-D.vat.difReembolsosIncl)+
+    ' con el criterio de precio con IVA incluido). Ya descontados en las cifras por país.']);
   filas.push(['Generado', typeof iso==='function' ? iso(today()) : '']);
   if(typeof descargarCSV==='function') descargarCSV('dossier-gestoria', cab, filas);
   return {filas:filas.length, paises:D.filas.length};
@@ -594,7 +721,8 @@ function cumplPintarEstados(){
     const codes = Object.keys(epr.paises).sort();
     h += '<div class="tbl-wrap"><table class="grid" id="cumplEprTabla">'+
       '<tr><th>País</th><th class="num">Filas</th><th class="num">Unidades</th>'+
-      '<th class="num">Kg de envase</th><th>Otras obligaciones EPR</th><th>Nº de registro en el informe</th></tr>';
+      '<th class="num">Kg de envase</th><th>Otras obligaciones EPR</th><th>Nº de registro en el informe</th>'+
+      '<th>Contra lo que has anotado</th></tr>';
     codes.forEach(k=>{
       const P = epr.paises[k];
       const regs = Object.keys(P.registros);
@@ -611,9 +739,18 @@ function cumplPintarEstados(){
         '<td class="num">'+num(P.kilos,3)+' kg</td>'+
         '<td>'+(Object.keys(P.otras).length
           ? Object.keys(P.otras).sort().map(n=>{ const O=P.otras[n];
+              const anot = (((DB.compliance||{})[k]||{}).eprOtras||{})[n] || '';
               return esc(n)+(O.kilos?' · '+num(O.kilos,3)+' kg':'')+
-                (O.vacias===O.filas?' <span class="cumpl-badge cumpl-riesgo">sin nº</span>':''); }).join('<br>')
-          : '—')+'</td><td>'+celda+'</td></tr>';
+                (O.vacias===O.filas?' <span class="cumpl-badge cumpl-riesgo">sin nº en Amazon</span>':'')+
+                '<br><input type="text" style="width:140px;font-size:11px" placeholder="tu nº de '+esc(n)+'" '+
+                'data-otra="'+esc(k+'|'+n)+'" value="'+esc(anot)+'" '+
+                'onchange="setCompOtra(\''+k+'\',this.getAttribute(\'data-otra\').split(\'|\').slice(1).join(\'|\'),this.value)">'; }).join('<br>')
+          : '—')+'</td><td>'+celda+'</td>'+
+        '<td>'+(function(){ const anot = ((DB.compliance||{})[k]||{}).eprNum;
+          const X = cumplCruceEpr(k, epr, anot);
+          const cls = X.tipo==='coincide' ? 'cumpl-declarado' : (['amazon-no','distinto'].indexOf(X.tipo)>=0 ? 'cumpl-riesgo' : 'cumpl-parcial');
+          return '<span class="cumpl-badge '+cls+'" data-cruce="'+esc(X.tipo)+'">'+esc(EPR_CRUCE_TXT[X.tipo]||X.tipo)+'</span>'+
+            (anot ? '<br><span class="mut" style="font-size:11px">anotado: '+esc(anot)+'</span>' : ''); })()+'</td></tr>';
     });
     h += '</table></div>';
     if(epr.sinPais)

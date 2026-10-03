@@ -47,6 +47,7 @@
 const PUB_MIN_CLICS   = 10;   // clics mínimos para que una conversión observada signifique algo
 const PUB_HORAS_REGLA = 72;   // la regla de las 72 horas entre cambios de puja
 const PUB_DIAS_RUIDO  = 3;    // los últimos tres días siguen moviéndose (atribución)
+const PUB_MUESTRA_RITMO = 7;  // días con informe, como mínimo, para sacar el ritmo de los días sin informe (una semana)
 
 /* ── Fechas · COSTURA → carril 6 ──────────────────────────────────────────────
    `parseDate()` está en el carril 6 y no se toca. Lo que hace falta aquí es
@@ -155,9 +156,97 @@ function pubFilas(){
       orders: pubNum(gv(r,'_orders','orders','attributedconversions7d','totalorders','purchases')),
       clicks: pubNum(gv(r,'_clicks','clicks','clics')),
       impr:   pubNum(gv(r,'_impr','impressions','impresiones')),
-      desde, hasta, dias
+      desde, hasta, dias,
+      /* De qué fichero viene. Una fila idéntica en dos ficheros lleva los dos
+         (`__fs` = «f1,f3»); para decidir solapes vale cualquiera de ellos. */
+      ficheros: String(r.__fs||'').split(',').filter(Boolean)
     };
   });
+}
+
+/* ── VARIOS INFORMES QUE CUBREN LOS MISMOS DÍAS ───────────────────────────────
+
+   EL FALLO QUE EVITA, medido sobre los informes reales de Juancho: tiene quince
+   informes de términos de búsqueda descargados y se solapan entre sí. El de
+   julio de 2025 y el llamado «septiembre» cubren a la vez del 6 al 23 de julio
+   en España; dos de los de Italia son casi el mismo periodo descargado dos
+   veces. El importador deduplica filas IDÉNTICAS, pero dos informes de periodos
+   distintos agregan los días de otra manera —una fila de 14 días en uno, catorce
+   filas de un día en el otro— y no hay dos filas iguales que quitar. Sumarlos
+   todos contaría el gasto de esos días dos veces, con el semáforo en verde.
+
+   LA REGLA. Para cada campaña y cada día, manda UN solo informe: entre los que
+   cubren ese día y traen esa campaña, el que llega más lejos (el descargado
+   después, con la atribución de 7 días ya asentada); si empatan, el de más
+   filas, que es el más fino. Las filas de los demás informes no cuentan para
+   ese día. Un informe cubre del primer al último día que trae, y «trae una
+   campaña» si tiene alguna fila de ella.
+
+   LO QUE NO HACE, dicho: no reparte un día entre dos informes ni promedia. Si
+   los dos informes dicen cifras distintas para el mismo día, gana uno y la
+   pantalla dice cuánto gasto ha quedado fuera por solape. */
+function pubCobertura(filas){
+  const cob = {};
+  filas.forEach(f=>{
+    /* Una fila sin fichero de origen (una base guardada antes de que el
+       importador lo anotara) no se puede decir que pise a otro informe: ni
+       crea cobertura ni se le quita ningún día. */
+    if(!f.desde || !f.ficheros.length) return;
+    f.ficheros.forEach(fid=>{
+      const c = cob[fid] || (cob[fid] = {fid, ini:f.desde, fin:f.hasta, filas:0, sumDias:0, camp:{}, campPais:{}});
+      if(f.desde<c.ini) c.ini=f.desde;
+      if(f.hasta>c.fin) c.fin=f.hasta;
+      c.filas++;
+      const kc = fold(f.campaign);
+      c.camp[kc] = 1;
+      if(f.country) c.campPais[kc+'|'+pubPais(f.country)] = 1;
+      c.sumDias = (c.sumDias||0) + f.dias;
+    });
+  });
+  return cob;
+}
+/* ¿El informe `c` trae la campaña de esta fila? Si los dos dicen país, tiene
+   que coincidir: una campaña con el mismo nombre en Francia y en Italia son dos
+   campañas. Si alguno no trae país (los informes viejos no lo traían), basta el
+   nombre. */
+/* El país de una fila, como código. Un informe escribe «España», otro «Spain» y
+   otro «ES»: comparados en crudo eran tres países y la misma campaña contaba dos
+   veces (lo encontró la revisión adversarial del 3-10-2026). */
+/* `countryOf()` entiende los nombres en inglés y los códigos, pero no los
+   nombres en español con que el informe de publicidad en español escribe el
+   país («España», «Alemania», «Países Bajos»). Se resuelven aquí primero. */
+const PUB_PAISES_ES = {'espana':'ES','alemania':'DE','francia':'FR','italia':'IT','paises bajos':'NL',
+  'belgica':'BE','polonia':'PL','suecia':'SE','reino unido':'GB','irlanda':'IE','austria':'AT',
+  'portugal':'PT','republica checa':'CZ','chequia':'CZ','turquia':'TR','eslovaquia':'SK'};
+function pubPais(v){
+  if(!v) return '';
+  const f = fold(String(v)).replace(/\s+/g,' ').trim();
+  if(PUB_PAISES_ES[f]) return PUB_PAISES_ES[f];
+  let c = null; try{ c = countryOf(v); }catch(e){}
+  return c || f;
+}
+function pubTraeCampana(c, kc, kp){
+  if(!c.camp[kc]) return false;
+  const conPais = Object.keys(c.campPais).some(k=>k.indexOf(kc+'|')===0);
+  if(kp && conPais) return !!c.campPais[kc+'|'+kp];
+  return true;
+}
+function pubDuenoDia(cob, kc, kp, dia, cache){
+  const k = kc+'|'+kp+'|'+dia.getTime();
+  if(k in cache) return cache[k];
+  let mejor = null;
+  for(const fid in cob){
+    const c = cob[fid];
+    if(dia<c.ini || dia>c.fin || !pubTraeCampana(c, kc, kp)) continue;
+    /* Desempates, en orden: llega más lejos; es más fino (filas de menos días
+       de media: un informe diario gana a uno de resumen aunque tenga menos
+       filas); tiene más filas; se cargó después (número de fichero, como
+       número: «f10» va después de «f9»). */
+    const fino = x=>x.sumDias/x.filas, nf = x=>+String(x.fid).replace(/\D/g,'')||0;
+    if(!mejor || c.fin>mejor.fin || (+c.fin===+mejor.fin && (fino(c)<fino(mejor) ||
+       (fino(c)===fino(mejor) && (c.filas>mejor.filas || (c.filas===mejor.filas && nf(c)>nf(mejor))))))) mejor = c;
+  }
+  return (cache[k] = mejor ? mejor.fid : null);
 }
 
 /* ── Gasto y desperdicio publicitario, fila a fila y día a día ─────────────────
@@ -198,6 +287,12 @@ function pubAdStats(){
   const otrasDivisas = {};
   const cubierto = {};                 // días del periodo que el informe toca de verdad
   const grupos = {};
+  const cob = pubCobertura(filas.filter(f=>!(f.divisa && f.divisa!==DIVISA_VENTAS)));
+  const nFicheros = Object.keys(cob).length;
+  const cacheDueno = {};
+  let gastoSolape=0, ventasSolape=0, filasSolape=0;
+  const diasSolape = {};               // días de calendario en que dos informes se pisan
+  const gastoDia = {}, ventasDia = {}; // con varios informes: lo que cuenta cada día, ya sin solapes
 
   filas.forEach(f=>{
     /* UNA LIBRA NO ES UN EURO, Y SUMARLAS ES UN ACOS FALSO HACIA ARRIBA.
@@ -212,9 +307,36 @@ function pubAdStats(){
       otrasDivisas[f.divisa] = (otrasDivisas[f.divisa]||0)+1;
       return;
     }
-    spendBruto += f.spend; salesBruto += f.sales;
-    clicksInforme += f.clicks; imprInforme += f.impr;
-    if(f.dias>1){ filasAgregadas++; gastoAgregado += f.spend; if(f.dias>maxDias) maxDias=f.dias; }
+    /* Qué días de esta fila le tocan a su informe. Con un solo informe, todos;
+       con varios que se pisan, solo aquellos en que este informe es el que
+       manda para esta campaña (ver `pubCobertura`). */
+    let propios = f.dias, diasPropios = null;
+    if(f.desde && nFicheros>1 && f.ficheros.length){
+      const kc = fold(f.campaign), kp = pubPais(f.country);
+      const mios = f.ficheros;
+      diasPropios = [];
+      for(let k=0;k<f.dias;k++){
+        const dia = addDays(f.desde, k);
+        const dueno = pubDuenoDia(cob, kc, kp, dia, cacheDueno);
+        if(dueno===null || mios.indexOf(dueno)>=0){
+          diasPropios.push(dia);
+          const kd = iso(dia);
+          gastoDia[kd] = (gastoDia[kd]||0) + f.spend/f.dias;
+          ventasDia[kd] = (ventasDia[kd]||0) + f.sales/f.dias;
+        }
+        else diasSolape[iso(dia)] = 1;
+      }
+      propios = diasPropios.length;
+      if(propios<f.dias){
+        filasSolape++;
+        gastoSolape += f.spend*(f.dias-propios)/f.dias;
+        ventasSolape += f.sales*(f.dias-propios)/f.dias;
+      }
+    }
+    const fBruto = f.desde ? propios/f.dias : 1;
+    spendBruto += f.spend*fBruto; salesBruto += f.sales*fBruto;
+    clicksInforme += f.clicks*fBruto; imprInforme += f.impr*fBruto;
+    if(f.dias>1 && propios>0){ filasAgregadas++; gastoAgregado += f.spend*fBruto; if(f.dias>maxDias) maxDias=f.dias; }
     if(f.desde && (!d0 || f.desde<d0)) d0=f.desde;
     if(f.hasta && (!d1 || f.hasta>d1)) d1=f.hasta;
 
@@ -225,12 +347,16 @@ function pubAdStats(){
       imprSinFecha+=f.impr; ordersSinFecha+=f.orders;
       factor = 1;
     } else {
-      dentro = pubSolape(f.desde, f.hasta, V.ini, V.fin);
+      if(diasPropios===null){
+        dentro = pubSolape(f.desde, f.hasta, V.ini, V.fin);
+        for(let k=0;k<dentro;k++) cubierto[iso(addDays(f.desde>V.ini?f.desde:V.ini, k))] = 1;
+      } else {
+        diasPropios.forEach(dia=>{ if(dia>=V.ini && dia<=V.fin){ dentro++; cubierto[iso(dia)] = 1; } });
+      }
       factor = dentro / f.dias;
       spendObs += f.spend*factor; salesObs += f.sales*factor;
       clicksObs += f.clicks*factor; imprObs += f.impr*factor; ordersObs += f.orders*factor;
       if(f.dias>1 && dentro>0) gastoProrrateado += f.spend*factor;
-      for(let k=0;k<dentro;k++) cubierto[iso(addDays(f.desde>V.ini?f.desde:V.ini, k))] = 1;
     }
 
     if(!f.term) return;
@@ -245,8 +371,8 @@ function pubAdStats(){
     g.orders += f.orders*factor; g.clicks += f.clicks*factor; g.impr += f.impr*factor;
     /* Las mismas cifras SIN recortar. Solo se usan si el informe entero no toca
        el periodo: ver `fueraDePeriodo`, más abajo. */
-    g.spendTot += f.spend; g.salesTot += f.sales;
-    g.ordersTot += f.orders; g.clicksTot += f.clicks; g.imprTot += f.impr;
+    g.spendTot += f.spend*fBruto; g.salesTot += f.sales*fBruto;
+    g.ordersTot += f.orders*fBruto; g.clicksTot += f.clicks*fBruto; g.imprTot += f.impr*fBruto;
     if(!f.desde) g.sinFecha++;
     else {
       if(!g.desde || f.desde<g.desde) g.desde=f.desde;
@@ -257,10 +383,65 @@ function pubAdStats(){
   });
 
   const diasMedidos = Object.keys(cubierto).length;
-  const adDays = (d0&&d1) ? Math.max(1, daysBetween(d0,d1)+1) : 0;
-  /* Ritmo diario del informe, para los días del periodo que no cubre. */
-  const ritmoGasto  = adDays ? (spendBruto-spendSinFecha)/adDays : 0;
-  const ritmoVentas = adDays ? (salesBruto-salesSinFecha)/adDays : 0;
+  /* Días que cubren LOS INFORMES, no días entre el primero y el último. Con un
+     informe de mayo de 2025 y otro de agosto de 2026, contar de punta a punta
+     metería catorce meses sin informe en el divisor y el ritmo diario saldría
+     a una fracción del real: la extrapolación de los días sin informe se
+     quedaría corta y el beneficio, optimista. Con un solo informe es lo mismo
+     que antes. */
+  let adDays = 0, diasTramo = 0, gastoTramo = 0, ventasTramo = 0, tramoIni = null, tramoFin = null;
+  if(d0&&d1){
+    if(nFicheros<=1){
+      adDays = diasTramo = Math.max(1, daysBetween(d0,d1)+1);
+      gastoTramo = spendBruto-spendSinFecha; ventasTramo = salesBruto-salesSinFecha;
+      tramoIni = d0; tramoFin = d1;
+    } else {
+      const dias = {};
+      for(const fid in cob){ const c=cob[fid];
+        for(let k=0, n=daysBetween(c.ini,c.fin)+1; k<n; k++) dias[iso(addDays(c.ini,k))]=1; }
+      adDays = Math.max(1, Object.keys(dias).length);
+      /* EL RITMO SALE DEL ÚLTIMO TRAMO CONTINUO CON INFORME, no de todo el
+         histórico. Medido con los quince informes reales: la media de todo el
+         histórico daba 19,67 €/día —el ritmo del último trimestre de 2025— y
+         «30 días» imputaba 590 € a un septiembre de 2026 sin un solo informe,
+         cuando el último informe, el de agosto, gastaba 7,67 €/día. Para
+         rellenar días que nadie ha medido, lo menos malo es lo más reciente.
+         Con un solo informe, el tramo es el informe entero: lo de siempre. */
+      /* Y CON UNA MUESTRA MÍNIMA. La revisión adversarial lo encontró: si el
+         último tramo es de un día —un pico de Prime Day descargado aparte—,
+         su ritmo se estiraba a cientos de días. El tramo se alarga hacia atrás,
+         saltando los huecos, hasta tener al menos `PUB_MUESTRA_RITMO` días
+         con informe (o todos los que haya). */
+      let k = d1; tramoFin = d1;
+      while(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
+        ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; k = addDays(k,-1); }
+      const objetivo = Math.min(PUB_MUESTRA_RITMO, adDays);
+      while(diasTramo < objetivo && k >= d0){
+        if(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
+          ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; }
+        k = addDays(k,-1);
+      }
+    }
+  }
+  /* CAMPAÑAS QUE NO SALEN EN EL INFORME MÁS RECIENTE. La cobertura de un día
+     es la de los informes que lo tocan, y un informe que no trae una campaña
+     deja esa campaña a cero esos días, dados por medidos. Si la campaña dejó
+     de gastar, es verdad; si el informe se pidió filtrado, falta su gasto. El
+     hub no puede saber cuál de las dos, así que lo dice: las campañas activas
+     en la semana anterior al informe más reciente que no salen en él. */
+  let campanasFuera = [];
+  if(nFicheros>1){
+    let ult = null; for(const fid in cob) if(!ult || cob[fid].fin>ult.fin) ult = cob[fid];
+    const ultimaFecha = {};
+    filas.forEach(f=>{ if(!f.hasta || !f.ficheros.length) return; const kc=fold(f.campaign);
+      if(!ultimaFecha[kc] || f.hasta>ultimaFecha[kc].d) ultimaFecha[kc] = {d:f.hasta, nombre:f.campaign}; });
+    const limite = addDays(ult.ini, -7);
+    campanasFuera = Object.keys(ultimaFecha).filter(kc=>!ult.camp[kc] && ultimaFecha[kc].d>=limite)
+      .map(kc=>ultimaFecha[kc].nombre);
+  }
+  /* Ritmo diario, para los días del periodo que el informe no cubre. */
+  const ritmoGasto  = diasTramo ? gastoTramo/diasTramo : 0;
+  const ritmoVentas = diasTramo ? ventasTramo/diasTramo : 0;
   /* HASTA DÓNDE SE PUEDE ESTIRAR UN INFORME.
 
      Rellenar los días que el informe no cubre al ritmo medio evita el error
@@ -277,7 +458,9 @@ function pubAdStats(){
      con cero de publicidad y el beneficio de ese tramo sale optimista. Decirlo
      es lo único honesto; inventarlo, no. */
   const diasPorCubrir = Math.max(0, V.dias - diasMedidos);
-  const diasExtrapolados = adDays ? Math.min(diasPorCubrir, adDays) : 0;
+  /* Un ritmo se estira, como mucho, tantos días como los que lo sostienen. Con
+     un informe es el informe; con varios, la muestra de la que sale el ritmo. */
+  const diasExtrapolados = adDays ? Math.min(diasPorCubrir, nFicheros>1 ? diasTramo : adDays) : 0;
   const diasSinDato = diasPorCubrir - diasExtrapolados;
   const spendExtra = diasExtrapolados * ritmoGasto;
   const salesExtra = diasExtrapolados * ritmoVentas;
@@ -323,6 +506,9 @@ function pubAdStats(){
     diasMedidos, diasExtrapolados, diasSinDato, ventana:V, fueraDePeriodo,
     filas: filas.length, filasAgregadas, filasSinFecha, maxDiasFila: maxDias,
     filasOtraDivisa, gastoOtraDivisa, otrasDivisas: Object.keys(otrasDivisas),
+    ficheros: nFicheros, filasSolape, gastoSolape, ventasSolape,
+    ritmoDiario: ritmoGasto, diasTramo, tramoIni, tramoFin, campanasFuera,
+    diasSolape: Object.keys(diasSolape).length,
     gastoAgregado, gastoProrrateado,
     prorrateoPct: spend>0 ? Math.min(100, (gastoProrrateado+spendExtra)/spend*100) : 0,
     waste, wasteTerms, terms,
@@ -610,6 +796,129 @@ registrarEstilo(
   '#pubPujaAviso{font-size:12.5px;margin:6px 0 2px}'+
   '.pub-ori{font-size:10.5px;color:#6b7a7f;display:block}');
 
+/* ═══ CAMPAÑAS → PRODUCTO · la publicidad imputada a quien la gasta ═══════════
+
+   POR QUÉ. Rentabilidad repartía TODA la publicidad entre SKUs por su ingreso:
+   un SKU que no se anuncia cargaba con el gasto de otro que sí, y el desglose
+   por SKU —la pantalla con la que se decide qué empujar y qué matar— salía
+   plano donde el negocio no lo es. Medido el 3-10-2026 con los quince informes
+   reales: las campañas nombran FAMILIAS (NS, SPB, SLB, SS, Vehilex…), no SKUs,
+   y el casamiento automático por código de SKU no casaba casi nada.
+
+   CÓMO, sin inventar:
+   · Cada campaña se asigna a un GRUPO de SKUs (los que comparten el prefijo de
+     letras: FBANS…, FBASPB…) o se marca «varias / reparto». Lo decide Juancho.
+   · El hub SUGIERE (el código de la campaña dentro del prefijo, o una palabra
+     del nombre que solo tiene un grupo), pero una sugerencia NO imputa nada
+     hasta que se confirma. Un gasto colgado del producto equivocado es peor que
+     uno repartido, porque parece medido.
+   · Se imputa el gasto OBSERVADO de la campaña en el periodo (el mismo que ve la
+     tabla de términos). Lo extrapolado y lo que no tiene fecha se sigue
+     repartiendo por ingreso, como todo lo no asignado. La suma del desglose no
+     cambia ni un céntimo: solo cambia quién la lleva.
+   · Dentro de un grupo, el gasto se reparte entre los SKUs del grupo que han
+     vendido en el periodo, por su ingreso. Si ninguno ha vendido, el gasto se
+     queda en el reparto general y se dice.                                   */
+registrarClaveDB('ppcAsig', {});
+function pubGrupoSku(sku){ const m = /^[A-Za-z]+/.exec(String(sku||'').trim()); return m ? m[0].toUpperCase() : ''; }
+function pubGrupos(){
+  const g = {};
+  (DB.products||[]).forEach(p=>{ const k = pubGrupoSku(p.sku); if(!k) return;
+    (g[k] || (g[k] = {id:k, skus:[], nombres:[]})).skus.push(String(p.sku));
+    g[k].nombres.push(String(p.name||'')); });
+  return g;
+}
+/* EL DESTINO ES UNA LISTA DE PREFIJOS DE SKU, no «las letras del principio».
+   Medido con el catálogo real (39 SKU): agrupar por letras dejaba 26 SKU en
+   «FBA», mezclando los paños Vehilex con tres líneas de pulseras; confirmar la
+   sugerencia de Vehilex habría repartido su gasto entre pulseras. Con prefijos,
+   Juancho escribe lo que de verdad anuncia la campaña: «FBANS», «FBA0500», o
+   «FBA011, FBA012» para la línea de cuero, y la pantalla dice cuántos SKU caen
+   dentro. */
+function pubPrefijos(v){
+  return String(v||'').toUpperCase().split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean);
+}
+function pubSkusDePrefijos(prefs){
+  const P = (prefs||[]).map(x=>String(x).toUpperCase());
+  return (DB.products||[]).map(p=>String(p.sku||'').trim()).filter(sk=>{
+    const u = sk.toUpperCase(); return P.some(pr=>u.indexOf(pr)===0); });
+}
+function pubPrefijoComun(skus){
+  if(!skus.length) return '';
+  let pre = skus[0].toUpperCase();
+  skus.forEach(s=>{ const u=s.toUpperCase(); let i=0; while(i<pre.length && i<u.length && pre[i]===u[i]) i++; pre=pre.slice(0,i); });
+  return pre;
+}
+/* Sugerencia, SOLO si un prefijo recoge exactamente lo que la campaña nombra:
+   · un código corto del nombre («NS», «SPB») que pegado a «FBA» es el prefijo
+     de letras de algún SKU; o
+   · una palabra del nombre (≥5 letras, no genérica) que aparece en el nombre de
+     un conjunto de productos cuyo prefijo común no recoge ningún otro.
+   Si no hay un prefijo así, no se sugiere nada: mejor una casilla vacía que una
+   sugerencia que mezcle productos. */
+function pubSugerencia(campana){
+  const G = pubGrupos();
+  const trozos = fold(String(campana||'')).split(/[^a-z0-9]+/).filter(Boolean);
+  const porCodigo = {};
+  /* Solo si el prefijo no arrastra SKUs de otra serie de letras: «FBASS»
+     también recoge «FBASSX…», que es otra línea (revisión del 3-10-2026). */
+  trozos.forEach(t=>{ if(t.length<2 || t.length>4) return;
+    const id = ('FBA'+t).toUpperCase(); if(!G[id]) return;
+    if(pubSkusDePrefijos([id]).some(sk=>pubGrupoSku(sk)!==id)) return;
+    porCodigo[id] = 1; });
+  const ks = Object.keys(porCodigo);
+  if(ks.length===1) return {grupo:ks[0], prefijos:[ks[0]], por:'el código «'+ks[0].slice(3)+'» del nombre'};
+  if(ks.length>1) return null;
+  const genericas = {exacta:1, manual:1, todas:1, todos:1, espana:1, italia:1, francia:1, alemania:1, belgica:1,
+                     auto:1, broad:1, phrase:1, exact:1, pulsera:1, pulseras:1, hombre:1, mujer:1};
+  const props = [];
+  trozos.forEach(t=>{ if(t.length<5 || genericas[t]) return;
+    const skus = (DB.products||[]).filter(p=>fold(String(p.name||'')).indexOf(t)>=0).map(p=>String(p.sku).trim());
+    if(!skus.length || skus.length===(DB.products||[]).length) return;
+    const pre = pubPrefijoComun(skus);
+    if(pre.length<3) return;
+    const recoge = pubSkusDePrefijos([pre]);
+    if(recoge.length!==skus.length) return;            // el prefijo arrastraría otros productos
+    props.push({pre, t, n:skus.length});
+  });
+  const distintos = Array.from(new Set(props.map(x=>x.pre)));
+  if(distintos.length===1){ const x = props[0];
+    return {grupo:x.pre, prefijos:[x.pre], por:'la palabra «'+x.t+'» ('+x.n+' SKU)'}; }
+  return null;
+}
+function pubAsignacion(campana){
+  const a = (DB.ppcAsig||{})[fold(String(campana||'')).trim()];
+  return a || null;
+}
+function pubAsignar(campana, valor){
+  if(!DB.ppcAsig) DB.ppcAsig = {};
+  const k = fold(String(campana||'')).trim();
+  const v = String(valor==null?'':valor).trim();
+  if(!v) delete DB.ppcAsig[k];
+  else if(v==='*') DB.ppcAsig[k] = {reparto:true, fecha:iso(today())};
+  else DB.ppcAsig[k] = {prefijos:pubPrefijos(v), fecha:iso(today())};
+  saveDB(); try{ refreshAll(); }catch(e){}
+}
+function pubPrefijosDe(a){ return !a ? [] : (a.prefijos || (a.grupo ? [a.grupo] : [])); }
+/* Gasto OBSERVADO en el periodo por campaña (sin extrapolar), con su destino. */
+function pubPpcPorCampana(){
+  const A = pubAdStats();
+  const m = {};
+  /* Por país también: con el filtro de un país, solo cuenta lo que esa
+     campaña gastó EN ese país. Sin país (informes antiguos), se guarda aparte
+     como «??» y con filtro no se imputa a nadie. */
+  A.terms.forEach(t=>{ if(t.fueraDePeriodo) return;
+    const k = fold(String(t.campaign||'')).trim();
+    const c = m[k] || (m[k] = {campana:t.campaign, gasto:0, porPais:{}});
+    c.gasto += t.spend;
+    const pc = pubPais(t.country) || '??';
+    c.porPais[pc] = (c.porPais[pc]||0) + t.spend; });
+  return Object.keys(m).map(k=>{ const c = m[k]; const a = (DB.ppcAsig||{})[k] || null;
+    c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
+    c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
+    return c; }).sort((a,b)=>b.gasto-a.gasto);
+}
+
 function pubPanelExtra(){
   let e = document.getElementById('pubExtra');
   if(e) return e;
@@ -625,6 +934,13 @@ function pubPanelExtra(){
       'margen del producto equivocado hace bajar pujas que estaban ganando dinero.</p></div></div>'+
       '<div class="tbl-wrap"><table class="grid" id="pubEqTable"></table></div>'+
       '<div id="pubEqNota" class="assumptions pub-note" style="margin-top:14px"></div></div>'+
+    '<div class="panel"><div class="panel-head"><div>'+
+      '<h2>Campañas → producto</h2>'+
+      '<p class="desc" style="margin:0">A qué productos va el gasto de cada campaña, para que Rentabilidad se lo cargue a '+
+      'ellos y no a todos por igual. El hub sugiere; <strong>solo cuenta lo que confirmas</strong>. Lo que no asignes se sigue '+
+      'repartiendo por ingreso, y la pantalla de Rentabilidad dice cuánto es cada cosa.</p></div></div>'+
+      '<div class="tbl-wrap"><table class="grid" id="pubAsigTable"></table></div>'+
+      '<div id="pubAsigNota" class="assumptions pub-note" style="margin-top:14px"></div></div>'+
     '<div class="panel"><div class="panel-head"><div>'+
       '<h2>Orgánico y pagado por SKU</h2>'+
       '<p class="desc" style="margin:0">El ACOS mide la eficiencia de lo pagado; el TACOS, cuánto del negocio de ese SKU '+
@@ -710,7 +1026,9 @@ function pubRenderPublicidad(){
     const trozos=[];
     if(A.spendObservado>0) trozos.push(fmt(A.spendObservado,0)+' de filas con fecha dentro del periodo');
     if(A.gastoProrrateado>0) trozos.push(fmt(A.gastoProrrateado,0)+' vienen de filas de varios días repartidas a partes iguales entre sus días — <strong>es un prorrateo, no una medición</strong>');
-    if(A.spendExtrapolado>0) trozos.push(fmt(A.spendExtrapolado,0)+' de '+num(A.diasExtrapolados)+' días del periodo que el informe no cubre, al ritmo diario medio — <strong>extrapolado</strong>');
+    if(A.spendExtrapolado>0) trozos.push(fmt(A.spendExtrapolado,0)+' de '+num(A.diasExtrapolados)+' días del periodo que el informe no cubre, '+
+      (A.ficheros>1 && A.tramoIni ? 'al ritmo del último tramo con informe (del '+iso(A.tramoIni)+' al '+iso(A.tramoFin)+', '+fmt(A.ritmoDiario,2)+' al día)'
+                                  : 'al ritmo diario medio')+' — <strong>extrapolado</strong>');
     if(A.spendSinFecha>0) trozos.push(fmt(A.spendSinFecha,0)+' de '+num(A.filasSinFecha)+' filas sin fecha, cargadas enteras porque no hay con qué repartirlas');
     v+=trozos.join(' · ')+'.</span><br><br>';
     if(A.filasAgregadas>0){
@@ -719,6 +1037,20 @@ function pubRenderPublicidad(){
          'Amazon las entrega agregadas y no dice cómo se repartió el gasto dentro del tramo, así que este hub lo reparte '+
          'a partes iguales. Es la mejor suposición disponible, y sigue siendo una suposición: las filas afectadas van '+
          'marcadas en la tabla.</div>';
+    }
+    if(A.gastoSolape>0.005){
+      v+='<div class="note-box warn" style="margin:0 0 12px"><strong>Tienes '+num(A.ficheros)+' informes cargados y se pisan '+
+         num(A.diasSolape)+' día'+(A.diasSolape===1?'':'s')+'.</strong> Para cada campaña y cada día cuenta un solo informe '+
+         '—el que llega más lejos—, así que '+fmt(A.gastoSolape,2)+' de gasto de los otros informes se ha quedado fuera para no '+
+         'contarlo dos veces. Si dos informes dicen cifras distintas para el mismo día, no se promedian: manda uno. '+
+         'Los ficheros y sus fechas están en <em>Datos</em>.</div>';
+    }
+    if(A.campanasFuera && A.campanasFuera.length){
+      v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+num(A.campanasFuera.length)+' campaña'+
+         (A.campanasFuera.length===1?' que gastaba':'s que gastaban')+' justo antes del informe más reciente no '+
+         (A.campanasFuera.length===1?'sale':'salen')+' en él</strong> ('+esc(A.campanasFuera.slice(0,5).join(', '))+
+         (A.campanasFuera.length>5?'…':'')+'). Esos días cuentan a cero para ella'+(A.campanasFuera.length===1?'':'s')+
+         '. Si se pausó, es correcto; si el informe se pidió filtrado por campaña o por país, falta su gasto.</div>';
     }
     if(A.filasOtraDivisa>0){
       v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+num(A.filasOtraDivisa)+' fila'+
@@ -805,6 +1137,33 @@ function pubRenderPublicidad(){
         'y solo se calcula con '+PUB_MIN_CLICS+' clics o más. Por debajo, la conversión observada es ruido.</span>';
     }
     eqn.innerHTML=n;
+  }
+
+  {
+    const C = pubPpcPorCampana();
+    tbl('pubAsigTable','<tr><th>Campaña</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
+      (C.length ? C.slice(0,80).map(c=>{
+        const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
+        const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
+          (c.skus.length && c.skus.length<=6 ? ': '+esc(c.skus.join(', ')) : '')+(c.skus.length===0?' · ningún SKU empieza así':'')+'</span>'
+          : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : '');
+        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong></td><td class="num">'+fmt(c.gasto)+'</td>'+
+          '<td><input type="text" style="width:170px" placeholder="FBANS · FBA011, FBA012 · *" value="'+esc(val)+'" '+
+          'data-campana="'+esc(c.campana)+'" onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value)">'+cuantos+'</td>'+
+          '<td>'+(c.sugerencia ? '<span class="mut">'+esc(c.sugerencia.prefijos.join(', '))+' por '+esc(c.sugerencia.por)+'</span> '+
+            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
+            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'))">confirmar</button>'
+            : (c.asig ? '<span class="mut">confirmado el '+esc(c.asig.fecha||'')+'</span>' : '<span class="mut">—</span>'))+'</td></tr>';
+      }).join('') : '<tr><td colspan="4" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
+    const an = document.getElementById('pubAsigNota');
+    if(an){
+      const tot = C.reduce((a,c)=>a+c.gasto,0), asig = C.filter(c=>c.skus.length).reduce((a,c)=>a+c.gasto,0);
+      const sug = C.filter(c=>c.sugerencia).reduce((a,c)=>a+c.gasto,0);
+      an.innerHTML = 'Del gasto observado en el periodo ('+fmt(tot)+'), <strong>'+fmt(asig)+'</strong> está asignado a un grupo de productos'+
+        (sug>0 ? ' y '+fmt(sug)+' tiene una sugerencia sin confirmar, que todavía no cuenta' : '')+
+        '. Escribe los prefijos de SKU que anuncia cada campaña, separados por comas («FBANS», «FBA011, FBA012»), o «*» si anuncia varias líneas. '+
+        'Lo extrapolado y lo que no tiene fecha se reparte siempre por ingreso.';
+    }
   }
 
   tbl('pubSkuTable','<tr><th>SKU</th><th class="num">Gasto</th><th class="num">Ventas pagadas</th>'+

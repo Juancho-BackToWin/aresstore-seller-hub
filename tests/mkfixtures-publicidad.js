@@ -73,14 +73,15 @@ const FILAS = [
 ];
 
 function fila(f, paisForzado){
-  const [term, camp, d0, d1, impr, clics, ped, ventas, gasto, gastoTxt, paisFila] = f;
+  const [term, camp, d0, d1, impr, clics, ped, ventas, gasto, gastoTxt, paisFila, grupo] = f;
   const pais = paisForzado || paisFila || 'España';
+  const ag = grupo || camp;
   const ctr  = impr ? clics/impr*100 : 0;
   const cpc  = clics ? gasto/clics : 0;
   const acos = ventas ? gasto/ventas*100 : null;
   const roas = gasto ? ventas/gasto : 0;
   const cvr  = clics ? ped/clics*100 : 0;
-  return [ago(d0), ago(d1), 'No Portfolio', 'EUR', camp, camp, pais, 'close-match', '-', term,
+  return [ago(d0), ago(d1), 'No Portfolio', 'EUR', camp, ag, pais, 'close-match', '-', term,
     String(impr), String(clics), pct(ctr), eur(cpc), gastoTxt || eur(gasto), eur(ventas),
     acos===null ? '' : pct(acos), roas.toFixed(2).replace('.',','), String(ped), String(ped),
     pct(cvr), String(ped), '0', eur(ventas), eur(0)].join(';');
@@ -107,8 +108,64 @@ const FILAS_DOS_PAISES = [
   ['bandas elasticas',     'SP · Multi · exacta', 5,  5, 1400,  70, 3,  90.00, 70.00, null, 'Alemania']
 ];
 
+/* ─────────────────────────────────────────────────────────────────────────
+   CARRIL 4 · BLOQUE 4 · UNA CAMPANA RENOMBRADA ENTRE DOS INFORMES
+
+   La deduplicacion de solapes manda UN informe por campana y dia, y la clave es
+   el NOMBRE de la campana. Si entre dos descargas la campana se renombro,
+   ninguno de los dos informes «trae» la campana del otro, cada uno es dueno
+   unico de sus propios dias, y el gasto de los dias comunes se cuenta DOS
+   VECES. La revision del 3-10-2026 lo dejo como sospecha; estas fixtures son
+   el caso.
+
+   Mismo grupo de anuncios (AG-ROD) y mismos dos terminos en los dos informes.
+   Lo unico que cambia es el nombre de la campana.
+
+   FILAS DE UN SOLO DIA A PROPOSITO, para que la cuenta salga exacta y se pueda
+   seguir a mano sin prorratear nada:
+
+     v1  dias 14, 13 y 12  ·  10,00 cada uno  =  30,00   (rango 12..14)
+     v2  dias 13, 12 y 11  ·  20,00 cada uno  =  60,00   (rango 11..13)
+
+   Dias comunes a los dos rangos: el 13 y el 12  →  DOS dias.
+     v1 en esos dos dias: 10 + 10 =  20,00
+     v2 en esos dos dias: 20 + 20 =  40,00
+   Si el renombrado es real, uno de los dos cuerpos de gasto es el duplicado del
+   otro, asi que el SUELO de lo contado dos veces es el menor: 20,00 €.
+
+   Y una tercera campana que NO debe saltar: «SP · Otra · amplia», con el MISMO
+   grupo de anuncios y UN solo termino en comun. Dos campanas distintas pueden
+   compartir un termino; un solo par (grupo, termino) no es evidencia de
+   renombrado, y la regla de «al menos DOS pares» es lo unico que la deja
+   fuera. Si usara otro grupo de anuncios no compartiria nada y la prueba
+   pasaria sin medir el umbral.
+   ───────────────────────────────────────────────────────────────────────── */
+const FILAS_RENOM_1 = [
+  // termino,                 campana,             d0, d1, impr, clics, ped, ventas, gasto, txt, pais, grupo
+  ['rodillo de espuma',       'SP · Rodillo · v1', 14, 14, 400, 20, 1, 30.00, 10.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · v1', 13, 13, 400, 20, 1, 30.00, 10.00, null, 'España', 'AG-ROD'],
+  ['rodillo de espuma',       'SP · Rodillo · v1', 12, 12, 400, 20, 1, 30.00, 10.00, null, 'España', 'AG-ROD']
+];
+const FILAS_RENOM_2 = [
+  ['rodillo de espuma',       'SP · Rodillo · v2', 13, 13, 800, 40, 2, 60.00, 20.00, null, 'España', 'AG-ROD'],
+  ['rodillo masaje muscular', 'SP · Rodillo · v2', 12, 12, 800, 40, 2, 60.00, 20.00, null, 'España', 'AG-ROD'],
+  ['rodillo de espuma',       'SP · Rodillo · v2', 11, 11, 800, 40, 2, 60.00, 20.00, null, 'España', 'AG-ROD'],
+  /* La tercera campana comparte el MISMO grupo de anuncios y UN solo termino
+     con v1 y v2. Es asi a proposito: si usara un grupo distinto, la prueba de
+     que no salta pasaria porque no comparte NADA, y no estaria midiendo el
+     umbral. Compartiendo exactamente un par (grupo, termino), lo unico que la
+     deja fuera es la regla de «al menos DOS pares en comun», que es lo que se
+     quiere comprobar. */
+  ['rodillo de espuma',       'SP · Otra · amplia',13, 13, 200, 10, 0,  0.00,  5.00, null, 'España', 'AG-ROD']
+];
+
 function escribir(dir){
   fs.mkdirSync(dir, {recursive:true});
+
+  const r1 = [CAB.join(';')].concat(FILAS_RENOM_1.map(f=>fila(f))).join('\r\n')+'\r\n';
+  fs.writeFileSync(path.join(dir,'terminos-renombrada-1.csv'), '\ufeff'+r1, 'utf8');
+  const r2 = [CAB.join(';')].concat(FILAS_RENOM_2.map(f=>fila(f))).join('\r\n')+'\r\n';
+  fs.writeFileSync(path.join(dir,'terminos-renombrada-2.csv'), '\ufeff'+r2, 'utf8');
 
   const cuerpoDos = [CAB.join(';')].concat(FILAS_DOS_PAISES.map(f=>fila(f))).join('\r\n')+'\r\n';
   fs.writeFileSync(path.join(dir,'terminos-dos-paises.csv'), '\ufeff'+cuerpoDos, 'utf8');

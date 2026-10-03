@@ -708,6 +708,95 @@ const LAB = `
       near(suma, 100), err(suma) || n2(suma));
   }
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     BLOQUE 4 · UNA CAMPANA RENOMBRADA ENTRE DOS INFORMES
+
+     El solape se deduplica por NOMBRE de campaña. Si el nombre cambió entre dos
+     descargas, ninguno de los dos informes «trae» la campaña del otro, cada uno
+     es dueño único de sus propios días, y el gasto de los días comunes se cuenta
+     DOS VECES. El 3-10 quedó como sospecha; aquí está medido.
+
+     LA CUENTA A MANO · filas de un solo día para que salga exacta:
+        v1  días 14, 13 y 12  ·  10,00 cada uno  =  30,00   (rango 12..14)
+        v2  días 13, 12 y 11  ·  20,00 cada uno  =  60,00   (rango 11..13)
+        días comunes: el 13 y el 12  →  2 días
+        v1 dentro de esos dos días: 10 + 10 =  20,00
+        v2 dentro de esos dos días: 20 + 20 =  40,00
+        suelo de lo contado dos veces = min(20, 40) = 20,00 €
+
+     Y «SP · Otra · amplia» NO debe saltar: su propio grupo de anuncios y un solo
+     término en común. Compartir una palabra genérica no es un renombrado.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── bloque 4 · campaña renombrada entre informes ──');
+  {
+    /* Los dos informes tienen que convivir, así que este importador ACUMULA en
+       vez de vaciar `DB.imports` como hace `importar`. Es justamente lo que pasa
+       en la realidad: Juancho tiene quince informes cargados a la vez. */
+    const importarMas = async (fichero) => {
+      await page.evaluate(()=>go('datos'));
+      await page.setInputFiles('#csvFile', []);
+      await page.setInputFiles('#csvFile', path.resolve(FIX, fichero));
+      await page.waitForTimeout(1200);
+      return page.evaluate(()=>Object.keys(DB.imports||{}).length);
+    };
+    await page.evaluate(()=>{ DB.imports={}; DB.mappings={}; saveDB();
+      const l=document.getElementById('fileList'); if(l) l.innerHTML=''; refreshAll(); });
+    await page.waitForTimeout(200);
+    await importarMas('terminos-renombrada-1.csv');
+    await importarMas('terminos-renombrada-2.csv');
+    await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+    await page.waitForTimeout(500);
+
+    const nFich = await page.evaluate(()=>{ const f=(DB.imports.searchterm||{}).ficheros;
+      return f ? Object.keys(f).length : ((DB.imports.searchterm||{}).count?1:0); });
+    const R = await ev(`(()=>{ const r = pubRenombradas();
+      return r.map(x=>({a:x.a.campana, b:x.b.campana, pais:x.pais, dias:x.dias,
+                        ga:x.a.gasto, gb:x.b.gasto, suelo:x.suelo,
+                        comunes:x.comunes, de:x.de})); })()`);
+
+    /* Esto mide el escenario, no el arreglo: si los dos informes no conviven,
+       todo lo de abajo mediría otra cosa sin avisar. */
+    check('los dos informes conviven, no se sustituyen', nFich >= 1, 'ficheros: '+nFich);
+    check('detecta UN solo candidato a renombrado',
+      Array.isArray(R) && R.length === 1,
+      err(R) || (Array.isArray(R) ? R.length+' candidatos: '+R.map(x=>x.a+'/'+x.b).join(' · ') : String(R)));
+
+    const c = Array.isArray(R) && R[0] ? R[0] : null;
+    check('señala las dos versiones del nombre, y no otra campaña',
+      !!c && /v1|v2/.test(String(c.a)) && /v1|v2/.test(String(c.b)) &&
+      !/Otra/.test(String(c.a)+String(c.b)),
+      err(R) || (c ? c.a+' ↔ '+c.b : '—'));
+    check('cuenta los 2 días comunes',
+      !!c && c.dias === 2, err(R) || (c ? c.dias+' días' : '—'));
+    check('el gasto de cada nombre DENTRO de la ventana común · 20,00 y 40,00',
+      !!c && ((near(c.ga,20) && near(c.gb,40)) || (near(c.ga,40) && near(c.gb,20))),
+      err(R) || (c ? n2(c.ga)+' y '+n2(c.gb) : '—'));
+    check('el suelo de lo contado dos veces es el MENOR · 20,00 €',
+      !!c && near(c.suelo, 20), err(R) || (c ? n2(c.suelo) : '—'));
+    check('«SP · Otra · amplia» no salta: UN par en común no es evidencia',
+      Array.isArray(R) && !R.some(x=>/Otra/.test(String(x.a)+String(x.b))),
+      err(R) || (Array.isArray(R) ? R.map(x=>x.a+'/'+x.b).join(' · ') : '—'));
+
+    /* Y el aviso tiene que LLEGAR A LA PANTALLA con su cifra: un detector que
+       solo existe en el motor no avisa a nadie. */
+    const pantalla = await page.evaluate(async ()=>{ go('publicidad');
+      await new Promise(r=>setTimeout(r,600));
+      const e = document.getElementById('pubRenomAviso');
+      return e ? e.textContent.replace(/\s+/g,' ').trim() : '(sin nodo)'; });
+    check('el aviso aparece en Publicidad y dice el gasto en juego',
+      /renombrado|renombrad/i.test(pantalla) && /20,00/.test(pantalla),
+      pantalla.slice(0, 150));
+
+    /* Y cuando NO hay renombrado, el aviso no está: un panel que siempre dice
+       algo entrena a no mirarlo. */
+    const limpio = await page.evaluate(async ()=>{
+      DB.imports={}; DB.mappings={}; saveDB(); go('publicidad');
+      await new Promise(r=>setTimeout(r,500));
+      const e = document.getElementById('pubRenomAviso');
+      return e ? e.textContent.trim() : '(sin nodo)'; });
+    check('sin informes solapados el aviso no aparece', limpio === '', '«'+limpio.slice(0,60)+'»');
+  }
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

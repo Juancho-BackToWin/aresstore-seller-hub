@@ -231,6 +231,102 @@ function pubTraeCampana(c, kc, kp){
   if(kp && conPais) return !!c.campPais[kc+'|'+kp];
   return true;
 }
+/* ───────────────────────────────────────────────────────────────────────────
+   BLOQUE 4 · UNA CAMPANA RENOMBRADA ENTRE DOS INFORMES
+
+   EL FALLO. La deduplicacion de solapes de aqui arriba manda UN informe por
+   campana y dia, y la clave es el NOMBRE de la campana (`kc`). Si entre dos
+   descargas la campana se renombro, `pubTraeCampana` dice que ninguno de los
+   dos informes trae la campana del otro: cada uno es dueno unico de sus
+   propios dias y el gasto de los dias comunes SE CUENTA DOS VECES. La
+   revision del 3-10-2026 lo dejo como sospecha; esto lo mide.
+
+   No se arregla solo, y es deliberado. Fusionar dos nombres por su cuenta es
+   lo contrario de lo que pide el METODO: si el detector se equivoca, el hub
+   habria sumado dos campanas de verdad distintas en una y nadie lo sabria.
+   Asi que AVISA, con el gasto en juego, y la decision es de quien mira.
+
+   COMO SE DETECTA. Lo que no cambia al renombrar una campana es su contenido:
+   los grupos de anuncios y los terminos. La firma de una campana en un informe
+   es el conjunto de pares (grupo de anuncios, termino). Dos nombres distintos,
+   en el MISMO pais, en informes DISTINTOS cuyos rangos se pisan, con firmas que
+   coinciden, son un renombrado sospechoso.
+
+   LOS DOS UMBRALES, Y POR QUE
+     · al menos DOS pares en comun. Con uno solo, dos campanas de verdad
+       distintas que comparten una palabra generica saltarian como renombrado.
+     · y esos pares tienen que ser al menos el 60 % del conjunto mas pequeno.
+       Si la coincidencia es marginal, no es la misma campana con otro nombre:
+       es otra campana que toca algun termino parecido.
+
+   EL GASTO EN JUEGO. Para cada candidato se mira la ventana de dias COMUN a
+   los dos informes y se suma lo que cada nombre gasto DENTRO de esa ventana. Si
+   el renombrado es real, uno de los dos cuerpos de gasto es el duplicado del
+   otro, asi que el suelo de lo contado dos veces es el MENOR de los dos. Se
+   informa el menor y se dice que es un suelo, no una estimacion: decir «se
+   cuentan 60 € de mas» cuando pueden ser 20 seria el numero creible y falso de
+   siempre, solo que en el aviso.
+   ─────────────────────────────────────────────────────────────────────────── */
+function pubRenombradas(filas, cob){
+  filas = filas || pubFilas();
+  cob = cob || pubCobertura(filas);
+
+  /* Firma por (fichero, campana plegada, pais) y gasto por dia. */
+  const info = {};
+  filas.forEach(f=>{
+    if(!f.desde || !f.ficheros.length) return;
+    const kc = fold(String(f.campaign||'')).trim();
+    const kp = pubPais(f.country) || '??';
+    const firma = fold(String(f.adgroup||'')).trim() + '\u0000' + fold(String(f.term||'')).trim();
+    f.ficheros.forEach(fid=>{
+      const k = fid + '\u0000' + kc + '\u0000' + kp;
+      const o = info[k] || (info[k] = {fid, kc, kp, campana:f.campaign, firmas:{}, filas:[]});
+      o.firmas[firma] = 1;
+      o.filas.push(f);
+    });
+  });
+
+  const claves = Object.keys(info);
+  const fuera = [];
+  for(let i=0;i<claves.length;i++){
+    for(let j=i+1;j<claves.length;j++){
+      const a = info[claves[i]], b = info[claves[j]];
+      if(a.fid === b.fid) continue;          // dentro del mismo informe no hay solape que contar
+      if(a.kc === b.kc) continue;            // mismo nombre: de eso ya se ocupa pubDuenoDia
+      if(a.kp !== b.kp) continue;            // paises distintos son campanas distintas (bloque 2)
+
+      const ca = cob[a.fid], cb = cob[b.fid];
+      if(!ca || !cb) continue;
+      const diasComunes = pubSolape(ca.ini, ca.fin, cb.ini, cb.fin);
+      if(!(diasComunes > 0)) continue;       // sin dias comunes no se cuenta nada dos veces
+
+      const fa = Object.keys(a.firmas), fb = Object.keys(b.firmas);
+      const comunes = fa.filter(x=>b.firmas[x]);
+      const minTam = Math.min(fa.length, fb.length);
+      if(comunes.length < 2) continue;
+      if(!(minTam > 0) || comunes.length / minTam < 0.6) continue;
+
+      /* La ventana comun, en fechas. */
+      const ini = ca.ini > cb.ini ? ca.ini : cb.ini;
+      const fin = ca.fin < cb.fin ? ca.fin : cb.fin;
+      const dentro = o => o.filas.reduce((acc,f)=>
+        (f.desde && f.hasta && f.hasta >= ini && f.desde <= fin) ? acc + f.spend : acc, 0);
+      const ga = dentro(a), gb = dentro(b);
+      const suelo = Math.min(ga, gb);
+      if(!(suelo > 0)) continue;
+
+      fuera.push({
+        pais: a.kp, dias: diasComunes,
+        ini: iso(ini), fin: iso(fin),
+        a: {campana: a.campana, fid: a.fid, gasto: ga},
+        b: {campana: b.campana, fid: b.fid, gasto: gb},
+        comunes: comunes.length, de: minTam,
+        suelo
+      });
+    }
+  }
+  return fuera.sort((x,y)=>y.suelo-x.suelo);
+}
 function pubDuenoDia(cob, kc, kp, dia, cache){
   const k = kc+'|'+kp+'|'+dia.getTime();
   if(k in cache) return cache[k];
@@ -985,7 +1081,11 @@ function pubPanelExtra(){
       'ellos y no a todos por igual. El hub sugiere; <strong>solo cuenta lo que confirmas</strong>. Lo que no asignes se sigue '+
       'repartiendo por ingreso, y la pantalla de Rentabilidad dice cuánto es cada cosa.</p></div></div>'+
       '<div class="tbl-wrap"><table class="grid" id="pubAsigTable"></table></div>'+
-      '<div id="pubAsigNota" class="assumptions pub-note" style="margin-top:14px"></div></div>'+
+      '<div id="pubAsigNota" class="assumptions pub-note" style="margin-top:14px"></div>'+
+      /* BLOQUE 4 · el aviso de campanas renombradas. Nace vacio y solo aparece
+         si hay candidatos: un panel permanente que dice «no hay nada» entrena a
+         no mirarlo. */
+      '<div id="pubRenomAviso" style="margin-top:14px"></div></div>'+
     '<div class="panel"><div class="panel-head"><div>'+
       '<h2>Orgánico y pagado por SKU</h2>'+
       '<p class="desc" style="margin:0">El ACOS mide la eficiencia de lo pagado; el TACOS, cuánto del negocio de ese SKU '+
@@ -1208,6 +1308,36 @@ function pubRenderPublicidad(){
             'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'),this.getAttribute(\'data-pais\'))">confirmar</button>'
             : (c.asig ? '<span class="mut">confirmado el '+esc(c.asig.fecha||'')+'</span>' : '<span class="mut">—</span>'))+'</td></tr>';
       }).join('') : '<tr><td colspan="5" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
+    /* ── BLOQUE 4 · aviso de campanas renombradas entre informes ────────── */
+    const rn = document.getElementById('pubRenomAviso');
+    if(rn){
+      let R = []; try{ R = pubRenombradas(); }catch(e){ R = []; }
+      if(!R.length) rn.innerHTML = '';
+      else {
+        const tot = R.reduce((a,x)=>a+x.suelo,0);
+        rn.innerHTML = '<div class="assumptions pub-note" style="border-left:3px solid #c9772b">'+
+          '<strong>Puede que una campaña se haya renombrado entre dos informes.</strong><br>'+
+          'El solape se deduplica por NOMBRE de campaña, así que si el nombre cambió entre dos descargas '+
+          'ninguno de los dos informes «trae» la campaña del otro y el gasto de los días comunes se cuenta '+
+          '<strong>dos veces</strong>. '+
+          R.length+' caso'+(R.length===1?'':'s')+' con la misma pinta: mismo país, mismos grupos de anuncios '+
+          'y mismos términos con otro nombre de campaña.<br><br>'+
+          R.slice(0,10).map(x=>
+            '· <strong>'+esc(x.a.campana)+'</strong> y <strong>'+esc(x.b.campana)+'</strong> ('+esc(x.pais)+') — '+
+            x.comunes+' de '+x.de+' pares grupo/término en común, '+x.dias+' día'+(x.dias===1?'':'s')+
+            ' en común ('+esc(x.ini)+' a '+esc(x.fin)+'). '+
+            'Gasto en juego: al menos <strong>'+fmt(x.suelo)+'</strong>'+
+            ' (el menor de los dos: '+fmt(x.a.gasto)+' y '+fmt(x.b.gasto)+')'
+          ).join('<br>')+
+          '<br><br><span class="mut">Suma de los suelos: '+fmt(tot)+'. Es un SUELO, no una estimación: '+
+          'si el renombrado es real, uno de los dos cuerpos de gasto duplica al otro, y lo contado dos veces '+
+          'es al menos el menor de los dos. '+
+          'El hub <strong>no los une solo</strong> a propósito: si el detector se equivocara, habría sumado dos '+
+          'campañas de verdad distintas y nadie lo sabría. Si son la misma, descarga de nuevo el informe del '+
+          'periodo completo con el nombre actual y borra el viejo.</span></div>';
+      }
+    }
+
     const an = document.getElementById('pubAsigNota');
     if(an){
       const tot = C.reduce((a,c)=>a+c.gasto,0), asig = C.filter(c=>c.skus.length).reduce((a,c)=>a+c.gasto,0);

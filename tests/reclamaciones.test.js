@@ -82,9 +82,15 @@ const js = body => '(()=>{' + LAB + body + '})()';
     vacia.casos+' casos · '+vacia.total.toFixed(2)+' €');
   check('y lo dice, en vez de enseñar una tabla vacía',
     vacia.texto.indexOf('Todavía no hay datos')>=0, vacia.texto.slice(0,60));
+  /* La fecha se compara contra `CLAIM_CONSULTA`, NO contra un literal. Habia
+     dos literales de la misma fecha en esta suite -aqui y en REC-J- y al
+     re-verificar las ventanas el 3-10-2026 solo se actualizo uno: la suite se
+     puso roja por su propia duplicacion, no por el codigo. Atado al origen,
+     eso no puede volver a pasar. */
+  const consultaPantalla = await page.evaluate('CLAIM_CONSULTA');
   check('los plazos se enseñan igual, con su fecha de consulta',
-    vacia.ventanas.indexOf('2026-09-17')>=0 && vacia.ventanas.indexOf('45')>=0,
-    vacia.ventanas.slice(0,90));
+    vacia.ventanas.indexOf(consultaPantalla)>=0 && vacia.ventanas.indexOf('45')>=0,
+    consultaPantalla+' · '+vacia.ventanas.slice(0,70));
 
   /* ══ REC-B · E6 · EL CRÉDITO DE COMISIÓN, CONTADO DOS VECES ═══════════════
      En la liquidación, la comisión de una venta viene NEGATIVA y la del
@@ -467,7 +473,7 @@ const js = body => '(()=>{' + LAB + body + '})()';
 
   /* ══ REC-J · LAS VENTANAS ═════════════════════════════════════════════════
      No están escritas de memoria: salen de anuncios oficiales de Seller
-     Central consultados el 17-09-2026, y el plazo de las devoluciones de
+     Central consultados el 17-09-2026 y re-verificados el 03-10-2026, y el plazo de las devoluciones de
      cliente NO ES EL MISMO en amazon.es (45–105) que en amazon.com (60–120).
      El plan antiguo del proyecto decía «105 y 60 días»; para amazon.es el 105
      sigue vigente y el 60 es el MÍNIMO, no el máximo. */
@@ -488,7 +494,12 @@ const js = body => '(()=>{' + LAB + body + '})()';
   check('tarifa cobrada de más: NO CONFIRMADA, y sin cifra inventada',
     ven.tar.conf===false && ven.tar.min===null && ven.tar.max===null, JSON.stringify(ven.tar));
   check('cada ventana confirmada trae su enlace oficial', ven.todas===true, 'sí');
-  check('y la fecha de consulta', ven.consulta==='2026-09-17', ven.consulta);
+  /* La fecha se actualiza cuando alguien RE-LEE las paginas de Amazon, no
+     cuando toca el fichero. El 3-10-2026 se verificaron las cuatro contra las
+     paginas vivas y las frases literales estan pegadas en la cabecera de
+     src/23-reclamaciones.js, para que la proxima vez se compare texto con texto
+     y no cifra con recuerdo. */
+  check('y la fecha de consulta', ven.consulta==='2026-10-03', ven.consulta);
 
   /* ══ REC-K · LA VISTA COMPLETA ═══════════════════════════════════════════ */
   console.log('\n=== REC-K · LA VISTA CON TODO CARGADO ===');

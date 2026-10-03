@@ -17,7 +17,30 @@
 /* ── LAS VENTANAS DE RECLAMACIÓN ────────────────────────────────────────────
    NO ESTÁN ESCRITAS DE MEMORIA. El plan antiguo del proyecto decía «105 y 60
    días»; Amazon cambió estas políticas entre 2024 y 2025 y, además, EL PLAZO
-   NO ES EL MISMO EN TODOS LOS MERCADOS. Consultado el 17 de septiembre de 2026:
+   NO ES EL MISMO EN TODOS LOS MERCADOS. Consultado el 17 de septiembre de 2026
+   y RE-VERIFICADO el 3 de octubre de 2026 contra las paginas vivas, una a una.
+   Las cuatro siguen diciendo lo mismo; se pegan abajo las frases literales que
+   se leyeron ese dia, para que la proxima sesion compare texto con texto y no
+   cifra con recuerdo:
+
+     · amazon.es · «Una reclamacion de devolucion del cliente de Logistica de
+       Amazon se puede presentar entre 45 y 105 dias despues de la fecha de
+       reembolso o reemplazo al cliente.»
+     · amazon.es · «...tiene que presentarse en un plazo de 60 dias desde la
+       fecha en la que se informo de que el producto se habia extraviado o
+       danado.»
+     · amazon.es · «Una reclamacion de retirada de productos perdidos en
+       transito se puede presentar entre 15 y 75 dias desde la fecha de creacion
+       del envio.»
+     · amazon.com · «An FBA customer returns claim can be submitted between
+       60-120 days after the customer refund or replacement date.»
+     · PDF de la politica · «If you don't agree with our valuation of a unit,
+       you can file a claim on Contact Us in Seller Central within 60 days after
+       we have issued the reimbursement.» Y sigue diciendo «sourcing cost» antes
+       del pedido y «minus applicable fees» despues.
+
+   De la ventana de TARIFAS cobradas de mas se volvio a buscar fuente oficial el
+   3-10-2026 y NO se encontro ninguna. Sigue sin cifra, a proposito.
 
    · amazon.es · «Novedades sobre la automatización de reembolsos y los plazos
      para presentar reclamaciones de reembolso», Seller Central España, en vigor
@@ -59,7 +82,7 @@
      de tarifa FBA incorrecto. Circula «90 días» en blogs de terceros y NO se
      usa aquí: una ventana inventada hace dos daños, presentar fuera de plazo y
      dejar pasar lo que todavía se podía reclamar. La pantalla lo dice.       */
-const CLAIM_CONSULTA = '2026-09-17';
+const CLAIM_CONSULTA = '2026-10-03';
 const CLAIM_VENTANAS = {
   devolucion:{
     etiqueta:'Devolución de cliente FBA reembolsada y no devuelta',

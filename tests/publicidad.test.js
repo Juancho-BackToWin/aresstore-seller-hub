@@ -607,6 +607,107 @@ const LAB = `
   check('con todo cargado, la pantalla se completa', estados[2].filas>1 && estados[2].kpis===6,
     estados[2].filas+' filas');
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     BLOQUE 2 · LA MISMA CAMPANA EN DOS PAISES
+
+     «SP · Multi · exacta» existe en España y en Alemania y anuncia productos
+     distintos en cada uno. La fixture: España 30,00 € sobre «rodillo de
+     espuma», Alemania 70,00 € sobre «bandas elasticas». Total 100,00 €.
+
+     LA CUENTA A MANO
+     Asignando TEST-ROD al par (campaña, ES) y TEST-BAN al par (campaña, DE):
+        ES → TEST-ROD  30,00 €
+        DE → TEST-BAN  70,00 €
+     Antes del arreglo la clave era solo el nombre, así que la segunda
+     asignación PISABA la primera y las dos filas acababan en el mismo SKU: o
+     100,00 € al rodillo o 100,00 € a las bandas, según cuál se escribiera
+     última. Cuarenta euros mal puestos sobre cien, y el ACOS del producto
+     equivocado moviéndose en consecuencia.
+     ═══════════════════════════════════════════════════════════════════════ */
+  console.log('\n── bloque 2 · la misma campaña en dos países ──');
+  {
+    const r = await importar('terminos-dos-paises.csv');
+    check('la fixture de dos países se importa', r.ok === true, r.meta);
+    await page.evaluate(LAB + ';DB.orders=ventas;DB.ppcAsig={};saveDB();refreshAll();');
+    await page.waitForTimeout(400);
+
+    const filas = await ev(`(()=>{ const C = pubPpcPorCampana();
+      return C.map(c=>({campana:c.campana, pais:c.pais, gasto:c.gasto})); })()`);
+    check('una fila por campaña Y país, no una por campaña',
+      Array.isArray(filas) && filas.length === 2 &&
+      filas.filter(f=>f.pais==='ES').length === 1 && filas.filter(f=>f.pais==='DE').length === 1,
+      err(filas) || (Array.isArray(filas) ? filas.map(f=>f.pais+':'+n2(f.gasto)).join(' · ') : String(filas)));
+    const es = Array.isArray(filas) ? filas.find(f=>f.pais==='ES') : null;
+    const de = Array.isArray(filas) ? filas.find(f=>f.pais==='DE') : null;
+    check('cada país se queda con SU gasto · ES 30,00 y DE 70,00',
+      !!es && !!de && near(es.gasto, 30) && near(de.gasto, 70),
+      err(filas) || (es&&de ? 'ES '+n2(es.gasto)+' · DE '+n2(de.gasto) : 'sin filas por país'));
+
+    /* El corazón del bloque: dos asignaciones distintas que NO se pisan. */
+    const dos = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-ROD','ES');
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? {gasto:c.gasto, skus:c.skus} : null; };
+      return {es:f('ES'), de:f('DE'), claves:Object.keys(DB.ppcAsig||{}).length}; })()`);
+    check('asignar Alemania NO reasigna España · dos claves guardadas',
+      dos && !dos.__err && dos.claves === 2,
+      err(dos) || ('claves: '+((dos&&dos.claves)!==undefined?dos.claves:'—')));
+    check('España se queda con TEST-ROD y sus 30,00 €',
+      dos && !dos.__err && dos.es && dos.es.skus.length===1 && dos.es.skus[0]==='TEST-ROD' && near(dos.es.gasto,30),
+      err(dos) || (dos&&dos.es ? (dos.es.skus.join(',')||'ninguno')+' · '+n2(dos.es.gasto) : '—'));
+    check('Alemania se queda con TEST-BAN y sus 70,00 €',
+      dos && !dos.__err && dos.de && dos.de.skus.length===1 && dos.de.skus[0]==='TEST-BAN' && near(dos.de.gasto,70),
+      err(dos) || (dos&&dos.de ? (dos.de.skus.join(',')||'ninguno')+' · '+n2(dos.de.gasto) : '—'));
+
+    /* NO ROMPER LO GUARDADO · una asignación vieja (clave = nombre plegado, sin
+       país) tiene que seguir aplicándose a LOS DOS países. Es la forma exacta en
+       que están guardadas todas las que Juancho ya ha confirmado. */
+    const vieja = await ev(`(()=>{
+      DB.ppcAsig = {}; DB.ppcAsig[fold('SP · Multi · exacta').trim()] = {prefijos:['TEST-ROD'], fecha:'2026-09-01'};
+      saveDB();
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? c.skus : null; };
+      return {es:f('ES'), de:f('DE')}; })()`);
+    check('una asignación ya guardada (sin país) sigue valiendo para los dos países',
+      vieja && !vieja.__err && vieja.es && vieja.de &&
+      vieja.es.length===1 && vieja.es[0]==='TEST-ROD' && vieja.de.length===1 && vieja.de[0]==='TEST-ROD',
+      err(vieja) || (vieja&&vieja.es ? 'ES '+vieja.es.join(',')+' · DE '+(vieja.de||[]).join(',') : '—'));
+
+    /* Y la específica gana a la global, que es lo que permite diferenciar un
+       país sin tener que borrar lo que ya estaba puesto. */
+    const gana = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const f = p => { const c = C.find(x=>x.pais===p); return c ? c.skus : null; };
+      return {es:f('ES'), de:f('DE')}; })()`);
+    check('la del país gana a la global, y la global sigue rigiendo el resto',
+      gana && !gana.__err && gana.es && gana.de &&
+      gana.es[0]==='TEST-ROD' && gana.de[0]==='TEST-BAN',
+      err(gana) || (gana&&gana.es ? 'ES '+gana.es.join(',')+' · DE '+(gana.de||[]).join(',') : '—'));
+
+    /* EL DINERO. Con filtro de país, el P&L por SKU tiene que llevar el gasto
+       de ESE país al SKU de ESE país. 30,00 € al rodillo en España; y el
+       rodillo no puede llevarse ni un céntimo de los 70,00 € alemanes. */
+    const dinero = await ev(`(()=>{
+      pubAsignar('SP · Multi · exacta','TEST-ROD','ES');
+      pubAsignar('SP · Multi · exacta','TEST-BAN','DE');
+      const C = pubPpcPorCampana();
+      const g = (p,sku) => { const c = C.find(x=>x.pais===p); return c && c.skus.indexOf(sku)>=0 ? (c.porPais||{})[p]||0 : 0; };
+      return {rodEnES:g('ES','TEST-ROD'), banEnDE:g('DE','TEST-BAN'),
+              rodEnDE:g('DE','TEST-ROD'), banEnES:g('ES','TEST-BAN')}; })()`);
+    check('el gasto alemán NO toca al producto español, ni al revés',
+      dinero && !dinero.__err && near(dinero.rodEnES,30) && near(dinero.banEnDE,70) &&
+      dinero.rodEnDE===0 && dinero.banEnES===0,
+      err(dinero) || (dinero ? 'ROD/ES '+n2(dinero.rodEnES)+' · BAN/DE '+n2(dinero.banEnDE)+
+        ' · ROD/DE '+n2(dinero.rodEnDE)+' · BAN/ES '+n2(dinero.banEnES) : '—'));
+
+    /* La suma no cambia: el arreglo reparte, no inventa. */
+    const suma = await ev(`(()=>{ const C=pubPpcPorCampana(); return C.reduce((a,c)=>a+c.gasto,0); })()`);
+    check('la suma observada sigue siendo 100,00 € · se reparte, no se inventa',
+      near(suma, 100), err(suma) || n2(suma));
+  }
+
   check('sin errores de JS en toda la sesión', errors.length===0, errors.join(' | ') || 'limpio');
   console.log('\n' + (fails===0 ? '✓ todo correcto' : '✗ ' + fails + ' fallos'));
   await browser.close();

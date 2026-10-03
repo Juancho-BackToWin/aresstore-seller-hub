@@ -72,21 +72,46 @@ const FILAS = [
   ['rodillo con tres clics', 'SP · TEST-ROD · exacta', 15, 15,  200,   3, 0,   0.00,  4.00]
 ];
 
-function fila(f){
-  const [term, camp, d0, d1, impr, clics, ped, ventas, gasto, gastoTxt] = f;
+function fila(f, paisForzado){
+  const [term, camp, d0, d1, impr, clics, ped, ventas, gasto, gastoTxt, paisFila] = f;
+  const pais = paisForzado || paisFila || 'España';
   const ctr  = impr ? clics/impr*100 : 0;
   const cpc  = clics ? gasto/clics : 0;
   const acos = ventas ? gasto/ventas*100 : null;
   const roas = gasto ? ventas/gasto : 0;
   const cvr  = clics ? ped/clics*100 : 0;
-  return [ago(d0), ago(d1), 'No Portfolio', 'EUR', camp, camp, 'España', 'close-match', '-', term,
+  return [ago(d0), ago(d1), 'No Portfolio', 'EUR', camp, camp, pais, 'close-match', '-', term,
     String(impr), String(clics), pct(ctr), eur(cpc), gastoTxt || eur(gasto), eur(ventas),
     acos===null ? '' : pct(acos), roas.toFixed(2).replace('.',','), String(ped), String(ped),
     pct(cvr), String(ped), '0', eur(ventas), eur(0)].join(';');
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   CARRIL 4 · BLOQUE 2 · LA MISMA CAMPANA EN DOS PAISES
+
+   «SP · Multi · exacta» existe en Espana y en Alemania, y anuncia PRODUCTOS
+   DISTINTOS en cada uno: el rodillo en Espana, las bandas en Alemania. Es el
+   caso real de una cuenta PanEU que replica la campana pais a pais.
+
+   Los dos terminos estan elegidos para que la sugerencia automatica NO los
+   pueda casar sola: lo que decide es la asignacion a mano, que es lo que la
+   prueba mide.
+
+   Gasto: Espana 30,00 · Alemania 70,00 · total 100,00. Numeros redondos y
+   distintos a proposito, para que al mirar la imputacion se vea de un golpe
+   si el dinero de Alemania se ha ido al producto espanol.
+   ───────────────────────────────────────────────────────────────────────── */
+const FILAS_DOS_PAISES = [
+  // termino,              campana,              d0, d1, impr, clics, ped, ventas, gasto, gastoTxt, pais
+  ['rodillo de espuma',    'SP · Multi · exacta', 5,  5, 1000,  50, 2,  60.00, 30.00, null, 'España'],
+  ['bandas elasticas',     'SP · Multi · exacta', 5,  5, 1400,  70, 3,  90.00, 70.00, null, 'Alemania']
+];
+
 function escribir(dir){
   fs.mkdirSync(dir, {recursive:true});
+
+  const cuerpoDos = [CAB.join(';')].concat(FILAS_DOS_PAISES.map(f=>fila(f))).join('\r\n')+'\r\n';
+  fs.writeFileSync(path.join(dir,'terminos-dos-paises.csv'), '\ufeff'+cuerpoDos, 'utf8');
   const cuerpo = [CAB.join(';')].concat(FILAS.map(fila)).join('\r\n')+'\r\n';
   fs.writeFileSync(path.join(dir,'terminos-real.csv'), '﻿'+cuerpo, 'utf8');
 

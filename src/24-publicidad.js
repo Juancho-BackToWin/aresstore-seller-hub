@@ -886,13 +886,48 @@ function pubSugerencia(campana){
     return {grupo:x.pre, prefijos:[x.pre], por:'la palabra «'+x.t+'» ('+x.n+' SKU)'}; }
   return null;
 }
-function pubAsignacion(campana){
-  const a = (DB.ppcAsig||{})[fold(String(campana||'')).trim()];
-  return a || null;
-}
-function pubAsignar(campana, valor){
-  if(!DB.ppcAsig) DB.ppcAsig = {};
+/* ───────────────────────────────────────────────────────────────────────────
+   BLOQUE 2 · LA MISMA CAMPANA EN DOS PAISES
+
+   Hasta el 3-10-2026 la clave de `DB.ppcAsig` era solo el nombre plegado de la
+   campana. En una cuenta PanEU que replica la campana pais a pais -lo normal-
+   eso significa que «SP · Multi · exacta» de Espana y la de Alemania comparten
+   asignacion: se asigna una vez y vale para las dos, aunque anuncien productos
+   distintos.
+
+   No da error. Imputa el gasto aleman al producto espanol, y al reves. Es
+   exactamente la forma del fallo que esta norma persigue: un numero creible y
+   falso que hace subir la puja del producto que no era.
+
+   LA CLAVE AHORA PUEDE LLEVAR PAIS, Y LA VIEJA SIGUE VALIENDO
+   La clave especifica es `nombre\0PAIS`; la global sigue siendo `nombre`. Al
+   buscar se mira primero la especifica y, si no hay, la global. Asi TODA
+   asignacion ya guardada -que por definicion es global- sigue aplicandose a
+   todos los paises de su campana, y solo deja de hacerlo en el pais donde
+   alguien escriba algo distinto a proposito. Nada que Juancho haya confirmado
+   se pierde ni cambia de destino al desplegar esto.
+
+   El separador es `\0` porque no puede aparecer en un nombre de campana ni
+   sobrevivir a `fold()`: con un `|` o un `-`, una campana que lo llevara en el
+   nombre podria colisionar con la clave de otra.
+   ─────────────────────────────────────────────────────────────────────────── */
+const PUB_SEP_PAIS = '\u0000';
+function pubClaveAsig(campana, pais){
   const k = fold(String(campana||'')).trim();
+  const p = String(pais||'').trim();
+  return (p && p!=='??') ? (k + PUB_SEP_PAIS + p) : k;
+}
+function pubAsignacion(campana, pais){
+  const A = DB.ppcAsig || {};
+  if(pais && pais!=='??'){
+    const esp = A[pubClaveAsig(campana, pais)];
+    if(esp) return esp;
+  }
+  return A[pubClaveAsig(campana)] || null;
+}
+function pubAsignar(campana, valor, pais){
+  if(!DB.ppcAsig) DB.ppcAsig = {};
+  const k = pubClaveAsig(campana, pais);
   const v = String(valor==null?'':valor).trim();
   if(!v) delete DB.ppcAsig[k];
   else if(v==='*') DB.ppcAsig[k] = {reparto:true, fecha:iso(today())};
@@ -904,16 +939,26 @@ function pubPrefijosDe(a){ return !a ? [] : (a.prefijos || (a.grupo ? [a.grupo] 
 function pubPpcPorCampana(){
   const A = pubAdStats();
   const m = {};
-  /* Por país también: con el filtro de un país, solo cuenta lo que esa
-     campaña gastó EN ese país. Sin país (informes antiguos), se guarda aparte
-     como «??» y con filtro no se imputa a nadie. */
+  /* BLOQUE 2 · UNA FILA POR CAMPANA Y PAIS cuando el informe trae pais.
+     Antes era una fila por campana, con el gasto de todos los paises junto y
+     un solo destino posible. Ahora cada pais tiene su fila y su asignacion.
+
+     `porPais` se conserva con una sola entrada -la del pais de la fila- para
+     que el imputador de `src/12-datos.js` siga funcionando sin tocarlo: con
+     filtro de pais toma `porPais[pais]`, y sin filtro toma `gasto`. La SUMA no
+     cambia, solo se reparte en mas filas; lo que cambia es quien se la lleva.
+
+     Sin pais (informes antiguos) la fila sigue siendo una sola, con pais «??»,
+     y con filtro no se imputa a nadie: igual que antes. */
   A.terms.forEach(t=>{ if(t.fueraDePeriodo) return;
-    const k = fold(String(t.campaign||'')).trim();
-    const c = m[k] || (m[k] = {campana:t.campaign, gasto:0, porPais:{}});
-    c.gasto += t.spend;
+    const nombre = String(t.campaign||'');
     const pc = pubPais(t.country) || '??';
+    const k = fold(nombre).trim() + '\u0000' + pc;
+    const c = m[k] || (m[k] = {campana:nombre, pais:pc, gasto:0, porPais:{}});
+    c.gasto += t.spend;
     c.porPais[pc] = (c.porPais[pc]||0) + t.spend; });
-  return Object.keys(m).map(k=>{ const c = m[k]; const a = (DB.ppcAsig||{})[k] || null;
+  return Object.keys(m).map(k=>{ const c = m[k];
+    const a = pubAsignacion(c.campana, c.pais);
     c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
     c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
     return c; }).sort((a,b)=>b.gasto-a.gasto);
@@ -1141,20 +1186,28 @@ function pubRenderPublicidad(){
 
   {
     const C = pubPpcPorCampana();
-    tbl('pubAsigTable','<tr><th>Campaña</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
-      (C.length ? C.slice(0,80).map(c=>{
+    tbl('pubAsigTable','<tr><th>Campaña</th><th>País</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
+      (C.length ? C.slice(0,120).map(c=>{
         const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
         const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
           (c.skus.length && c.skus.length<=6 ? ': '+esc(c.skus.join(', ')) : '')+(c.skus.length===0?' · ningún SKU empieza así':'')+'</span>'
           : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : '');
-        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong></td><td class="num">'+fmt(c.gasto)+'</td>'+
+        /* BLOQUE 2 · el pais viaja en el `data-pais`, y de ahi a `pubAsignar`.
+           Sin esto, escribir en la fila de Alemania guardaria la clave global y
+           reasignaria tambien Espana. «??» = informe sin pais: la clave se
+           queda global, que es lo unico que se puede saber de el. */
+        const dp = (c.pais && c.pais!=='??') ? c.pais : '';
+        const etiqPais = (c.pais && c.pais!=='??') ? esc(c.pais)
+          : '<span class="mut" title="El informe no trae país: la asignación vale para toda la campaña">sin país</span>';
+        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong></td><td>'+etiqPais+'</td><td class="num">'+fmt(c.gasto)+'</td>'+
           '<td><input type="text" style="width:170px" placeholder="FBANS · FBA011, FBA012 · *" value="'+esc(val)+'" '+
-          'data-campana="'+esc(c.campana)+'" onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value)">'+cuantos+'</td>'+
+          'data-campana="'+esc(c.campana)+'" data-pais="'+esc(dp)+'" '+
+          'onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value,this.getAttribute(\'data-pais\'))">'+cuantos+'</td>'+
           '<td>'+(c.sugerencia ? '<span class="mut">'+esc(c.sugerencia.prefijos.join(', '))+' por '+esc(c.sugerencia.por)+'</span> '+
-            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
-            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'))">confirmar</button>'
+            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pais="'+esc(dp)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
+            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'),this.getAttribute(\'data-pais\'))">confirmar</button>'
             : (c.asig ? '<span class="mut">confirmado el '+esc(c.asig.fecha||'')+'</span>' : '<span class="mut">—</span>'))+'</td></tr>';
-      }).join('') : '<tr><td colspan="4" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
+      }).join('') : '<tr><td colspan="5" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
     const an = document.getElementById('pubAsigNota');
     if(an){
       const tot = C.reduce((a,c)=>a+c.gasto,0), asig = C.filter(c=>c.skus.length).reduce((a,c)=>a+c.gasto,0);

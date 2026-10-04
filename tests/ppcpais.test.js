@@ -235,8 +235,15 @@ const n2 = x => typeof x==='number' ? x.toFixed(2) : String(x);
        Filtro IT: 60 + 30 × 60/90 = 80,00 €   (antes 120,00 €)
        40 + 80 = 120: la suma de los países es el total.
      Asignación general FBANS e Italia FBASPB:
-       ES imputa sus 30 € a FBANS0101 (la parte sin país no tiene país que la
-       asigne y se reparte): FBANS0101 lleva los 40,00 €.
+       ES imputa a FBANS0101 sus 30 € y también los 10 € de la parte sin país
+       que le tocan, porque esa parte es de la misma campaña y lleva su
+       asignación general: 40,00 € imputados. EXPECTATIVA CAMBIADA EL 4-10-2026
+       (antes «30 imputados»: la parte sin país caía en el reparto por ingreso
+       y, con otro producto vendiendo en España, se lo llevaba un producto que
+       la campaña no anuncia; ver T7 en revision1004.test.js).
+       IT: la parte sin país va a la asignación de Italia (FBASPB): 60 + 20 =
+       80,00 € imputados (cuarta ronda del 4-10-2026; antes iba a la general,
+       FBANS, que no vende en Italia, y se repartía: ver T9).
        IT imputa 60 € a FBASPB0101 y reparte 20 €: FBASPB0101 lleva 80,00 €. */
   const h6 = await ev(`(()=>{ DB.products=[{id:'a',sku:'FBANS0101',name:'x',cogs:2,freight:0,fba:2,referral:15,price:25,channel:'FBA',lots:[]},
       {id:'c',sku:'FBASPB0101',name:'y',cogs:2,freight:0,fba:2,referral:15,price:20,channel:'FBA',lots:[]}];
@@ -258,9 +265,9 @@ const n2 = x => typeof x==='number' ? x.toFixed(2) : String(x);
     !h6.__err && near(h6.ES.ppc,40), h6.__err || n2(h6.ES.ppc));
   check('H6 · filtro IT: 80,00 €, y ES + IT = 120,00 €', !h6.__err && near(h6.IT.ppc,80) && near(h6.ES.ppc+h6.IT.ppc,120),
     h6.__err || n2(h6.IT.ppc));
-  check('H6 · ES: FBANS0101 lleva 40,00 € (30 imputados)', !h6.__err && near(h6.ES.o.FBANS0101,40) && near(h6.ES.imp,30),
+  check('H6 · ES: FBANS0101 lleva 40,00 €, los 40 imputados por su campaña (antes 30)', !h6.__err && near(h6.ES.o.FBANS0101,40) && near(h6.ES.imp,40),
     h6.__err || (n2(h6.ES.o.FBANS0101)+' · imputado '+n2(h6.ES.imp)));
-  check('H6 · IT: FBASPB0101 lleva 80,00 € (60 imputados)', !h6.__err && near(h6.IT.o.FBASPB0101,80) && near(h6.IT.imp,60),
+  check('H6 · IT: FBASPB0101 lleva 80,00 €, los 80 imputados por su campaña de Italia (antes 60)', !h6.__err && near(h6.IT.o.FBASPB0101,80) && near(h6.IT.imp,80),
     h6.__err || (n2(h6.IT.o.FBASPB0101)+' · imputado '+n2(h6.IT.imp)));
 
   console.log('\n=== SEGUNDA REVISIÓN · TARDE DEL 3-10-2026 ===');
@@ -360,11 +367,20 @@ const n2 = x => typeof x==='number' ? x.toFixed(2) : String(x);
   check('E2 · fuera del periodo con una fila sin fecha: ES 5,00 · IT 60,00 (antes 65 · 0)',
     !r2b.__err && near(r2b.ALL.ppc,65) && near(r2b.ES.ppc,5) && near(r2b.IT.ppc,60), r2b.__err || [r2b.ALL.ppc,r2b.ES.ppc,r2b.IT.ppc].map(n2).join(' · '));
   /* E3 · Signos mezclados: ES +100, IT −90 (abono), sin país +50, todo hoy.
-     60 € de un día, estirados un día más a su ritmo: 120. Una proporción con un país negativo no significa nada: no se
-     reparte y se dice. Antes: ES 1.200 · IT −1.080. */
+     60 € de un día, estirados un día más a su ritmo: 120.
+     EXPECTATIVA CAMBIADA EL 4-10-2026. Esta prueba fijaba que, con un país en
+     negativo, no se reparte y cada país carga con el gasto de todos. Eso hace
+     que la suma de los países sea varias veces el total (la revisión del 4-10
+     lo midió: ES 80 y DE 80 sobre un total de 80). Ahora el país del abono
+     queda en cero y lo que sobra del abono se descuenta del resto en
+     proporción a su gasto:
+       IT = 0 · ES = 100 − 90 = 10, más los 50 sin país (todo lo conocido es
+       ES) = 60 de 60 → ES = 120 · ES + IT = 120 = «Todos».
+     Antes de la #19: ES 1.200 · IT −1.080. */
   const r3b = await ev(`__pais(${JSON.stringify([fila('A','España',0,100), fila('B','Italia',0,-90), fila('C',null,0,50)])})`);
-  check('E3 · con un abono que deja un país en negativo, no se reparte: ES = el total, 120,00, y marcado «de todos» (antes 1.200)',
-    !r3b.__err && near(r3b.ALL.ppc,120) && near(r3b.ES.ppc,120) && r3b.ES.sinDato===true, r3b.__err || (n2(r3b.ES.ppc)+' · '+r3b.ES.sinDato));
+  check('E3 · con un abono que deja un país en negativo: IT 0,00 · ES 120,00 · la suma es el total (antes IT cargaba también 120)',
+    !r3b.__err && near(r3b.ALL.ppc,120) && near(r3b.ES.ppc,120) && near(r3b.IT.ppc,0) && r3b.ES.sinDato===false,
+    r3b.__err || ('ES '+n2(r3b.ES.ppc)+' · IT '+n2(r3b.IT.ppc)+' · sinDato '+r3b.ES.sinDato));
   /* E4 · Abono con término. España, 15 días (hace 14 a hoy): «A» 10 €/día
      (150 €) asignada a FBANS, «B» −6 €/día (−90 €). Observado 60; los otros
      15 días se extrapolan a 4 €/día: 60. ppc = 120. Factor 120/60 = 2:

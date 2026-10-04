@@ -327,19 +327,55 @@ function pubRenombradas(rn, V){
      3-10-2026). Día a día y país a país, se juntan todas las campañas de las
      parejas, se suma lo que cuenta cada informe, y lo que puede sobrar es todo
      menos lo del informe que más cuenta: dentro de un informe no hay duplicado. */
+  /* Día a día, y dentro de cada día POR GRUPO DE CAMPAÑAS UNIDAS POR UNA
+     PAREJA. Una vieja sin país que casa con una nueva de ES y otra de IT del
+     mismo informe forma un solo grupo y sobra una vez. Dos renombres de países
+     distintos son dos grupos: juntarlos sumaba lo que cada informe contaba de
+     los dos países y, si los informes daban cifras distintas, el titular salía
+     con el doble de lo que sumaban sus propias parejas (revisión del
+     4-10-2026: «hasta 40 €» con dos parejas de 10). */
   const porDia = {};
-  /* Por día, sin separar por país: una vieja sin país que casa con una
-     nueva de ES y otra de IT del mismo informe sobra una sola vez. Con dos
-     renombres de países distintos el mismo día, cada informe suma lo suyo y
-     el resultado es el mismo que contarlos aparte. */
-  out.forEach(r=>r.diasLista.forEach(d=>{ const kd = d;
-    const o = porDia[kd] || (porDia[kd] = {d, k:{}}); o.k[r.ka] = 1; o.k[r.kb] = 1; }));
+  out.forEach(r=>r.diasLista.forEach(d=>{
+    const o = porDia[d] || (porDia[d] = {d, padre:{}, pares:[]});
+    o.pares.push([r.ka, r.kb]);
+    const raiz = k=>{ while(o.padre[k]!==k) k = o.padre[k] = o.padre[o.padre[k]]; return k; };
+    [r.ka, r.kb].forEach(k=>{ if(!(k in o.padre)) o.padre[k] = k; });
+    const x = raiz(r.ka), y = raiz(r.kb); if(x!==y) o.padre[x] = y; }));
   let total = 0, totalPeriodo = 0;
-  Object.keys(porDia).forEach(kd=>{ const o = porDia[kd], fich = {};
-    Object.keys(o.k).forEach(k=>{ const fid = (rn.dueno[k]||{})[o.d] || k;
-      fich[fid] = (fich[fid]||0) + (rn.contado[k][o.d]||0); });
-    const vals = Object.keys(fich).map(x=>fich[x]);
-    const sobra = vals.reduce((a,v)=>a+v,0) - Math.max.apply(null, vals);
+  Object.keys(porDia).forEach(kd=>{ const o = porDia[kd], grupos = {};
+    const raiz = k=>{ while(o.padre[k]!==k) k = o.padre[k]; return k; };
+    Object.keys(o.padre).forEach(k=>{ const g = grupos[raiz(k)] || (grupos[raiz(k)] = {});
+      const fid = (rn.dueno[k]||{})[o.d] || k;
+      g[fid] = (g[fid]||0) + (rn.contado[k][o.d]||0); });
+    /* CUÁNTO PUEDE SOBRAR, como cota que NO SE QUEDA CORTA. Cuatro rondas de
+       revisión el 4-10-2026 lo dejaron así, después de dos cotas que fallaban
+       en sentidos contrarios:
+         · «suma de los mínimos de las parejas» se quedaba corta en una cadena
+           A–B–C cuyo eslabón del medio cuenta menos (un informe de resumen):
+           200 € de aviso con un duplicado de 300 a 400;
+         · «todo menos el informe que más cuenta» se pasaba cuando una vieja
+           sin país casa con una nueva de ES y otra de IT: 110 € donde como
+           mucho sobraban 10, porque el gasto de España y el de Italia no
+           pueden ser el mismo euro.
+       Lo único seguro es un SUELO del gasto real del grupo ese día, y sobra
+       como mucho lo contado menos ese suelo. El gasto real es al menos:
+         · lo que cuenta el informe que más cuenta (dentro de un informe no
+           hay duplicado);
+         · la suma, país a país, de la campaña que más cuenta en cada país
+           (dos países no son el mismo gasto);
+         · lo que cuenta cualquier campaña sin país.
+       Puede salir holgado (dos campañas de una cadena que no eran la misma) y
+       entonces el titular supera la suma de las parejas; la pantalla lo dice.
+       Corto, no. */
+    let sobra = 0;
+    Object.keys(grupos).forEach(gk=>{ const vals = Object.keys(grupos[gk]).map(x=>grupos[gk][x]);
+      const claves = Object.keys(o.padre).filter(k=>raiz(k)===gk);
+      const sumaTodo = vals.reduce((a,v)=>a+v,0);
+      const maxPais = {}; let maxSinPais = 0;
+      claves.forEach(k=>{ const v = rn.contado[k][o.d]||0, pk = pais(k);
+        if(pk) maxPais[pk] = Math.max(maxPais[pk]||0, v); else maxSinPais = Math.max(maxSinPais, v); });
+      const suelo = Math.max(Math.max.apply(null, vals), Object.keys(maxPais).reduce((a,x)=>a+maxPais[x],0), maxSinPais);
+      sobra += Math.max(0, sumaTodo - suelo); });
     total += sobra; const dd = pubFecha(o.d);
     if(dd && dd>=V.ini && dd<=V.fin) totalPeriodo += sobra; });
   out.forEach(r=>{ delete r.diasLista; delete r.ka; delete r.kb; });
@@ -371,7 +407,8 @@ function pubRenombradas(rn, V){
    Las ventas atribuidas, los clics, las impresiones y los pedidos se prorratean
    CON EL MISMO factor que el gasto. Prorratear solo el gasto dispararía el ACOS
    de cada término prorrateado y la pantalla mandaría bajar pujas rentables. */
-function pubAdStats(){
+function pubAdStats(){ return memoRepintado('pubAdStats', pubAdStatsCalc); }
+function pubAdStatsCalc(){
   const filas = pubFilas();
   const V = pubVentana();
 
@@ -1077,7 +1114,8 @@ function pubAsignar(campana, valor, pais){
 }
 function pubPrefijosDe(a){ return !a ? [] : (a.prefijos || (a.grupo ? [a.grupo] : [])); }
 /* Gasto OBSERVADO en el periodo por campaña (sin extrapolar), con su destino. */
-function pubPpcPorCampana(){
+function pubPpcPorCampana(){ return memoRepintado('pubPpcPorCampana', pubPpcPorCampanaCalc); }
+function pubPpcPorCampanaCalc(){
   const A = pubAdStats();
   const m = {};
   /* Por país también: con el filtro de un país, solo cuenta lo que esa
@@ -1261,7 +1299,10 @@ function pubRenderPublicidad(){
          (totP>0.005 ? ', '+fmt(totP,2)+' de ellos en este periodo' : ', nada de ello en este periodo')+'.</strong> '+
          R.slice(0,5).map(r=>'«'+esc(r.a)+'» y «'+esc(r.b)+'»'+(r.pais?' ('+esc(r.pais)+')':'')+': '+num(r.comunes)+
            ' términos en común, '+num(r.dias)+' día'+(r.dias===1?'':'s')+' contados por los dos, hasta '+fmt(r.gasto,2)).join(' · ')+
-         (R.length>5?' · …':'')+'. Ningún informe trae las dos el mismo día, así que el hub las trata como campañas distintas. '+
+         (R.length>5?' · …':'')+'. '+
+         (tot > R.reduce((a,r)=>a+r.gasto,0) + 0.005 ? 'El total pasa de lo que suman las parejas porque, si varias de ellas forman una cadena, '+
+           'la misma campaña puede estar contada en tres informes o más; es el máximo posible, no lo probable. ' : '')+
+         'Ningún informe trae las dos el mismo día, así que el hub las trata como campañas distintas. '+
          'Si es la misma campaña con otro nombre, ese gasto sobra; si son dos campañas que de verdad convivieron, está bien. '+
          'El hub no lo decide por ti: no funde nada.</div>';
     }
@@ -1356,7 +1397,7 @@ function pubRenderPublicidad(){
     const C = pubPpcPorCampana();
     const nomPais = p => p==='??' ? 'sin país' : p;
     tbl('pubAsigTable','<tr><th>Campaña</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
-      (C.length ? C.slice(0,80).map(c=>{
+      (C.length ? C.map(c=>{
         const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
         const pk = c.paisClave || '';
         const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+

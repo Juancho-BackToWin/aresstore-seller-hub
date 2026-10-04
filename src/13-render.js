@@ -688,8 +688,13 @@ function renderRent(){
        trae país, la publicidad ya es la de este mercado. */
     if(countryFilter!=='ALL' && P.ppc>0 && P.ppcPaisSinDato)
       v+='<br><br>Estás filtrando por un solo mercado y '+(P.ppcSource==='diario' ? 'el gasto de publicidad sale del gasto diario de ajustes, que es de toda la cuenta'
+        : P.ppcPaisSinPositivos ? 'en el informe de publicidad ningún país tiene gasto positivo (lo único con país son abonos), así que no hay proporción con la que repartirlo'
         : 'el informe de publicidad no trae país')+': el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
-    else if(countryFilter!=='ALL' && P.ppcPaisRepartido>0.005)
+    else if(countryFilter!=='ALL' && P.ppcPaisAbono>0.005)
+      v+='<br><br>La publicidad es la de este mercado, con un ajuste: en algún país un abono supera el gasto, así que ese país queda en cero y los '+fmt(P.ppcPaisAbono,2)+
+        ' que sobran del abono se descuentan del resto de países en proporción a su gasto. La suma de los países es el total. Es un reparto, no una medición.'+
+        (Math.abs(P.ppcPaisRepartido||0)>0.005 ? ' Además, '+fmt(P.ppcPaisRepartido,2)+' vienen de filas sin país, repartidas en proporción.' : '');
+    else if(countryFilter!=='ALL' && Math.abs(P.ppcPaisRepartido||0)>0.005)
       v+='<br><br>La publicidad es la de este mercado. '+fmt(P.ppcPaisRepartido,2)+' vienen de filas del informe que no dicen país, repartidas en la misma proporción que las que sí lo dicen: es un reparto, no una medición.';
     /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en
        meses de venta cero: convierte el informe en insuficiente. Los gastos
@@ -2159,7 +2164,30 @@ function bootValues(){
   const cs=DB.settings.cash;
   set('cashStart',cs.start); set('cashCycle',cs.cycle); set('cashReserve',cs.reserve); set('cashVat',cs.vat);
 }
+/* CACHÉ DE UN SOLO REPINTADO (4-10-2026). Cada clic repinta las diez
+   pantallas, y con un año de informes de términos cargado eso calculaba la
+   publicidad decenas de veces con los mismos datos: decenas de segundos por
+   clic, y bastante más en un móvil. La caché nace al
+   empezar `refreshAll()` y muere al terminar, así que nada de lo que se cambie
+   después (un informe, una asignación, el periodo) puede leer un resultado
+   viejo. Dentro, la clave lleva el periodo, el país y las asignaciones, porque
+   algunas pantallas los cambian un momento para calcular otra columna.
+   Verificado pintando todas las pantallas con caché y sin ella: texto
+   idéntico (tests/revision1004.test.js, T11). */
+var MEMO_REPINTADO = null;
+function memoRepintado(nombre, f){
+  if(!MEMO_REPINTADO) return f();
+  const k = nombre+'|'+(typeof periodDays!=='undefined'?periodDays:'')+'|'+(typeof countryFilter!=='undefined'?countryFilter:'')+
+    '|'+JSON.stringify(DB.ppcAsig||{});
+  if(!(k in MEMO_REPINTADO)) MEMO_REPINTADO[k] = f();
+  return MEMO_REPINTADO[k];
+}
 function refreshAll(){
+  const dueno = !MEMO_REPINTADO;
+  if(dueno && !(typeof window!=='undefined' && window.__SIN_MEMO)) MEMO_REPINTADO = {};
+  try{ refreshAllSinMemo(); } finally { if(dueno) MEMO_REPINTADO = null; }
+}
+function refreshAllSinMemo(){
   try{ renderPanel(); }catch(e){ console.warn('panel',e); }
   try{ renderDatos(); }catch(e){ console.warn('datos',e); }
   try{ renderHistorico(); }catch(e){ console.warn('hist',e); }

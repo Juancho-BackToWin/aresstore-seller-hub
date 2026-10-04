@@ -217,7 +217,24 @@ function pubCobertura(filas){
    país («España», «Alemania», «Países Bajos»). Se resuelven aquí primero. */
 const PUB_PAISES_ES = {'espana':'ES','alemania':'DE','francia':'FR','italia':'IT','paises bajos':'NL',
   'belgica':'BE','polonia':'PL','suecia':'SE','reino unido':'GB','irlanda':'IE','austria':'AT',
-  'portugal':'PT','republica checa':'CZ','chequia':'CZ','turquia':'TR','eslovaquia':'SK'};
+  'portugal':'PT','republica checa':'CZ','chequia':'CZ','turquia':'TR','eslovaquia':'SK',
+  /* Los mismos, como los escribe la consola en alemán, francés, italiano e
+     inglés: un nombre que no se reconoce era un «país» propio que ningún
+     filtro elegía, y ese país salía con 0 € de publicidad (revisión de la
+     tarde del 3-10-2026). */
+  'deutschland':'DE','allemagne':'DE','germania':'DE','germany':'DE',
+  'spanien':'ES','espagne':'ES','spagna':'ES','spain':'ES',
+  'frankreich':'FR','france':'FR','frankrijk':'FR',
+  'italien':'IT','italie':'IT','italy':'IT',
+  'niederlande':'NL','pays-bas':'NL','pays bas':'NL','paesi bassi':'NL','netherlands':'NL','nederland':'NL',
+  'belgien':'BE','belgique':'BE','belgio':'BE','belgium':'BE','belgie':'BE',
+  'polen':'PL','pologne':'PL','polonia':'PL','poland':'PL',
+  'schweden':'SE','suede':'SE','svezia':'SE','sweden':'SE',
+  'irland':'IE','irlande':'IE','ireland':'IE','vereinigtes konigreich':'GB','royaume-uni':'GB','regno unito':'GB','united kingdom':'GB'};
+/* Para repartir dinero por país: un código de dos letras o «??». Lo que no
+   se reconoce como país va con lo que no trae país, que se reparte en
+   proporción, en vez de quedarse en un país que nadie puede filtrar. */
+function pubPaisCodigo(v){ const p = pubPais(v); return /^[A-Z]{2}$/.test(p) ? p : '??'; }
 function pubPais(v){
   if(!v) return '';
   const f = fold(String(v)).replace(/\s+/g,' ').trim();
@@ -247,6 +264,87 @@ function pubDuenoDia(cob, kc, kp, dia, cache){
        (fino(c)===fino(mejor) && (c.filas>mejor.filas || (c.filas===mejor.filas && nf(c)>nf(mejor))))))) mejor = c;
   }
   return (cache[k] = mejor ? mejor.fid : null);
+}
+
+/* ── CAMPAÑAS RENOMBRADAS ENTRE INFORMES ──────────────────────────────────────
+
+   EL FALLO. La regla de los solapes decide, para cada campaña y cada día, qué
+   informe manda, y reconoce la campaña por su NOMBRE. Si entre dos descargas se
+   renombró una campaña («NS EXACTA» pasa a «NS EXACTA 2026»), el informe viejo
+   trae un nombre y el nuevo el otro: ninguno «trae» la campaña del otro, cada
+   uno manda sobre la suya, y los días que cubren los dos se cuentan dos veces.
+   Con el semáforo en verde, porque para el hub son dos campañas.
+
+   LO QUE HACE. No funde nada: dos campañas que se parecen pueden ser dos
+   campañas de verdad, y fundirlas a ciegas borraría gasto real. Lo AVISA, con
+   el gasto en juego, cuando se dan las cuatro cosas a la vez:
+   · mismo país (o alguna de las dos sin país);
+   · las dos cuentan gasto el mismo día;
+   · ningún fichero trae las dos ese mismo día —si uno las trae juntas, estaban
+     vivas a la vez: son dos campañas—;
+   · se parecen de verdad: al menos `PUB_RN_MIN_TERMINOS` términos en común y la
+     mitad de los de la más pequeña; y si las dos traen grupos de anuncios,
+     comparten al menos uno.
+
+   EL GASTO EN JUEGO es, día a día, el menor de los dos gastos contados. Si es
+   un renombre, el informe repite lo mismo y eso es lo que sobra; si las cifras
+   difieren, lo que sobra es como mucho eso. Por eso la pantalla dice «hasta». */
+const PUB_RN_MIN_TERMINOS = 3;
+function pubRenombradas(rn, V){
+  const ks = Object.keys(rn.contado);
+  const out = [];
+  /* La clave es «campaña|país» y el nombre puede llevar «|» («SP | NS | EXACTA»):
+     se parte por la ÚLTIMA barra. */
+  const pais = k=>k.slice(k.lastIndexOf('|')+1), camp = k=>k.slice(0, k.lastIndexOf('|'));
+  for(let i=0;i<ks.length;i++) for(let j=i+1;j<ks.length;j++){
+    const a = ks[i], b = ks[j];
+    if(camp(a)===camp(b)) continue;
+    const pa = pais(a), pb = pais(b);
+    if(pa && pb && pa!==pb) continue;
+    const ca = rn.contado[a], cb = rn.contado[b];
+    const dias = Object.keys(ca).filter(d=>ca[d]>0 && cb[d]>0);
+    if(!dias.length) continue;
+    /* ¿Algún fichero las trae juntas en uno de esos días? */
+    const fa = rn.diasFich[a]||{}, fb = rn.diasFich[b]||{};
+    const juntas = Object.keys(fa).some(fid=>fb[fid] && dias.some(d=>fa[fid][d] && fb[fid][d]));
+    if(juntas) continue;
+    const ta = Object.keys(rn.terms[a]||{}), tb = rn.terms[b]||{};
+    const comunes = ta.filter(t=>tb[t]).length;
+    const menor = Math.min(ta.length, Object.keys(tb).length);
+    if(comunes < PUB_RN_MIN_TERMINOS || comunes*2 < menor) continue;
+    const ga = rn.grupos[a], gb = rn.grupos[b];
+    if(ga && gb && !Object.keys(ga).some(g=>gb[g])) continue;
+    let gasto = 0, gastoPeriodo = 0, diasPeriodo = 0;
+    dias.forEach(d=>{ const g = Math.min(ca[d], cb[d]); gasto += g;
+      const dd = pubFecha(d);
+      if(dd && dd>=V.ini && dd<=V.fin){ gastoPeriodo += g; diasPeriodo++; } });
+    out.push({a: rn.nombre[a], b: rn.nombre[b], ka:a, kb:b, pais: pa || pb || '', diasLista: dias, dias: dias.length,
+      diasPeriodo, gasto, gastoPeriodo, comunes});
+  }
+  out.sort((x,y)=>y.gasto-x.gasto);
+  /* EL TOTAL NO ES LA SUMA DE LAS PAREJAS. Una campaña vieja que casa con dos
+     nuevas del mismo informe saldría dos veces (revisión de la tarde del
+     3-10-2026). Día a día y país a país, se juntan todas las campañas de las
+     parejas, se suma lo que cuenta cada informe, y lo que puede sobrar es todo
+     menos lo del informe que más cuenta: dentro de un informe no hay duplicado. */
+  const porDia = {};
+  /* Por día, sin separar por país: una vieja sin país que casa con una
+     nueva de ES y otra de IT del mismo informe sobra una sola vez. Con dos
+     renombres de países distintos el mismo día, cada informe suma lo suyo y
+     el resultado es el mismo que contarlos aparte. */
+  out.forEach(r=>r.diasLista.forEach(d=>{ const kd = d;
+    const o = porDia[kd] || (porDia[kd] = {d, k:{}}); o.k[r.ka] = 1; o.k[r.kb] = 1; }));
+  let total = 0, totalPeriodo = 0;
+  Object.keys(porDia).forEach(kd=>{ const o = porDia[kd], fich = {};
+    Object.keys(o.k).forEach(k=>{ const fid = (rn.dueno[k]||{})[o.d] || k;
+      fich[fid] = (fich[fid]||0) + (rn.contado[k][o.d]||0); });
+    const vals = Object.keys(fich).map(x=>fich[x]);
+    const sobra = vals.reduce((a,v)=>a+v,0) - Math.max.apply(null, vals);
+    total += sobra; const dd = pubFecha(o.d);
+    if(dd && dd>=V.ini && dd<=V.fin) totalPeriodo += sobra; });
+  out.forEach(r=>{ delete r.diasLista; delete r.ka; delete r.kb; });
+  out.total = total; out.totalPeriodo = totalPeriodo;
+  return out;
 }
 
 /* ── Gasto y desperdicio publicitario, fila a fila y día a día ─────────────────
@@ -293,6 +391,21 @@ function pubAdStats(){
   let gastoSolape=0, ventasSolape=0, filasSolape=0;
   const diasSolape = {};               // días de calendario en que dos informes se pisan
   const gastoDia = {}, ventasDia = {}; // con varios informes: lo que cuenta cada día, ya sin solapes
+  /* Para detectar campañas renombradas (ver `pubRenombradas`): por campaña y
+     país, lo que cuenta cada día, qué días trae cada fichero, sus términos y
+     sus grupos de anuncios. Solo con varios informes. */
+  const rn = {contado:{}, dueno:{}, diasFich:{}, terms:{}, grupos:{}, nombre:{}};
+  /* El gasto de TODAS las filas por país, con término o sin él: de aquí sale
+     la cuota de cada país en el P&L con filtro. `porPaisObs` con el mismo
+     recorte que el gasto observado; `porPaisInforme` sin recortar, para cuando
+     el informe no toca el periodo y todo lo imputado es extrapolado. */
+  const porPaisObs = {}, porPaisInforme = {};
+  /* Y por sus tres componentes, porque se reparten distinto: lo observado
+     (filas con fecha, recortadas al periodo), lo que no tiene fecha (entero) y
+     lo EXTRAPOLADO, que sale al ritmo de un tramo concreto y por tanto con la
+     mezcla de países de ESE tramo, no la de lo observado (tercera revisión de
+     la tarde del 3-10-2026: un ritmo italiano acababa cargado a España). */
+  const porPaisFechadoObs = {}, porPaisSinFecha = {}, porPaisFechadoBruto = {}, gastoDiaPais = {};
 
   filas.forEach(f=>{
     /* UNA LIBRA NO ES UN EURO, Y SUMARLAS ES UN ACOS FALSO HACIA ARRIBA.
@@ -315,6 +428,13 @@ function pubAdStats(){
       const kc = fold(f.campaign), kp = pubPais(f.country);
       const mios = f.ficheros;
       diasPropios = [];
+      const kr = kc+'|'+kp;
+      rn.nombre[kr] = f.campaign;
+      if(f.term){ (rn.terms[kr] || (rn.terms[kr] = {}))[fold(f.term)] = 1; }
+      if(f.adgroup){ (rn.grupos[kr] || (rn.grupos[kr] = {}))[fold(f.adgroup)] = 1; }
+      const df = rn.diasFich[kr] || (rn.diasFich[kr] = {});
+      mios.forEach(fid=>{ const x = df[fid] || (df[fid] = {});
+        for(let q=0;q<f.dias;q++) x[iso(addDays(f.desde,q))] = 1; });
       for(let k=0;k<f.dias;k++){
         const dia = addDays(f.desde, k);
         const dueno = pubDuenoDia(cob, kc, kp, dia, cacheDueno);
@@ -322,6 +442,11 @@ function pubAdStats(){
           diasPropios.push(dia);
           const kd = iso(dia);
           gastoDia[kd] = (gastoDia[kd]||0) + f.spend/f.dias;
+          const cd = rn.contado[kr] || (rn.contado[kr] = {});
+          cd[kd] = (cd[kd]||0) + f.spend/f.dias;
+          (rn.dueno[kr] || (rn.dueno[kr] = {}))[kd] = dueno===null ? mios[0] : dueno;
+          { const pc = pubPaisCodigo(f.country), gp = gastoDiaPais[kd] || (gastoDiaPais[kd] = {});
+            gp[pc] = (gp[pc]||0) + f.spend/f.dias; }
           ventasDia[kd] = (ventasDia[kd]||0) + f.sales/f.dias;
         }
         else diasSolape[iso(dia)] = 1;
@@ -359,15 +484,26 @@ function pubAdStats(){
       if(f.dias>1 && dentro>0) gastoProrrateado += f.spend*factor;
     }
 
+    { const pc = pubPaisCodigo(f.country);
+      porPaisObs[pc] = (porPaisObs[pc]||0) + f.spend*factor;
+      if(f.desde){ porPaisFechadoObs[pc] = (porPaisFechadoObs[pc]||0) + f.spend*factor;
+                   porPaisFechadoBruto[pc] = (porPaisFechadoBruto[pc]||0) + f.spend*fBruto; }
+      else porPaisSinFecha[pc] = (porPaisSinFecha[pc]||0) + f.spend;
+      porPaisInforme[pc] = (porPaisInforme[pc]||0) + f.spend*fBruto; }
     if(!f.term) return;
     const k = fold(f.term)+'|'+fold(f.campaign);
     if(!grupos[k]) grupos[k] = {term:f.term, campaign:f.campaign, adgroup:f.adgroup,
-      country:f.country, match:f.match, spend:0, sales:0, orders:0, clicks:0, impr:0,
+      country:f.country, match:f.match, spend:0, sales:0, orders:0, clicks:0, impr:0, porPais:{},
       spendTot:0, salesTot:0, ordersTot:0, clicksTot:0, imprTot:0, fueraDePeriodo:false,
       filas:0, agregadas:0, prorrateado:0, desde:null, hasta:null, diasEnPeriodo:0, sinFecha:0};
     const g = grupos[k];
     g.filas++;
     g.spend += f.spend*factor; g.sales += f.sales*factor;
+    /* El mismo término de la misma campaña puede venir de dos países (el
+       término de marca, un ASIN): el grupo es uno, pero su gasto se guarda por
+       país, para que «Campañas → producto» no cargue a un país lo del otro
+       (revisión adversarial de la tarde del 3-10-2026). */
+    { const pc = pubPaisCodigo(f.country); g.porPais[pc] = (g.porPais[pc]||0) + f.spend*factor; }
     g.orders += f.orders*factor; g.clicks += f.clicks*factor; g.impr += f.impr*factor;
     /* Las mismas cifras SIN recortar. Solo se usan si el informe entero no toca
        el periodo: ver `fueraDePeriodo`, más abajo. */
@@ -390,10 +526,13 @@ function pubAdStats(){
      quedaría corta y el beneficio, optimista. Con un solo informe es lo mismo
      que antes. */
   let adDays = 0, diasTramo = 0, gastoTramo = 0, ventasTramo = 0, tramoIni = null, tramoFin = null;
+  const tramoPais = {};
+  const sumaPais = kd=>{ const gp = gastoDiaPais[kd]||{}; Object.keys(gp).forEach(pc=>tramoPais[pc] = (tramoPais[pc]||0) + gp[pc]); };
   if(d0&&d1){
     if(nFicheros<=1){
       adDays = diasTramo = Math.max(1, daysBetween(d0,d1)+1);
       gastoTramo = spendBruto-spendSinFecha; ventasTramo = salesBruto-salesSinFecha;
+      Object.keys(porPaisFechadoBruto).forEach(pc=>tramoPais[pc] = porPaisFechadoBruto[pc]);
       tramoIni = d0; tramoFin = d1;
     } else {
       const dias = {};
@@ -413,11 +552,11 @@ function pubAdStats(){
          saltando los huecos, hasta tener al menos `PUB_MUESTRA_RITMO` días
          con informe (o todos los que haya). */
       let k = d1; tramoFin = d1;
-      while(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
+      while(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0; sumaPais(iso(k));
         ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; k = addDays(k,-1); }
       const objetivo = Math.min(PUB_MUESTRA_RITMO, adDays);
       while(diasTramo < objetivo && k >= d0){
-        if(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0;
+        if(dias[iso(k)]){ diasTramo++; gastoTramo += gastoDia[iso(k)]||0; sumaPais(iso(k));
           ventasTramo += ventasDia[iso(k)]||0; tramoIni = k; }
         k = addDays(k,-1);
       }
@@ -439,6 +578,7 @@ function pubAdStats(){
     campanasFuera = Object.keys(ultimaFecha).filter(kc=>!ult.camp[kc] && ultimaFecha[kc].d>=limite)
       .map(kc=>ultimaFecha[kc].nombre);
   }
+  const renombradas = nFicheros>1 ? pubRenombradas(rn, V) : [];
   /* Ritmo diario, para los días del periodo que el informe no cubre. */
   const ritmoGasto  = diasTramo ? gastoTramo/diasTramo : 0;
   const ritmoVentas = diasTramo ? ventasTramo/diasTramo : 0;
@@ -463,6 +603,19 @@ function pubAdStats(){
   const diasExtrapolados = adDays ? Math.min(diasPorCubrir, nFicheros>1 ? diasTramo : adDays) : 0;
   const diasSinDato = diasPorCubrir - diasExtrapolados;
   const spendExtra = diasExtrapolados * ritmoGasto;
+  /* Gasto imputado por país = observado + extrapolado con la mezcla del tramo
+     + sin fecha. Suma exactamente `spend`. Si el tramo no tiene mezcla que dar
+     (gasto cero o negativo), lo extrapolado va a «??». */
+  const porPaisGasto = {};
+  const suma = (o,k,v)=>{ o[k] = (o[k]||0) + v; };
+  Object.keys(porPaisFechadoObs).forEach(pc=>suma(porPaisGasto, pc, porPaisFechadoObs[pc]));
+  Object.keys(porPaisSinFecha).forEach(pc=>suma(porPaisGasto, pc, porPaisSinFecha[pc]));
+  if(spendExtra){
+    const tt = Object.keys(tramoPais).reduce((a,pc)=>a+tramoPais[pc],0);
+    const limpio = tt>0 && Object.keys(tramoPais).every(pc=>tramoPais[pc]>=-1e-9);
+    if(limpio) Object.keys(tramoPais).forEach(pc=>suma(porPaisGasto, pc, spendExtra*tramoPais[pc]/tt));
+    else suma(porPaisGasto, '??', spendExtra);
+  }
   const salesExtra = diasExtrapolados * ritmoVentas;
 
   const spend = spendObs + spendExtra + spendSinFecha;
@@ -507,7 +660,7 @@ function pubAdStats(){
     filas: filas.length, filasAgregadas, filasSinFecha, maxDiasFila: maxDias,
     filasOtraDivisa, gastoOtraDivisa, otrasDivisas: Object.keys(otrasDivisas),
     ficheros: nFicheros, filasSolape, gastoSolape, ventasSolape,
-    ritmoDiario: ritmoGasto, diasTramo, tramoIni, tramoFin, campanasFuera,
+    ritmoDiario: ritmoGasto, diasTramo, tramoIni, tramoFin, campanasFuera, renombradas, porPaisObs, porPaisInforme, porPaisGasto,
     diasSolape: Object.keys(diasSolape).length,
     gastoAgregado, gastoProrrateado,
     prorrateoPct: spend>0 ? Math.min(100, (gastoProrrateado+spendExtra)/spend*100) : 0,
@@ -886,15 +1039,38 @@ function pubSugerencia(campana){
     return {grupo:x.pre, prefijos:[x.pre], por:'la palabra «'+x.t+'» ('+x.n+' SKU)'}; }
   return null;
 }
-function pubAsignacion(campana){
-  const a = (DB.ppcAsig||{})[fold(String(campana||'')).trim()];
-  return a || null;
-}
-function pubAsignar(campana, valor){
-  if(!DB.ppcAsig) DB.ppcAsig = {};
+/* CAMPAÑA Y PAÍS. Amazon deja poner el mismo nombre a una campaña en dos
+   mercados, y son dos campañas: «NS EXACTA» en España puede anunciar una línea
+   y en Italia otra. Asignando solo por nombre, la primera decisión valía para
+   las dos (lo dejó dicho el traspaso del 3-10-2026). Ahora:
+   · la clave general sigue siendo el nombre plegado, como siempre: lo ya
+     guardado vale para todos los países, sin migrar nada;
+   · una asignación de un país va en «nombre|ES» y manda sobre la general;
+   · «nombre|ES» = {sinAsignar:true} es «en este país, nada», aunque haya una
+     general: sin eso no habría forma de quitarle a un país una asignación que
+     hereda. */
+function pubClaveAsig(campana, pais){
   const k = fold(String(campana||'')).trim();
+  return pais ? k+'|'+String(pais).toUpperCase() : k;
+}
+function pubAsignacion(campana, pais){
+  const D = DB.ppcAsig||{};
+  if(pais){ const p = D[pubClaveAsig(campana, pais)];
+    if(p) return p.sinAsignar ? null : Object.assign({propia:true, pais:String(pais).toUpperCase()}, p); }
+  const a = D[pubClaveAsig(campana)];
+  return a ? Object.assign({propia:!pais}, a) : null;
+}
+function pubAsignar(campana, valor, pais){
+  if(!DB.ppcAsig) DB.ppcAsig = {};
+  const k = pubClaveAsig(campana, pais);
   const v = String(valor==null?'':valor).trim();
-  if(!v) delete DB.ppcAsig[k];
+  if(!v){
+    /* Vaciar la casilla de un país que hereda la general la deja sin asignar
+       en ese país; vaciar la general, o la propia de un país sin general
+       debajo, la borra. */
+    if(pais && DB.ppcAsig[pubClaveAsig(campana)]) DB.ppcAsig[k] = {sinAsignar:true, fecha:iso(today())};
+    else delete DB.ppcAsig[k];
+  }
   else if(v==='*') DB.ppcAsig[k] = {reparto:true, fecha:iso(today())};
   else DB.ppcAsig[k] = {prefijos:pubPrefijos(v), fecha:iso(today())};
   saveDB(); try{ refreshAll(); }catch(e){}
@@ -911,10 +1087,36 @@ function pubPpcPorCampana(){
     const k = fold(String(t.campaign||'')).trim();
     const c = m[k] || (m[k] = {campana:t.campaign, gasto:0, porPais:{}});
     c.gasto += t.spend;
-    const pc = pubPais(t.country) || '??';
-    c.porPais[pc] = (c.porPais[pc]||0) + t.spend; });
-  return Object.keys(m).map(k=>{ const c = m[k]; const a = (DB.ppcAsig||{})[k] || null;
-    c.asig = a; c.sugerencia = a ? null : pubSugerencia(c.campana);
+    const pp = t.porPais || {}; let suma = 0;
+    Object.keys(pp).forEach(pc=>{ c.porPais[pc] = (c.porPais[pc]||0) + pp[pc]; suma += pp[pc]; });
+    /* Lo que no esté repartido por país (no debería quedar nada) va al país
+       de la fila, como antes. */
+    const resto = t.spend - suma;
+    if(Math.abs(resto)>1e-9){ const pc = pubPaisCodigo(t.country); c.porPais[pc] = (c.porPais[pc]||0) + resto; } });
+  /* Una campaña con gasto en dos países o más sale en una fila por país, cada
+     una con su asignación (la propia del país o, si no la tiene, la general).
+     Con un solo país, una fila, como siempre. La suma de las filas es el gasto
+     de la campaña: ni un céntimo más. */
+  const filas = [];
+  Object.keys(m).forEach(k=>{ const c = m[k];
+    const paises = Object.keys(c.porPais).filter(p=>Math.abs(c.porPais[p])>1e-9);
+    if(paises.length<=1){
+      /* Un solo país en el periodo: manda la asignación propia de ese país si
+         la hay (aunque el periodo corto esconda el otro país), y si no, la
+         general. La casilla escribe donde está lo que enseña. */
+      const p1 = paises[0] && paises[0]!=='??' ? paises[0] : null;
+      const propia = !!(p1 && (DB.ppcAsig||{})[pubClaveAsig(c.campana, p1)]);
+      filas.push(Object.assign(c, {pais:null, paisClave: propia ? p1 : null,
+        asig: propia ? pubAsignacion(c.campana, p1) : pubAsignacion(c.campana)})); return; }
+    paises.forEach(p=>{ const pk = p==='??' ? null : p;
+      const o = {campana:c.campana, pais:p, paisClave:pk, gasto:c.porPais[p], porPais:{}, homonima:paises.length};
+      o.porPais[p] = c.porPais[p];
+      /* Lo que no trae país solo puede llevar la asignación general. */
+      o.asig = pk ? pubAsignacion(c.campana, pk) : pubAsignacion(c.campana);
+      filas.push(o); });
+  });
+  return filas.map(c=>{ const a = c.asig;
+    c.sugerencia = a ? null : pubSugerencia(c.campana);
     c.skus = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
     return c; }).sort((a,b)=>b.gasto-a.gasto);
 }
@@ -1052,6 +1254,17 @@ function pubRenderPublicidad(){
          (A.campanasFuera.length>5?'…':'')+'). Esos días cuentan a cero para ella'+(A.campanasFuera.length===1?'':'s')+
          '. Si se pausó, es correcto; si el informe se pidió filtrado por campaña o por país, falta su gasto.</div>';
     }
+    if(A.renombradas && A.renombradas.length){
+      const R = A.renombradas, tot = R.total, totP = R.totalPeriodo;
+      v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+(R.length===1?'Una campaña parece renombrada':num(R.length)+' parejas de campañas parecen la misma campaña renombrada')+
+         ' entre informes, y sus días comunes se están contando dos veces: hasta '+fmt(tot,2)+' de gasto en todo el histórico'+
+         (totP>0.005 ? ', '+fmt(totP,2)+' de ellos en este periodo' : ', nada de ello en este periodo')+'.</strong> '+
+         R.slice(0,5).map(r=>'«'+esc(r.a)+'» y «'+esc(r.b)+'»'+(r.pais?' ('+esc(r.pais)+')':'')+': '+num(r.comunes)+
+           ' términos en común, '+num(r.dias)+' día'+(r.dias===1?'':'s')+' contados por los dos, hasta '+fmt(r.gasto,2)).join(' · ')+
+         (R.length>5?' · …':'')+'. Ningún informe trae las dos el mismo día, así que el hub las trata como campañas distintas. '+
+         'Si es la misma campaña con otro nombre, ese gasto sobra; si son dos campañas que de verdad convivieron, está bien. '+
+         'El hub no lo decide por ti: no funde nada.</div>';
+    }
     if(A.filasOtraDivisa>0){
       v+='<div class="note-box warn" style="margin:0 0 12px"><strong>'+num(A.filasOtraDivisa)+' fila'+
          (A.filasOtraDivisa===1?'':'s')+' del informe vienen en '+A.otrasDivisas.join(', ')+
@@ -1141,18 +1354,28 @@ function pubRenderPublicidad(){
 
   {
     const C = pubPpcPorCampana();
+    const nomPais = p => p==='??' ? 'sin país' : p;
     tbl('pubAsigTable','<tr><th>Campaña</th><th class="num">Gasto en el periodo</th><th>Prefijos de SKU</th><th>Sugerencia</th></tr>'+
       (C.length ? C.slice(0,80).map(c=>{
         const val = c.asig ? (c.asig.reparto ? '*' : pubPrefijosDe(c.asig).join(', ')) : '';
+        const pk = c.paisClave || '';
         const cuantos = c.asig && !c.asig.reparto ? '<span class="pub-ori">'+c.skus.length+' SKU'+
           (c.skus.length && c.skus.length<=6 ? ': '+esc(c.skus.join(', ')) : '')+(c.skus.length===0?' · ningún SKU empieza así':'')+'</span>'
           : (c.asig && c.asig.reparto ? '<span class="pub-ori">varias · reparto por ingreso</span>' : '');
-        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong></td><td class="num">'+fmt(c.gasto)+'</td>'+
+        const origen = (c.pais==='??' && c.asig) ? '<span class="pub-ori">la general: vale también para los países sin asignación propia</span>'
+          : (c.paisClave && !c.pais) ? '<span class="pub-ori">'+(c.asig ? 'asignada solo para '+esc(c.paisClave) : 'sin asignar en '+esc(c.paisClave)+
+              ' aunque haya una general')+'</span>'
+          : c.pais ? (c.asig ? (c.asig.propia ? '<span class="pub-ori">solo en '+esc(nomPais(c.pais))+'</span>'
+                                                         : '<span class="pub-ori">heredada: vale para todos los países</span>') : '') : '';
+        return '<tr><td class="name"><strong>'+esc(c.campana)+'</strong>'+
+          (c.pais ? '<span class="pub-ori">'+esc(nomPais(c.pais))+' · mismo nombre en '+num(c.homonima)+' países: cada uno se asigna aparte</span>' : '')+
+          '</td><td class="num">'+fmt(c.gasto)+'</td>'+
           '<td><input type="text" style="width:170px" placeholder="FBANS · FBA011, FBA012 · *" value="'+esc(val)+'" '+
-          'data-campana="'+esc(c.campana)+'" onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value)">'+cuantos+'</td>'+
+          'data-campana="'+esc(c.campana)+'" data-pais="'+esc(pk)+'" '+
+          'onchange="pubAsignar(this.getAttribute(\'data-campana\'),this.value,this.getAttribute(\'data-pais\')||null)">'+cuantos+origen+'</td>'+
           '<td>'+(c.sugerencia ? '<span class="mut">'+esc(c.sugerencia.prefijos.join(', '))+' por '+esc(c.sugerencia.por)+'</span> '+
-            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
-            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'))">confirmar</button>'
+            '<button class="btn sm" data-campana="'+esc(c.campana)+'" data-pais="'+esc(pk)+'" data-pre="'+esc(c.sugerencia.prefijos.join(','))+'" '+
+            'onclick="pubAsignar(this.getAttribute(\'data-campana\'),this.getAttribute(\'data-pre\'),this.getAttribute(\'data-pais\')||null)">confirmar</button>'
             : (c.asig ? '<span class="mut">confirmado el '+esc(c.asig.fecha||'')+'</span>' : '<span class="mut">—</span>'))+'</td></tr>';
       }).join('') : '<tr><td colspan="4" class="name mut">Sin gasto de publicidad en el periodo.</td></tr>'));
     const an = document.getElementById('pubAsigNota');

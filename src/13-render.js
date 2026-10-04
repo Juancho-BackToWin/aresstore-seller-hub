@@ -684,8 +684,13 @@ function renderRent(){
         v+=' De ellas, '+num(P.retSinEstado)+' vienen sin estado en el informe, así que doy por perdido su coste de producto: si volvieron vendibles, tu beneficio real es algo mayor que este.';
       v+=' <span class="mut">No está incluida la tasa de procesamiento de devolución, que depende de la categoría y del porcentaje de devoluciones de cada referencia: si Amazon te la cobra, tu beneficio es menor que este.</span>';
     }
-    if(countryFilter!=='ALL' && P.ppc>0)
-      v+='<br><br>Estás filtrando por un solo mercado y el informe de publicidad no trae país: el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
+    /* Solo cuando es verdad: desde la tarde del 3-10-2026, con un informe que
+       trae país, la publicidad ya es la de este mercado. */
+    if(countryFilter!=='ALL' && P.ppc>0 && P.ppcPaisSinDato)
+      v+='<br><br>Estás filtrando por un solo mercado y '+(P.ppcSource==='diario' ? 'el gasto de publicidad sale del gasto diario de ajustes, que es de toda la cuenta'
+        : 'el informe de publicidad no trae país')+': el gasto que ves es el de <strong>todos</strong> los mercados. El margen de este país sale más bajo de lo real.';
+    else if(countryFilter!=='ALL' && P.ppcPaisRepartido>0.005)
+      v+='<br><br>La publicidad es la de este mercado. '+fmt(P.ppcPaisRepartido,2)+' vienen de filas del informe que no dicen país, repartidas en la misma proporción que las que sí lo dicen: es un reparto, no una medición.';
     /* Pedir «12 meses» con un informe de cuatro no convierte los otros ocho en
        meses de venta cero: convierte el informe en insuficiente. Los gastos
        fijos sí se cuentan por los días pedidos, así que el margen sale más bajo

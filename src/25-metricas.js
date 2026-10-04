@@ -217,11 +217,14 @@ function cascada(P){
     hayVat ? '' : 'informe de transacciones sujetas al IVA');
   push('publicidad', 'Publicidad', -P.ppc,
     P.ppcSource==='ninguno' ? (hayVentas ? 'desconocido' : 'medido')
-      : P.ppcSource==='informe' && P.adFactor===1 ? 'medido' : 'estimado',
-    P.ppcSource==='ninguno' ? 'no hay informe de publicidad ni gasto diario puesto'
+      : P.ppcSource==='informe' && P.adFactor===1 && !P.adExtrapolado && !P.ppcPaisSinDato && !(P.ppcPaisRepartido>0.005) ? 'medido' : 'estimado',
+    (P.ppcSource==='ninguno' ? 'no hay informe de publicidad ni gasto diario puesto'
       : P.ppcSource==='informe-sin-fechas' ? 'el informe no dice qué periodo cubre · cargado ENTERO, sin prorratear'
       : P.ppcSource==='diario' ? 'del gasto diario de ajustes, no de un informe'
-      : (P.adFactor===1 ? 'del informe, sin prorratear' : 'prorrateado desde un informe de '+num(P.adDays)+' días'),
+      : P.adExtrapolado ? 'del informe, con días extrapolados al ritmo del informe'
+      : (P.adFactor===1 ? 'del informe, sin prorratear' : 'prorrateado desde un informe de '+num(P.adDays)+' días'))+
+      (P.ppcPaisCuota!=null ? ' · solo lo de este país: el '+num(P.ppcPaisCuota*100,1)+' % del gasto'+(P.ppcPaisRepartido>0.005 ? ', con '+fmt(P.ppcPaisRepartido,2)+' de filas sin país repartidos en proporción' : '')
+       : P.ppcPaisSinDato ? ' · el informe no dice país: es el gasto de TODOS los países' : ''),
     P.ppcSource==='ninguno' ? 'informe de términos de búsqueda' : '');
   /* Cómo baja la publicidad a los SKU, dicho aparte para que valga con
      cualquier origen del gasto (con informe, sin fechas o diario). */

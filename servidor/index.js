@@ -21,6 +21,7 @@ const informes  = require('./informes');
 const catalogo  = require('./catalogo');
 const validador = require('./validador');
 const almacen   = require('./almacen');
+const almacenSupabase = require('./almacen-supabase');
 const ingesta   = require('./ingesta');
 
 /* Construye el cliente a partir del entorno. Si falta una variable, lanza con
@@ -46,4 +47,4 @@ function montar(opciones){
 }
 
 module.exports = Object.assign({montar, Lwa, ClienteSpapi, ErrorSpapi},
-  {entorno, reintentos, informes, catalogo, validador, almacen, ingesta});
+  {entorno, reintentos, informes, catalogo, validador, almacen, almacenSupabase, ingesta});

@@ -35,10 +35,18 @@ ficheros.forEach(f=>{ if(!fs.existsSync(f)){ console.error('no existe: '+f); pro
   await page.evaluate(()=>{ DB=blankDB(); DB.mappings={}; saveDB(); refreshAll(); go('datos'); });
 
   const porFichero = [];
+  const T0 = Date.now();
   for(const f of ficheros){
     const antes = await page.evaluate(()=>((DB.imports.searchterm||{}).ficheros||[]).length);
+    /* Playwright no entrega bien un fichero cuya RUTA lleva tildes («términos»):
+       el input recibe nada y el fichero sale «no reconocido» sin error. Pasó el
+       4-oct con casi todos los informes de una carpeta real, y parecía un fallo
+       del lector. No lo es: con el mismo fichero dado a la página como un File
+       con su nombre acentuado, el hub lo lee entero. Por eso se le pasan los
+       bytes y el nombre, no la ruta. */
     await page.setInputFiles('#csvFile', []);
-    await page.setInputFiles('#csvFile', path.resolve(f));
+    await page.setInputFiles('#csvFile', {name:path.basename(f), buffer:fs.readFileSync(f),
+      mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
     /* Se espera a que no quede nada «leyendo…» Y a que el número de ficheros
        del informe cambie (o a que pase un rato largo: un fichero que no se
        reconoce no lo cambia nunca). */
@@ -62,6 +70,8 @@ ficheros.forEach(f=>{ if(!fs.existsSync(f)){ console.error('no existe: '+f); pro
         repetidas:nuevo.duplicadas, desde:d0?iso(d0):null, hasta:d1?iso(d1):null,
         sinFecha, gasto:Math.round(gasto*100)/100};
     }, antes);
+    r.segundos = Math.round((Date.now()-T0)/100)/10;
+    process.stderr.write('· '+path.basename(f)+' '+r.segundos+' s\n');
     porFichero.push(Object.assign({fichero:path.basename(f)}, r));
   }
 

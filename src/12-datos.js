@@ -1958,7 +1958,7 @@ function pnl(){
      más la parte del gasto SIN país (informes viejos) en la misma proporción
      que el gasto con país. Si ninguna fila trae país no hay con qué repartir:
      se queda entero y la pantalla lo dice (`ppcPaisSinDato`). */
-  let ppcPaisCuota = null, ppcPaisSinDato = false, ppcPaisRepartido = 0;
+  let ppcPaisCuota = null, ppcPaisSinDato = false, ppcPaisRepartido = 0, ppcPaisAbono = 0, ppcPaisSinPositivos = false;
   const filtroPais = typeof countryFilter!=='undefined' && countryFilter!=='ALL';
   if(filtroPais && ads.spend>0){
     /* El gasto de cada país con sus tres componentes (`porPaisGasto`, ver
@@ -1970,9 +1970,37 @@ function pnl(){
     const M = ads.porPaisGasto||{};
     const tot = Object.keys(M).reduce((a,k)=>a+M[k],0), sinPais = M['??']||0, cfg = M[countryFilter]||0;
     const conocido = tot - sinPais;
-    const negativos = Object.keys(M).some(k=>k!=='??' && M[k] < -0.005);
-    if(tot>0 && conocido>0 && !negativos){ ppcPaisCuota = (cfg + sinPais*cfg/conocido)/tot;
-      ppcPaisRepartido = ppc*(sinPais*cfg/conocido)/tot; ppc = ppc*ppcPaisCuota; }
+    /* UN ABONO QUE SUPERA EL GASTO DE SU PAÍS (revisión del 4-10-2026).
+       Antes, con un país en negativo no se repartía nada y CADA país cargaba
+       con el gasto de todos: ES 90 y DE 30 − 40 de abono daban 80 con el filtro
+       ES y 80 con el filtro DE, el doble del total, y la pantalla decía que el
+       informe no traía país. Ahora el país del abono se queda en cero (una
+       publicidad negativa le subiría el margen con dinero de otros) y lo que
+       sobra del abono se descuenta del resto de países en proporción a su
+       gasto. La suma de los países sigue siendo el total, y se dice que es un
+       reparto (`ppcPaisAbono`). */
+    /* Dicho de otra forma, que es como se calcula: la cuota de cada país es
+       su gasto positivo entre la suma de los gastos positivos de los países.
+       Cuando no hay abonos es exactamente su parte de lo conocido; con un
+       abono que excede el gasto de su país, ese país queda en cero y el resto
+       se reparte el total en proporción a su gasto. Y sigue valiendo cuando el
+       abono se come TODO lo que tiene país y solo quedan filas sin país en
+       positivo (segunda ronda del 4-10-2026): antes, ahí, cada país volvía a
+       cargar con el gasto de todos. */
+    /* Con tolerancia de medio céntimo: +0,1 +0,2 −0,3 suman 5,55e-17 en coma
+       flotante, y un país «positivo» de ese tamaño se llevaba el 100 % (cuarta
+       ronda del 4-10-2026). */
+    const posi = k=>k!=='??' && M[k] > 0.005;
+    const pos = Object.keys(M).filter(posi).reduce((a,k)=>a+M[k],0);
+    const exceso = Object.keys(M).filter(k=>k!=='??' && M[k] < -0.005).reduce((a,k)=>a-M[k],0);
+    /* Hay país en el informe aunque ninguno sume positivo (un +5 y un −5 se
+       anulan): la causa no es que el informe no traiga país. */
+    if(tot>0 && pos<=0 && Object.keys(M).some(k=>k!=='??')) ppcPaisSinPositivos = true;
+    if(tot>0 && pos>0){
+      ppcPaisCuota = posi(countryFilter) ? cfg/pos : 0;
+      ppcPaisRepartido = ppc*ppcPaisCuota*sinPais/tot;
+      if(exceso > 0.005) ppcPaisAbono = ppc*exceso/tot;
+      ppc = ppc*ppcPaisCuota; }
     else ppcPaisSinDato = true;
   }
   /* Sin informe, el gasto diario de ajustes es de toda la cuenta: con filtro
@@ -2185,14 +2213,21 @@ function pnl(){
        abono negativo sin término reduce todas las cuotas por igual en vez de
        hacer saltar una campaña entera. */
     const obsTot = C.reduce((a,c)=>a+c.gasto,0);
-    let f = obsTot>0 ? ppc/obsTot : 0;
+    let f = obsTot>0 ? ppc/obsTot : 0, cuotaSinPais = 0;
     if(ppcPaisCuota!=null){
       /* Con filtro, `ppc` es lo de este país: se reparte sobre lo que sus
          campañas observaron en él (más su parte de lo que no dice país), nunca
          sobre el total, o un país se imputaría más de lo que le toca. */
       const cfObs = C.reduce((a,c)=>a+((c.porPais||{})[countryFilter]||0),0);
-      const unk = C.reduce((a,c)=>a+((c.porPais||{})['??']||0),0), known = obsTot - unk;
-      const den = cfObs + (known>0 ? unk*cfObs/known : 0);
+      const unk = C.reduce((a,c)=>a+((c.porPais||{})['??']||0),0);
+      /* La parte SIN PAÍS de cada campaña también es de la campaña: con el
+         filtro, a este país le toca la misma cuota de ella que del total, y va
+         a los productos que la campaña anuncia. Antes solo se imputaba lo que
+         la campaña gastó con país y la parte sin país caía en el reparto por
+         ingreso: un producto que la campaña no anuncia cargaba con ella con
+         el filtro y no sin él (tercera ronda del 4-10-2026). */
+      cuotaSinPais = ppcPaisCuota;
+      const den = cfObs + unk*cuotaSinPais;
       f = den>0 ? ppc/den : 0;
     }
     const cf = (typeof countryFilter!=='undefined' && countryFilter!=='ALL') ? countryFilter : null;
@@ -2202,14 +2237,36 @@ function pnl(){
        se llevaba más que todo el gasto, y el reparto general salía negativo
        (tercera revisión de la tarde del 3-10-2026). */
     let gPos = 0;
-    C.forEach(c=>{ if(!c.skus.length) return; const g0 = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f; if(g0>0) gPos += g0; });
+    /* Lo que aporta cada campaña, y a qué productos. Sin filtro, su gasto
+       entero a sus productos. Con el filtro de un país: lo que gastó en ese
+       país, a sus productos; y su parte SIN PAÍS (× la cuota del país), a los
+       productos que la campaña tiene asignados EN ESE PAÍS si los tiene, o a
+       los suyos si no. Antes esa parte iba al reparto por ingreso (tercera
+       ronda del 4-10-2026), y después a la asignación general aunque el país
+       tuviera la suya: un producto que la campaña no anuncia en ese país
+       cargaba con ella con el filtro y no sin él (cuarta ronda). */
+    const aportes = c=>{
+      if(!cf) return c.skus.length ? [[c.skus, c.gasto]] : [];
+      const pp = c.porPais||{}, out = [];
+      if(pp[cf]) out.push([c.skus, pp[cf]]);
+      if(pp['??']){
+        /* La asignación GUARDADA para este país, no la fila del país en la
+           tabla: esa fila solo existe si la campaña gastó con país en el
+           periodo, y no lleva productos cuando es «*» o «sin asignar»
+           (quinta ronda del 4-10-2026). `pubAsignacion` devuelve la propia
+           del país, nada si está «sin asignar», o la general si el país no
+           tiene. «*» y «sin asignar» no imputan: van al reparto por ingreso. */
+        const a = pubAsignacion(c.campana, cf);
+        const sk = (a && !a.reparto) ? pubSkusDePrefijos(pubPrefijosDe(a)) : [];
+        out.push([sk, pp['??']*cuotaSinPais]); }
+      return out.filter(x=>x[0].length);
+    };
+    C.forEach(c=>aportes(c).forEach(([sk, g])=>{ const g0 = g * f; if(g0>0) gPos += g0; }));
     const tope = (gPos > ppc && ppc>0) ? ppc/gPos : (ppc>0 ? 1 : 0);
-    C.forEach(c=>{
-      if(!c.skus.length || !(f>0)) return;
-      /* Con filtro de país, solo lo que la campaña gastó EN ese país. */
-      const g = (cf ? ((c.porPais||{})[cf]||0) : c.gasto) * f * tope;
+    C.forEach(c=>{ if(!(f>0)) return; aportes(c).forEach(([skus, g0])=>{
+      const g = g0 * f * tope;
       if(!(g>0)) return;
-      const ks = c.skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
+      const ks = skus.map(x=>porSkuMin[String(x).toLowerCase()]).filter(Boolean);
       const T = ks.reduce((a,k)=>a+SK[k].revenue,0);
       if(!ks.length || !(T>0)){ ppcSinDestino += g; return; }
       let acc = 0, mayor = ks[0];
@@ -2217,7 +2274,7 @@ function pnl(){
         if(SK[k].revenue > SK[mayor].revenue) mayor = k; });
       SK[mayor].ppc += g - acc;
       ppcImputado += g;
-    });
+    }); });
   }
   reparte(ppc - ppcImputado, 'ppc', b=>b.revenue);
   reparte(vatShortfall, 'vat', b=>b.revenue);
@@ -2238,7 +2295,7 @@ function pnl(){
     taxBasis: tb, taxKnown: tb.known, baseQuality: tb.quality, taxCoverPct: tb.coverPct,
     vat: tb.fiscal, vatDif: (tb.fiscal||{}).diferencia||0, vatShortfall, vatSinVentas,
     vatVentasReducidas: (tb.fiscal||{}).ventasReducidas||0,
-    ppcSource, adSpanUnknown: ads.spanUnknown, ppcPaisCuota, ppcPaisSinDato, ppcPaisRepartido,
+    ppcSource, adSpanUnknown: ads.spanUnknown, ppcPaisCuota, ppcPaisSinDato, ppcPaisRepartido, ppcPaisAbono, ppcPaisSinPositivos,
     adExtrapolado: (ads.spendExtrapolado||0) > 0.005 || !!ads.fueraDePeriodo,
     refMedido, fbaMedido,
     feeCoverPct, settleRows:sf.rows, settleMatched:sf.matched,

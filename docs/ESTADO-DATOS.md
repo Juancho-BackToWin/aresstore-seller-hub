@@ -163,3 +163,40 @@ web, cliente de esas funciones sin librerías (el Hub es un solo archivo), y una
 pantalla «En vivo» que diga en cada cifra si es medida o estimada y de qué
 fecha. Después, enganchar los módulos existentes sin quitar la importación
 manual.
+
+---
+
+## Fase 3 · El Hub lee Supabase: vista «En vivo» (28-nov-2026)
+
+### Qué se hizo
+
+- `src/29-vivo.js`: vista **En vivo** en «Visión general». Inicio de sesión por
+  enlace mágico (`/auth/v1/otp` con `create_user:false`, vuelta a la URL del Hub),
+  renovación del token, y lectura de las cinco funciones `amz_panel_*` con
+  `fetch`, sin librerías. Sesión en `localStorage` (`aresstore_sb_sesion`),
+  aparte de la base del Hub; «Cerrar sesión» la borra.
+- Qué enseña, con la etiqueta «medido» y su fecha: stock de la última foto
+  (pool UE), FBA0500 y FBA0103, pedidos de España a 7 y 30 días, dinero por mes
+  y país hasta la fecha de corte del informe de transacciones, la bandeja de
+  decisiones y la frescura de cada fuente.
+- Qué NO hace, dicho en pantalla: no resta coste de producto («neto antes de
+  coste», no beneficio); no calcula cobertura mezclando stock UE con pedidos
+  solo de ES; no inventa el dinero posterior al corte; no toca los módulos que
+  leen ficheros importados.
+
+### Qué se verificó
+
+- `tests/vivo.test.js` (33 comprobaciones) con la aritmética a mano en la
+  cabecera: neto por mes y país con la publicidad separada, bordes de 7 y 30
+  días, cancelados fuera, frescura, sin llamadas sin sesión, clave publicable y
+  token correctos, escapado del texto de la bandeja, permiso denegado.
+- **Vista en rojo:** metiendo la publicidad dentro de «Amazon» y moviendo el
+  borde de 7 días, la suite da 4 fallos con el motivo; quitado el fallo, verde.
+- Suite completa: **40 suites · 1.578 comprobaciones · 0 fallos**.
+
+### Qué queda
+
+- Comprobación en la URL servida con la sesión de Juancho y contraste de tres
+  cifras por bloque con Supabase y Seller Central (paso 6 del prompt maestro).
+- Fase 4 (panel de portada con nota por indicador) y fase 5 (ingesta: Finances
+  API, cron de `amz-informes`, SQP semanal, cerrar `amz-informes`).

@@ -2,7 +2,7 @@
 
 *Documento vivo del frente «el Hub enseña los datos reales» (prompt maestro del
 ARRANQUE §5). Se actualiza al cerrar cada fase: qué se hizo, qué se verificó y
-qué queda. Fase 1 cerrada el 28-nov-2026.*
+qué queda. Fases 1 y 2 cerradas el 28-nov-2026.*
 
 ---
 
@@ -110,3 +110,56 @@ en el navegador, nunca `service_role`.
 
 **Pendiente de OK de Juancho (🔔):** borrar `amz_ventas_agregado_copia_20261125`
 y `amz-spapi-ping`; activar la protección de contraseñas filtradas.
+
+---
+
+## Fase 2 · Acceso seguro (28-nov-2026)
+
+### Qué se hizo
+
+- **Migración `servidor/sql/004_panel_lectura.sql`** (aplicada como
+  `amz_004_panel_lectura` y corregida con `amz_004b_panel_inventario_ambiguo`).
+  - El titular se guarda en `amz_config` (`titular_uid`), tomado de
+    `auth.users` por el correo `juancho@grupoarestora.com`. No está en el código.
+  - `amz_es_titular()` y `amz_exigir_titular()`: comprueban que la sesión es la
+    del titular. Otra sesión válida del proyecto (la otra aplicación comparte
+    Auth) no basta.
+  - Funciones de lectura, todas `SECURITY DEFINER` con `search_path` vacío, que
+    devuelven solo agregados, sin `order_id`, `order_item_id`, `ref_linea` ni
+    nombre de documento: `amz_panel_ventas_dia(desde)`,
+    `amz_panel_pedidos_dia(desde)` (día en hora de Madrid),
+    `amz_panel_inventario()`, `amz_panel_recomendaciones(limite)`,
+    `amz_panel_ingestas()`, `amz_panel_costes()`, `amz_panel_gastos_fijos()`.
+  - `anon` no puede ejecutarlas; `authenticated` sí, pero salta `42501` si no
+    es el titular. **Las tablas siguen cerradas**: no se ha creado ninguna
+    política.
+- **Supabase Auth · Redirect URLs:** añadida
+  `https://aresstore-seller-hub.vercel.app/**` con OK de Juancho (28-nov). Las
+  dos de `control.grupoarestora.com` siguen igual; la Site URL no se ha tocado.
+- En el navegador irá la clave **publicable** (`sb_publishable_…`), pensada para
+  ser pública; nunca `service_role`.
+
+### Qué se verificó (en la base, simulando cada sesión)
+
+| Caso | Esperado | Resultado |
+|---|---|---|
+| `anon` llama a `amz_panel_inventario()` | denegado | `42501` |
+| Sesión de otro usuario real del proyecto | denegado | `42501` |
+| Sesión con un uid inventado | denegado | denegado |
+| Sesión de Juancho lee `amz_ventas_linea` directamente | denegado | `42501` |
+| Sesión de Juancho, inventario | 101 SKU, 649 disp. (consulta directa) | 101 SKU, 649 |
+| Sesión de Juancho, ventas ES tipo venta | 24.932,23 € (consulta directa) | 24.932,23 € |
+| Sesión de Juancho, pedidos desde 1-nov sin cancelados | 64 uds (consulta directa) | 64 |
+| Sesión de Juancho, recomendaciones | 49 | 49 |
+
+**La prueba se vio fallar:** la primera versión de `amz_panel_inventario()`
+daba `42702` (columna `fecha_foto` ambigua) en la llamada como titular. Se
+corrigió y se repitió la tabla entera.
+
+### Qué queda
+
+**Fase 3 · lectura en el Hub:** inicio de sesión por enlace mágico desde la
+web, cliente de esas funciones sin librerías (el Hub es un solo archivo), y una
+pantalla «En vivo» que diga en cada cifra si es medida o estimada y de qué
+fecha. Después, enganchar los módulos existentes sin quitar la importación
+manual.
